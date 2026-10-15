@@ -35,7 +35,9 @@ export const readJsonFile = async (path: string, limit: number, code: ModeErrorC
 Promise<{ readonly value: unknown; readonly bytes: Buffer }> => {
   try {
     await safePath(dirname(path));
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    if (!(await lstat(path)).isFile()) throw modeError(code, "Expected a regular JSON file", { path });
+    // A regular file can be replaced by a FIFO between lstat and open; never wait for a writer.
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const stat = await handle.stat();
       if (!stat.isFile()) throw modeError(code, "Expected a regular JSON file", { path });
