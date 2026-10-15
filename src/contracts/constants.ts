@@ -1,0 +1,30 @@
+export const SCHEMA_VERSION = 1 as const;
+export const PROTOCOL = "agent-modes-context/1" as const;
+
+export const LIMITS = Object.freeze({
+  jsonBytes: 1_048_576,
+  lockBytes: 8_388_608,
+  modes: 256,
+  resources: 512,
+  idLength: 64,
+  pathLength: 1024,
+  urlLength: 2048,
+  refLength: 256,
+  scanEntries: 20_000,
+  scanFiles: 10_000,
+  scanDepth: 64,
+  treeEntries: 10_000,
+  treeBytes: 67_108_864,
+  fileBytes: 16_777_216,
+  textFileBytes: 1_048_576,
+  allResourceBytes: 536_870_912,
+  skillDescriptionChars: 1024,
+  contextChars: 9000,
+  contextBytes: 32_768,
+  hookTimeoutSeconds: 15,
+  hookInputBytes: 1_048_576,
+  sessionIdChars: 256,
+  gitTimeoutMs: 120_000,
+  probeTimeoutMs: 10_000,
+  wrapperInstructionBytes: 65_536,
+});

@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-modes:lock:1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "resourceSpecDigest",
+    "resources"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "resourceSpecDigest": {
+      "$ref": "#/$defs/sha"
+    },
+    "resources": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/locked"
+      }
+    }
+  },
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "entry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "kind"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "const": "directory"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "kind",
+            "digest",
+            "bytes",
+            "executable"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "const": "file"
+            },
+            "digest": {
+              "$ref": "#/$defs/sha"
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "executable": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "locked": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "sourceDigest",
+        "commit",
+        "treeDigest",
+        "entries"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "kind": {
+          "enum": [
+            "rule",
+            "skill"
+          ]
+        },
+        "sourceDigest": {
+          "$ref": "#/$defs/sha"
+        },
+        "commit": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          ]
+        },
+        "treeDigest": {
+          "$ref": "#/$defs/sha"
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/entry"
+          }
+        }
+      }
+    }
+  }
+}
