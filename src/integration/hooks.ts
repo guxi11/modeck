@@ -13,10 +13,14 @@ export const encodeHook = ({ event, rendered, marker, configRoot, stateRoot }: E
   return { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: rendered.text } };
 };
 export const parseEvent = (value: unknown): HookEvent => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw modeError("E_HOOK_INPUT", "Invalid SessionStart event");
+  }
   const event = object(value);
   if (event.hook_event_name !== "SessionStart" || typeof event.cwd !== "string" || !event.cwd
     || typeof event.session_id !== "string" || !event.session_id || event.session_id.length > LIMITS.sessionIdChars
-    || /\p{Cc}/u.test(event.session_id) || !["startup", "resume", "clear", "compact", "fork"].includes(String(event.source))) {
+    || /\p{Cc}/u.test(event.session_id) || typeof event.source !== "string"
+    || !["startup", "resume", "clear", "compact", "fork"].includes(event.source)) {
     throw modeError("E_HOOK_INPUT", "Invalid SessionStart event");
   }
   return { hook_event_name: "SessionStart", cwd: event.cwd, session_id: event.session_id, source: event.source as HookEvent["source"] };
@@ -26,8 +30,11 @@ export const runMarker = (): RunMarker | null => {
   if (raw === undefined) return null;
   try {
     const marker = object(parseJson(raw));
-    if (marker.version !== 1 || !["codex", "claude"].includes(String(marker.agent))
-      || !["cwd", "configRoot", "stateRoot"].every(key => typeof marker[key] === "string" && String(marker[key]).startsWith("/"))
+    if (marker.version !== 1 || typeof marker.agent !== "string" || !["codex", "claude"].includes(marker.agent)
+      || !["cwd", "configRoot", "stateRoot"].every(key => {
+        const path = marker[key];
+        return typeof path === "string" && path.startsWith("/");
+      })
       || typeof marker.contentDigest !== "string" || !/^[0-9a-f]{64}$/.test(marker.contentDigest)
       || typeof marker.ownerPid !== "number" || !Number.isSafeInteger(marker.ownerPid) || marker.ownerPid <= 0) throw new Error("Invalid marker");
     process.kill(marker.ownerPid, 0);
