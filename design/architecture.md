@@ -71,6 +71,8 @@ OpenAI 当前缓存文档进一步说明：要求完整渲染前缀相同，工�
 
 本机只读核查：Codex CLI `0.162.1`、Claude Code `2.1.296`。以当时官方接口为依据，不能沿用“Codex 完全没有 hook”的旧结论。
 
+额外本地协议核查：在独立临时 CODEX_HOME 中写入固定 developer_instructions，启动 `codex app-server --stdio`，仅执行 initialize / initialized / config/read（includeLayers=true），实际响应包含 config、origins、layers，并原样返回该固定指令。未创建 thread、未调用模型、未改真实配置；它证明有效配置读取途径可用，不代表包装器已实现或模型加载已验证。
+
 Claude Code：SessionStart command hook 的 JSON stdin 包含 cwd/source，`hookSpecificOutput.additionalContext` 可注入上下文；当前文档说明首次响应等待 SessionStart 完成。通过 settings.json 合并一个归本工具所有的 hook，保留已有 hooks/settings。适配器也提供 `--append-system-prompt` 启动包装器以满足受控的首次加载；不要替换默认 system prompt。
 
 Codex：官方现有 `hooks.json` 或 config.toml 内联 hook，SessionStart 的 additionalContext 是附加 developer context。非 managed hook 必须由用户在 `/hooks` 审阅信任当前定义，未信任会跳过；安装器不能伪造信任状态或宣称已运行。优先生成 `hooks.json` 安装计划，诚实提示首次启用步骤；提供 `-c developer_instructions=...` 包装器作为不依赖 hook 信任的启动方式，需保留已有 developer_instructions（无法可靠读取合并时拒绝覆盖并说明），不得使用 model_instructions_file 替换 agent 原始基础提示。
