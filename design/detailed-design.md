@@ -1,6 +1,6 @@
 # agent-modes 详细设计
 
-阶段：hard修订候选，2026-10-16；待ultra review收口后作为v1 Interface。任务与文件归属见 `tasks.md`。本轮只设计，不实现、不写测试代码、不操作真实全局配置、不发布或推送；这不限制产品在用户显式授权后安装到其真实HOME。以 `architecture.md` 为需求基线；本文明确收敛处优先作为standard实施契约。
+阶段：hard详细设计，2026-10-16；经ultra review修订并收口，作为v1 Interface。任务与文件归属见 `tasks.md`。本轮只设计，不实现、不写测试代码、不操作真实全局配置、不发布或推送；这不限制产品在用户显式授权后安装到其真实HOME。以 `architecture.md` 为需求基线；本文明确收敛处优先作为standard实施契约。
 
 ## 1. 收敛后的闭环与 Module
 

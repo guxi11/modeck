@@ -1,6 +1,6 @@
 # agent-modes standard 实施任务
 
-依赖 `architecture.md` 与 `detailed-design.md`（2026-10-16 hard修订候选，待ultra收口）。本文是交给3名standard的任务包；当前阶段仅提交两份设计，不派coder、不实现。实现均不新增测试代码/README；本次实施/验收只在隔离HOME/config/state调用，不修改真实HOME/agent配置，不发布npm、不加远端、不推送。产品仍允许用户显式target-home+apply安装真实HOME，不能把本次授权范围写成永久产品禁令。
+依赖 `architecture.md` 与 `detailed-design.md`（2026-10-16 hard设计，已由ultra修订收口）。本文是交给3名standard的任务包。实现均不新增测试代码/README；本次实施/验收只在隔离HOME/config/state调用，不修改真实HOME/agent配置，不发布npm、不加远端、不推送。产品仍允许用户显式target-home+apply安装真实HOME，不能把本次授权范围写成永久产品禁令。
 
 ## 1. 文件所有权（互不重叠）
 
