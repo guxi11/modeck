@@ -65,6 +65,8 @@
 
 同 agent + 同 mode 只是在资源版本和编译器一致时尽量稳定；agent 自己的系统提示、cwd、原生项目 instructions、工具 / MCP schema、模型 / 服务商 / 运行时版本、hook 插入位置、技能索引绝对路径与缓存时效仍可能破坏共享前缀。不能承诺跨 agent、跨用户、跨机器或必然 KV 命中。
 
+OpenAI 当前缓存文档进一步说明：要求完整渲染前缀相同，工具定义也在前缀内；共享稳定片段仍不等于有可复用的缓存断点。CLI 未暴露或未验证相应控制时，本工具只稳定自己贡献的内容，不设置或伪造服务商缓存断点。
+
 ## Agent 接入决策（核查于 2026-10-16）
 
 本机只读核查：Codex CLI `0.162.1`、Claude Code `2.1.296`。以当时官方接口为依据，不能沿用“Codex 完全没有 hook”的旧结论。
@@ -85,6 +87,7 @@ hook 统一调用同一 npm 可执行文件，读 stdin cwd 后调用 resolver�
 - [Codex Configuration Reference](https://learn.chatgpt.com/docs/config-file/config-reference)：developer_instructions 等配置接口。
 - [Claude Code Hooks](https://code.claude.com/docs/en/hooks)：SessionStart 执行时序、输入 / 输出及 settings 合并。
 - [Claude Code Skills](https://code.claude.com/docs/en/skills)：skill 为按需机制，不能独自保证首轮推理前执行。
+- [OpenAI Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching)：完整渲染前缀、工具顺序、缓存断点与实际命中的限制。
 
 ## 阶段验收
 
