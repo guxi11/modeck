@@ -34,6 +34,7 @@ const options = (command: string, argv: readonly string[]): Readonly<Record<stri
     const equal = token.indexOf("=");
     const key = token.slice(2, equal < 0 ? undefined : equal);
     if (Object.hasOwn(result, key)) throw modeError("E_USAGE", "Duplicate option", { key });
+    if (key === "help" && equal < 0) return parse(index + 1, { ...result, help: true });
     if (booleans[command]?.includes(key) && equal < 0) return parse(index + 1, { ...result, [key]: true });
     if (!values[command]?.includes(key)) throw modeError("E_USAGE", "Unknown option", { key });
     const value = equal < 0 ? argv[index + 1] : token.slice(equal + 1);
@@ -112,14 +113,14 @@ const exitFor = (error: ModeError, hook: boolean): number => {
 export const main = async (argv: string[]): Promise<number> => {
   const command = argv[0] ?? "--help";
   try {
-    const helpEnd = argv.indexOf("--", 1);
-    if (command === "--help" || argv.slice(1, helpEnd < 0 ? undefined : helpEnd).includes("--help")) { process.stdout.write(help); return 0; }
+    if (command === "--help") { process.stdout.write(help); return 0; }
     if (command === "--version") { process.stdout.write(`${await packageVersion()}\n`); return 0; }
     if (Number(process.versions.node.split(".")[0]) < 20 || process.platform === "win32") throw modeError("E_PLATFORM", "Node20+ on macOS/Linux is required");
     if (!Object.hasOwn(values, command)) throw modeError("E_USAGE", "Unknown command", { command });
     const separator = argv.indexOf("--", 1);
     if (separator >= 0 && command !== "run") throw modeError("E_USAGE", "Only run accepts agent arguments");
     const opts = options(command, argv.slice(1, separator < 0 ? undefined : separator));
+    if (opts.help) { process.stdout.write(help); return 0; }
     const configured = async () => ({
       configRoot: await pathFor(String(opts.config ?? process.env.AGENT_MODES_CONFIG ?? join(homedir(), ".config/agent-modes"))),
       stateRoot: await pathFor(String(opts.state ?? process.env.AGENT_MODES_STATE ?? join(homedir(), ".local/share/agent-modes/v1"))),

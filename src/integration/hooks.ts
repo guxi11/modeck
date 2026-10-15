@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { canonical, LIMITS, modeError, parseJson } from "../contracts/index.js";
 import type { Agent, EncodeHookRequest, HookEvent, HookReply, RunMarker } from "../contracts/index.js";
 import { object } from "./fs.js";
@@ -17,7 +18,7 @@ export const parseEvent = (value: unknown): HookEvent => {
     throw modeError("E_HOOK_INPUT", "Invalid SessionStart event");
   }
   const event = object(value);
-  if (event.hook_event_name !== "SessionStart" || typeof event.cwd !== "string" || !event.cwd
+  if (event.hook_event_name !== "SessionStart" || typeof event.cwd !== "string" || !isAbsolute(event.cwd)
     || typeof event.session_id !== "string" || !event.session_id || event.session_id.length > LIMITS.sessionIdChars
     || /\p{Cc}/u.test(event.session_id) || typeof event.source !== "string"
     || !["startup", "resume", "clear", "compact", "fork"].includes(event.source)) {
