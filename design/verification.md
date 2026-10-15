@@ -36,6 +36,8 @@ npm install --ignore-scripts --no-audit --no-fund --prefix /private/tmp/mode-rev
 
 tarball 的 66 个条目包含三 schema、完整入口 skill、JS/声明模块和 standalone bundle；无 src 或原仓库路径依赖。真实原生离线输出保留在 `native-prompt.json`、`native-combined-prompt.json`、`real-codex-rpc.json`；故障证据见 `fifo-final-outcomes.json`、`fifo-race-outcomes.json`、`rollback-parent-results.json`。
 
+lead 补充实测（不计入上述独立 90 项）：Node `v20.19.5` 下使用同一产品版本 bundle，从公网 HTTPS 获取 `octocat/Hello-World` 的 README rule，固定完整 commit `7fd1a60b01f91b314f59955a4e4d4e80d8edf11d`；禁用 Git 执行后的离线 render 正文相同，全新 state 的 frozen 同步获取同一 commit 且锁原字节不变，模型请求为零。reviewer 已核读 `/private/tmp/agent-modes-lead-https.mjs` 的实际调用/assertions 及 `/private/tmp/agent-modes-https-lead-xP28UV/results.json`，未重复执行公网操作。
+
 ## 首轮 NOTPASS 与修复复验
 
 | 首轮问题 | 修复提交 / 当前位置 | 第二轮证据 |
@@ -51,4 +53,4 @@ tarball 的 66 个条目包含三 schema、完整入口 skill、JS/声明模块�
 
 未调用真实付费模型、未发起任何模型请求；未验证真实模型上下文加载或缓存命中。真实 Codex 证据止于本地配置 RPC 和离线 prompt 渲染，假进程证据仅证明参数、stdio、退出及信号行为。contentDigest 只证明工具输出字节，不是 provider cache hit。
 
-未执行 Linux 实机、远程 HTTPS/SSH Git、真实交互会话的 `/hooks` 审阅信任及完整原生 hook 调度。Claude 验证止于原生安装位置、只读 help、hook 协议和假进程 wrapper；没有用协议通过冒称真实模型效果。未改真实 HOME，未 npm 发布或 push；临时脚本/fixture 未进入仓库。
+未执行 Linux 实机、私有 SSH Git 认证、真实交互会话的 `/hooks` 审阅信任及完整原生 hook 调度；公网 HTTPS 已由 lead 补充实测，reviewer 仅核读其证据。Claude 验证止于原生安装位置、只读 help、hook 协议和假进程 wrapper；没有用协议通过冒称真实模型效果。未改真实 HOME，未 npm 发布或 push；临时脚本/fixture 未进入仓库。
