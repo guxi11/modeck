@@ -236,6 +236,8 @@ rule/preload 文本按 UTF-8 fatal 解码，去单个 BOM，CRLF/CR统一LF，�
 
 `lockDigest = sha256(canonical(已校验锁))`；即使非选中资源或固定 commit 变化也会改变正文。`contentDigest = sha256(实际 text UTF-8 bytes)`，text 自己不包含 contentDigest，避免递归。`RenderedContext` 同时返回 text/digest/byteLength。同配置、锁、mode顺序、agent、协议和 state绝对位置产生相同 bytes；切换 cwd 但结果一致时正文相同。迁移 state 路径会改变 skill 定位及正文摘要，这个稳定性只保证同一安装位置；不能承诺跨机器前缀、provider cache key、KV/cache hit。
 
+这个摘要只覆盖本工具text。Codex/Claude原生skill初始索引也可能包含绝对路径；迁移HOME或入口skill安装位置会改变agent自己的model-visible prompt，即使本工具text/digest不变也不能声称完整前缀相同。不得为了缓存比较从原生索引里删去实际资源定位。
+
 ## 6. 公共导出类型与函数（core 独占）
 
 `src/contracts/index.ts` 只含下列类型、只读协议常量与无副作用 JSON解析/canonical/hash/path词法/错误工厂函数；所有属性/数组语义为 readonly。这里用紧凑 TS 声明固定字段，实施必须用深层只读类型表达，不得增删字段或以 any 擦除契约。外部未经校验的输入一律 unknown。
@@ -272,7 +274,7 @@ type HookReply = { hookSpecificOutput: { hookEventName: "SessionStart"; addition
 type RunMarker = { version: 1; agent: Agent; configRoot: string; stateRoot: string; cwd: string; contentDigest: Sha256; ownerPid: number };
 type FileImage = { data: string; encoding: "utf8" | "base64"; mode: number };
 type FileChange = { path: string; category: "shared-json" | "owned"; beforeDigest: Sha256 | null; beforeMode: number | null; after: FileImage | null };
-type InstallPlan = { schemaVersion: 1; operation: "install" | "uninstall"; agent: Agent; targetRoot: string; owner: "agent-modes/v1"; changes: FileChange[]; conflicts: Diagnostic[]; warnings: Diagnostic[]; planDigest: Sha256 };
+type InstallPlan = { schemaVersion: 1; operation: "install" | "uninstall"; agent: Agent; targetHome: string; owner: "agent-modes/v1"; changes: FileChange[]; conflicts: Diagnostic[]; warnings: Diagnostic[]; planDigest: Sha256 };
 type ManagedFile = { path: string; digest: Sha256; mode: number };
 type InstallRecord = { schemaVersion: 1; owner: "agent-modes/v1"; agent: Agent; configRoot: string; stateRoot: string; runtimeDigest: Sha256; files: ManagedFile[]; hookFile: string; hookGroup: unknown; beforeHookFile: FileImage | null; afterHookFileDigest: Sha256 };
 type LockParser = (value: unknown) => ResourceLock;
@@ -289,8 +291,8 @@ type SyncResourcesRequest = ReadResourcesRequest & { mode: SyncMode };
 type PrepareRequest = { configRoot: string; stateRoot: string; cwd: string; agent: Agent };
 type PreparedContext = { plan: ResolvedPlan; rendered: RenderedContext };
 type EncodeHookRequest = { event: HookEvent; rendered: RenderedContext; marker: RunMarker | null; configRoot: string; stateRoot: string };
-type PlanInstallRequest = { agent: Agent; targetRoot: string; configRoot: string; stateRoot: string; runtimeRoot: string };
-type PlanUninstallRequest = { agent: Agent; targetRoot: string };
+type PlanInstallRequest = { agent: Agent; targetHome: string; configRoot: string; stateRoot: string; runtimeRoot: string };
+type PlanUninstallRequest = { agent: Agent; targetHome: string };
 type ApplyInstallPlanRequest = { plan: InstallPlan; expectDigest: Sha256 };
 type RunAgentRequest = PrepareRequest & { argv: string[]; executable: string };
 type RunResult = { exitCode: number | null; signal: NodeJS.Signals | null };
@@ -321,8 +323,8 @@ type ModeError = Error & { code: ModeErrorCode; details: Readonly<Record<string,
 | resources/index | `readResources({context,stateRoot,parseLock})` | Promise<VerifiedResourceSet>；只读、离线、完整验证 |
 | integration/index | `prepare({configRoot,stateRoot,cwd,agent})` | Promise<{plan:ResolvedPlan,rendered:RenderedContext}>；唯一 load/read/facts/resolve/compile 编排 |
 | integration/index | `encodeHook({event,rendered,marker,configRoot,stateRoot})` | HookReply；纯编码/身份与摘要检查，marker:RunMarker\|null；pid存活检查在hook I/O入口完成 |
-| integration/index | `planInstall({agent,targetRoot,configRoot,stateRoot,runtimeRoot})` | Promise<InstallPlan>；runtimeRoot为包根，预览无写入 |
-| integration/index | `planUninstall({agent,targetRoot})` | Promise<InstallPlan>；读取record、共享JSON及现状 |
+| integration/index | `planInstall({agent,targetHome,configRoot,stateRoot,runtimeRoot})` | Promise<InstallPlan>；runtimeRoot为包根，预览无写入 |
+| integration/index | `planUninstall({agent,targetHome})` | Promise<InstallPlan>；读取record、共享JSON及现状 |
 | integration/index | `applyInstallPlan({plan,expectDigest})` | Promise<void>；仅应用本工具重建且摘要匹配的计划，不接收CLI任意JSON计划 |
 | integration/index | `runAgent({agent,configRoot,stateRoot,cwd,argv,executable})` | Promise<{exitCode:number\|null,signal:NodeJS.Signals\|null}>；exec必须绝对路径/已解析PATH实体 |
 | cli/main | `main(argv: string[])` | Promise<number>；bin负责设置exitCode，禁止module import时自动启动 |
@@ -341,25 +343,25 @@ type ModeError = Error & { code: ModeErrorCode; details: Readonly<Record<string,
 | `resolve` | `--config`,`--state`,`--cwd` | ResolvedPlan（始终JSON，不另设 --json） |
 | `render` | 同resolve；必需 `--agent`；`--format text\|json` 默认text | text 原样；json为RenderedContext |
 | `hook` | 必需 `--agent`；`--config`,`--state` | stdin事件→一次HookReply JSON；去重/跳过stdout空，exit0 |
-| `install` | 必需 `--agent`,`--target-root`；`--config`,`--state`；`--format text\|json` 默认text；可选 `--apply --expect <digest>` | 默认预览 InstallPlan，不写；apply前重建计划并核验expect，成功仍输出本次InstallPlan |
-| `uninstall` | 必需 `--agent`,`--target-root`；format/apply/expect 同install | 输出InstallPlan；无record返回空changes幂等计划 |
+| `install` | 必需 `--agent`,`--target-home`；`--config`,`--state`；`--format text\|json` 默认text；可选 `--apply --expect <digest>` | 默认预览 InstallPlan，不写；apply前重建计划并核验expect，成功仍输出本次InstallPlan |
+| `uninstall` | 必需 `--agent`,`--target-home`；format/apply/expect 同install | 输出InstallPlan；无record返回空changes幂等计划 |
 | `run` | 必需 `--agent`；`--config`,`--state`,`--cwd`；可选 `--executable`；`--` 后 agent argv 原样分词 | stdio继承，退出码/信号见wrapper契约 |
 
-`--target-root` 是直接 agent 配置根，如隔离目录下的 `.codex`/`.claude`，不由agent自动推断真实HOME；禁止省略。若等于真实 `$CODEX_HOME`/`$CLAUDE_CONFIG_DIR` 或默认真实 `~/.codex`/`~/.claude`，可预览，但首版 apply 报 E_INSTALL_CONFLICT；用户需先在隔离目录验证后自行整合。不会偷偷增加“允许真实全局安装”的绕过flag。hook命令固定带绝对 config/state 路径，不受后来环境变量改变。
+`--target-home` 是显式隔离HOME根，不是`.codex`/`.claude`目录，禁止省略；本参数替代旧草案的target-root，不保留含糊别名。Codex固定写`<target-home>/.codex/hooks.json`与`<target-home>/.agents/skills/agent-modes/`；Claude固定写`<target-home>/.claude/settings.json`与`<target-home>/.claude/skills/agent-modes/`。不跟随安装进程继承的CODEX_HOME/CLAUDE_CONFIG_DIR重定向写入。target-home等于OS账户真实home（通过os.userInfo().homedir取得，不用可被临时HOME覆盖的默认值）时只允许预览，apply报E_INSTALL_CONFLICT；不添加绕过flag。运行原生agent验证时由验证进程显式设置HOME及相应CODEX_HOME/CLAUDE_CONFIG_DIR到该隔离布局，工具安装本身不改父进程环境或真实全局配置。hook命令固定带绝对config/state路径，不受后来环境变量改变。
 
 除 run 透传外，exit0成功；2=usage/config/selector/resolve/size；3=资源/Git/锁/路径/IO；4=安装冲突/陈旧计划/busy；5=hook事件非法或wrapper能力/冲突；错误 stderr 为 `{error:{code,message,details}}` 单行JSON，不在stdout夹日志。hook内部失败统一exit1，stderr同格式，stdout空；不伪装成功的空规则。install冲突预览仍输出完整plan但exit4；apply缺expect是E_USAGE。hook输入最多1MiB，session_id为非空string（最多256，无控制字符），忽略agent额外已知/未来字段，只严格校验本工具消费字段，hook_event_name/source不支持则E_HOOK_INPUT。hook入口先把stdin cwd校验并realpath规范化，再构造传给prepare/encodeHook的HookEvent；禁止退回进程cwd。
 
 ## 8. 两个 Adapter 与去重
 
-依据为本轮提供的 `/tmp/mode-codex-hooks.md`、`/tmp/mode-claude-hooks.md`，以及本机只读核查 `codex --help/debug --help/app-server generate-json-schema`（0.162.1）、`claude --help`（2.1.296）。不是运行真实模型的证据。参考原始出处见 architecture.md；实施时不把临时依据路径写进产品。
+依据为本轮提供的 `/tmp/mode-codex-hooks.md`、`/tmp/mode-claude-hooks.md`、`/tmp/mode-codex-skills-jina.md`，以及本机只读核查 `codex --help/debug --help/app-server generate-json-schema`（0.162.1）、`claude --help`（2.1.296）。不是运行真实模型的证据。[Codex skills官方文档](https://developers.openai.com/codex/skills/)明确USER为`$HOME/.agents/skills`，REPO为cwd至repo根各层`.agents/skills`；不能把只写旧`.codex/skills`当发现成功。其他原始出处见architecture.md；实施时不把临时依据路径写进产品。
 
-两个hook文件均采用一个独立 matcher group：`matcher = "^(startup|resume|clear|compact|fork)$"`，`hooks` 中只有本工具一个 `type:"command"` handler，timeout=15秒。Codex 写 `<target>/hooks.json` 的 hooks.SessionStart；Claude 写 `<target>/settings.json` 同一字段；输出均为 `{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:text}}`。Codex handler另有additionalContextLimit=0。不得假造 managed/trusted 状态，不写信任存储，不生成 bypass-hook-trust 参数；安装预览/结果警告其新/变更定义须在真实会话 `/hooks` 审阅，否则可能跳过。Claude首次响应等待SessionStart完成，但退出失败不阻止请求；Codex也不能把hook失败一概说成fail-closed。
+两个hook文件均采用一个独立 matcher group：`matcher = "^(startup|resume|clear|compact|fork)$"`，`hooks` 中只有本工具一个 `type:"command"` handler，timeout=15秒。Codex 写 `<target-home>/.codex/hooks.json` 的 hooks.SessionStart；Claude 写 `<target-home>/.claude/settings.json` 同一字段；输出均为 `{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:text}}`。Codex handler另有additionalContextLimit=0。不得假造 managed/trusted 状态，不写信任存储，不生成 bypass-hook-trust 参数；安装预览/结果警告其新/变更定义须在真实会话 `/hooks` 审阅，否则可能跳过。Claude首次响应等待SessionStart完成，但退出失败不阻止请求；Codex也不能把hook失败一概说成fail-closed。
 
 命令使用安装内固定 runtime 的 Node 绝对路径与CLI绝对路径，分别做POSIX单引号转义，不依赖npx临时路径、PATH同名程序、git root或cwd。根目录有空格/单引号也必须可执行；资源路径不拼入命令。runtime CLI 以bundled单文件安装，不复制未解析的 node_modules 引用。
 
 去重分两层，不把“同session已经注入过”当通用依据：
 
-1. 安装幂等：record中保存完整hook group，重复install复用/替换该组而不是append；保留其他handler/group及其相对顺序。一个target只允许一个agent-modes配置绑定，换config/state须先uninstall。识别同runtime/owner的重复或手工改写组即冲突，不猜测并删除。Codex该层同时存在inline hook时保留它并警告；不得擅自迁移。
+1. 安装幂等：record中保存完整hook group，重复install复用/替换该组而不是append；保留其他handler/group及其相对顺序。一个target-home内每个agent只允许一个配置绑定，换config/state须先uninstall该agent。识别同runtime/owner的重复或手工改写组即冲突，不猜测并删除。Codex该层同时存在inline hook时保留它并警告；不得擅自迁移。
 2. wrapper去重：仅在spawn已准备好完整附加指令时，将 canonical RunMarker 放入子进程环境 `AGENT_MODES_RUN_V1`（不写父环境/正文）。hook入口检查marker结构与ownerPid存活，再prepare并验证资源；encodeHook检查真实cwd/config/state/agent及contentDigest全部匹配，才返回null/exit0。marker非法、父wrapper已死、摘要/cwd不一致时抛E_WRAPPER_CONFLICT，不能当没看见然后追加第二份。wrapper子进程后续clear/compact在同配置/目录下仍由持久system/developer指令覆盖，匹配marker时继续跳过；wrapper路径不支持会话中切换mode/cwd，要重启。
 
 纯hook路径的resume/clear/compact/fork每次重新注入，不落持久session去重文件；避免第二次compact或不同会话丢规则。一次安装保证本工具在该target只有一个组；首版不承诺对手工复制到多个config层/第三方plugin的重复hook去重，预览发现已知多来源时告警。不能用`session_id+source`永久缓存假装解决这一问题。支持的部署方式为每个agent一个生效的agent-modes安装；多层手工复制属于冲突配置，须清理后使用。
@@ -390,15 +392,17 @@ Codex不能自己猜测`~/.codex/config.toml`的层叠规则。固定有效配�
 
 ## 10. 安装、所有权与卸载
 
-每个显式target根只管理下列位置：
+每个显式target-home只管理下列位置；FileChange/ManagedFile/hookFile均相对此HOME，禁止把agent配置目录当路径根：
 
 | 位置 | 所有权与内容 |
 | --- | --- |
-| `hooks.json`（Codex）/`settings.json`（Claude） | shared-json；仅record记载的独立SessionStart组归本工具 |
-| `skills/agent-modes/` | owned完整入口skill树；已存在且无record即冲突，即使字节相同 |
-| `.agent-modes/runtime/<runtimeDigest>/` | owned最小包布局：`dist/bin/agent-modes.mjs`、`schemas/`三份schema、`skills/agent-modes/`完整树及`package.json` |
-| `.agent-modes/install.json` | owned InstallRecord；只记录本机绝对路径，可含安装前hook原字节；不进入config/lock |
-| `.agent-modes/install.lock`、`transaction.json`、事务备份 | apply期间的专用互斥与恢复文件；完成后清理 |
+| `.codex/hooks.json`（Codex）/`.claude/settings.json`（Claude） | shared-json；仅record记载的独立SessionStart组归本工具 |
+| `.agents/skills/agent-modes/`（Codex）/`.claude/skills/agent-modes/`（Claude） | owned完整入口skill树；已存在且无record即冲突，即使字节相同 |
+| `.agent-modes/<agent>/runtime/<runtimeDigest>/` | owned最小包布局：`dist/bin/agent-modes.mjs`、`schemas/`三份schema、`skills/agent-modes/`完整树及`package.json` |
+| `.agent-modes/<agent>/install.json` | owned InstallRecord；只记录本机绝对路径，可含安装前hook原字节；不进入config/lock |
+| `.agent-modes/<agent>/install.lock`、`transaction.json`、事务备份 | apply期间的专用互斥与恢复文件；完成后清理 |
+
+同一隔离HOME可分别安装两个agent，record/runtime/journal互相隔离；每个agent只删除其列出的路径。Codex卸载不得删除`.agents/skills`下其他内容，也不删除旧`.codex/skills`内容。所有父目录仍按第2节安全校验；不能因为hook与skill在不同目录，就绕过同一HOME下的完整预览/事务。
 
 不得改AGENTS.md、CLAUDE.md、config.toml、其他native skill、信任文件或权限策略。npm包build生成的standalone JS bundle（第三方代码已打入）与schema/入口skill数据必须包含在tarball。core从`dist/core`下的schema加载文件用`../../schemas/`相对import.meta.url读取；打包后入口在`dist/bin`仍是同样两级路径。安装保留上表最小包布局，因此不依赖源码路径、cwd或外部node_modules；版本从该包根package.json读取。runtimeRoot在普通bundle与安装bundle中都由入口URL上溯两级得到，不由工作目录推断。安装runtime从当前包的已校验固定路径复制，不下载、不npm install、不执行生命周期脚本。
 

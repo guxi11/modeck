@@ -87,7 +87,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 
 **I3：安装事务。**
 
-- target-root必填、真实全局apply拒绝；默认preview无写，--apply必须expect当前planDigest。预览包含完整JSON合并差异，未知共享字段/其他hooks保留。
+- target-home必填且表示隔离HOME根、真实账户HOME的apply拒绝；Codex写`.codex/hooks.json`和`.agents/skills/agent-modes`，Claude写`.claude/settings.json`和`.claude/skills/agent-modes`。record/runtime/journal按`.agent-modes/<agent>/`隔离，两agent可共存。默认preview无写，--apply必须expect当前planDigest。预览包含完整JSON合并差异，未知共享字段/其他hooks保留。
 - standalone JS runtime保留最小包布局（dist/bin入口、3schema、完整入口skill、package.json），schema/版本从入口URL定位；不能只复制bundle后丢失数据。精确InstallRecord所有权；拒绝evoloop标记/symlink/无record同名文件，不能force覆盖。
 - 并发锁/前置摘要和路径复验/journal/失败恢复/record最后；保持共享文件完整权限，0600不能扩大为0644，记录/备份0600、事务目录0700。中断后同operation的apply+原expect能先恢复再重建计划，不能让busy堵死所有入口。卸载只动完整未改owned文件与精确自身hook组，保留他人后续编辑，缺失或篡改冲突而非全目录删除。
 - 同包重复install应空变化；无record卸载为空变化；卸载不删state/config/CAS。包内资源路径必须在npm pack tarball安装后也成立。
@@ -108,6 +108,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 | 技能定位 | root/entry实际存在；scripts/reference/assets全在且exec保留；preload正文准确；超限失败无截断 |
 | frozen完整性 | lock不变；移动Git ref仍取旧commit；坏/缺对象、本地漂移、增删asset均失败；只sync能补对象 |
 | hook | JSON shape、15秒timeout、Codex信任警告、Claude首轮等待依据、失败不保证阻断；compact不被旧标记吞掉 |
+| 原生skill发现 | 隔离HOME/CODEX_HOME下验证Codex读到`.agents/skills/agent-modes`，不能以旧`.codex/skills`落盘替代；可用`codex debug prompt-input`离线检查model-visible prompt，原生绝对路径索引仍属于缓存边界 |
 | wrapper | baseline不丢、cwd不分叉、unknown/替换prompt参数拒绝、marker不双注入、--no-daemon、stdin/exit/signals真实进程行为 |
 | 安装安全 | preview零写、stale拒绝、symlink/evoloop拒绝、重复安装零变化、第三方JSON保留、own漂移不删、事务恢复 |
 | 分发 | pack含所有exports/standalone bundle/3schema/入口skill；临时安装bin可启动，无源码/node_modules路径泄漏 |
