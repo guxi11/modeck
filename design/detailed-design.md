@@ -186,7 +186,7 @@ core 提交三个文件 `schemas/modes.schema.json`、`selector.schema.json`、`
 
 rule 源必须是一个 UTF-8 文件，物化后统一名为 `tree/content.md`；skill 源必须是包含根级 `SKILL.md` 的目录，完整物化全部目录/文件，绝不只复制 SKILL.md。不得默认排除 scripts/references/assets 或任意隐藏文件（`.git` 是拒绝而非静默忽略）；包含不安全条目则整个资源失败。每树最多 10,000 条目、总文件 64 MiB、单文件 16 MiB；rule/SKILL.md 各至多 1 MiB；资源总量最多 512 MiB。超限失败，不发布部分树。
 
-SKILL.md 使用 UTF-8 YAML frontmatter，单个文档，无自定义 tag/alias，根为 mapping，必需 `name`/`description` 两个非空 string；name 匹配上述 id（最多64），description 最多1024 UTF-16 单位且不含控制字符。其他 frontmatter 字段保存在原文件，但本工具不执行或解释其中 hooks/权限等字段。全配置 skill name 唯一，保留名 `agent-modes` 不可占用。YAML 用受限 yaml parser，不写简陋正则解析多行 description；原始 frontmatter/脚本均纳入树摘要。
+SKILL.md 使用 UTF-8 YAML frontmatter，单个文档，无自定义 tag/alias，根为 mapping，必需 `name`/`description` 两个非空 string；name 匹配上述 id（最多64），description 最多1024 UTF-16 单位，允许LF/CR/TAB以支持常见YAML folded/literal多行描述，拒绝其余控制字符。其他 frontmatter 字段保存在原文件，但本工具不执行或解释其中 hooks/权限等字段。全配置 skill name 唯一，保留名 `agent-modes` 不可占用。YAML 用受限 yaml parser，不写简陋正则解析多行 description；原始 frontmatter/脚本均纳入树摘要。
 
 固定内容库位置：`<state>/store/sha256/<treeDigest>/tree/`，旁边是 `manifest.json`（entries 的 canonical JSON + LF）。内容库独立于配置路径，可跨配置复用。文件物化成 0444/0555，目录 0555，执行位语义保留；验证摘要不依赖其余权限。发布用同文件系统 staging + rename，已有目标必须验证后才复用，损坏目标报 `E_INTEGRITY`，不可“相信目录名”。不自动 GC；因此已输出的 skill 绝对路径在卸载 adapter 后仍然有效。
 
