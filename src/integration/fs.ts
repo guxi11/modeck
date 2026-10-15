@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { checkRelativePath, LIMITS, modeError, parseJson, sha256 } from "../contracts/index.js";
@@ -61,13 +61,42 @@ export const ensureParents = async (home: string, path: string): Promise<readonl
     await checkDirectory(parent); return created;
   }
 };
-export const atomic = async (path: string, image: FileImage | null): Promise<void> => {
+export type ParentIdentity = Readonly<{ dev: number; ino: number; realpath: string }>;
+export const parentIdentity = async (path: string): Promise<ParentIdentity> => {
   await safeAbsolute(path);
-  if (image === null) { await rm(path); return; }
+  const parent = dirname(path);
+  await checkDirectory(parent);
+  const stat = await lstat(parent);
+  return { dev: stat.dev, ino: stat.ino, realpath: await realpath(parent) };
+};
+const verifyParent = async (path: string, expected: ParentIdentity): Promise<void> => {
+  const current = await parentIdentity(path);
+  if (current.dev !== expected.dev || current.ino !== expected.ino || current.realpath !== expected.realpath) {
+    throw modeError("E_PLAN_STALE", "Destination parent directory changed", { path });
+  }
+};
+export const atomic = async (path: string, image: FileImage | null, expectedParent?: ParentIdentity): Promise<ParentIdentity> => {
+  const parent = expectedParent ?? await parentIdentity(path);
+  await verifyParent(path, parent);
+  if (image === null) { await unlink(path); return parent; }
   const temp = join(dirname(path), `.agent-modes-${randomUUID()}`);
   const handle = await open(temp, "wx", 0o600);
-  try { await handle.writeFile(data(image)); await handle.chmod(image.mode); await handle.close(); await safeAbsolute(path); await rename(temp, path); }
-  catch (error) { await handle.close().catch(() => undefined); await rm(temp, { force: true }); throw error; }
+  const temporary = await handle.stat();
+  try {
+    await handle.writeFile(data(image)); await handle.chmod(image.mode); await handle.close();
+    await verifyParent(path, parent);
+    await rename(temp, path);
+    return parent;
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    // A replaced parent may contain someone else's same-named file; leave it untouched.
+    await (async () => {
+      await verifyParent(path, parent);
+      const current = await lstat(temp);
+      if (current.dev === temporary.dev && current.ino === temporary.ino) await unlink(temp);
+    })().catch(() => undefined);
+    throw error;
+  }
 };
 export const treeFiles = async (root: string, prefix = ""): Promise<readonly string[]> => {
   if (prefix) checkRelativePath(prefix, false);

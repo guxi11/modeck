@@ -5,7 +5,8 @@ import { canonical, checkRelativePath, LIMITS, modeError, sha256 } from "../cont
 import type { Agent, ApplyInstallPlanRequest, Diagnostic, FileChange, FileImage, InstallPlan, InstallRecord,
   ManagedFile, PlanInstallRequest, PlanUninstallRequest } from "../contracts/index.js";
 import { atomic, checkDirectory, data, digest, ensureParents, homePath, imageJson, jsonImage, missing,
-  object, readImage, safeAbsolute, same, treeFiles } from "./fs.js";
+  object, parentIdentity, readImage, safeAbsolute, same, treeFiles } from "./fs.js";
+import type { ParentIdentity } from "./fs.js";
 import { hookGroup } from "./hooks.js";
 import { prepare } from "./prepare.js";
 
@@ -228,8 +229,9 @@ export const applyInstallPlan = async ({ plan, expectDigest }: ApplyInstallPlanR
   const lockPath = homePath(home, loc.lock);
   const created = await ensureParents(home, lockPath);
   const directories = new Set(created);
+  const lockParent = await parentIdentity(lockPath);
   const lock = await open(lockPath, "wx", 0o600).catch(() => { throw modeError("E_BUSY", "Installation lock already exists"); });
-  const completed: { readonly path: string; readonly before: FileImage | null; readonly after: FileImage | null }[] = [];
+  const completed: { readonly path: string; readonly before: FileImage | null; readonly after: FileImage | null; readonly parent: ParentIdentity }[] = [];
   let keepLock = false;
   try {
     await lock.writeFile(JSON.stringify({ schemaVersion: 1, owner, pid: process.pid }));
@@ -249,21 +251,21 @@ export const applyInstallPlan = async ({ plan, expectDigest }: ApplyInstallPlanR
       const path = homePath(home, change.path);
       (await ensureParents(home, path)).forEach(directory => directories.add(directory)); await checkDirectory(dirname(path));
       if (!same(await readImage(path), before.get(change.path) ?? null)) throw modeError("E_PLAN_STALE", "Destination changed during apply", { path });
-      await atomic(path, change.after);
-      completed.push({ path, before: before.get(change.path) ?? null, after: change.after });
+      const parent = await atomic(path, change.after);
+      completed.push({ path, before: before.get(change.path) ?? null, after: change.after, parent });
     }, Promise.resolve());
   } catch (error) {
     await lock.close().catch(() => undefined);
     await [...completed].reverse().reduce(async (pending, change) => {
       await pending;
       if (!same(await readImage(change.path), change.after)) { keepLock = true; return; }
-      try { await atomic(change.path, change.before); } catch { keepLock = true; }
+      try { await atomic(change.path, change.before, change.parent); } catch { keepLock = true; }
     }, Promise.resolve());
     if (keepLock) throw modeError("E_INSTALL_CONFLICT", "Rollback could not safely restore every file; inspect the retained lock", { path: lockPath });
     throw error;
   } finally {
     if (!keepLock) {
-      await atomic(lockPath, null);
+      await atomic(lockPath, null, lockParent);
       await [...directories].sort((a, b) => b.length - a.length).reduce(async (pending, path) => { await pending; await removeEmpty(home, path); }, Promise.resolve());
       await removeEmpty(home, dirname(lockPath));
     }
