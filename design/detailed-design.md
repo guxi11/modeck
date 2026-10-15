@@ -28,6 +28,8 @@ CLI 的 `--config <dir>` 指配置目录，不是文件。优先级：显式参�
 
 canonical JSON：对象 key 递归按 JS 字符串 `<` 顺序排序，数组保序，无空白，UTF-8；展示用 JSON 另以两空格缩进加一个 LF。配置补齐本文规定默认值后计算 configDigest；`resources`/`modes` 是对象，其 key 不参与声明顺序。所有显式有序项必须是数组。共享配置/锁/selection身份摘要不含绝对路径、mtime、日志、时间或临时文件名；contentDigest及安装planDigest分别按其契约覆盖实际正文/计划字节数据，不能为稳定比较漏掉真实路径。
 
+运行时外部文件读取必须先lstat确认普通文件，再以`O_NONBLOCK | O_NOFOLLOW`打开并对已打开handle再次fstat确认普通文件；这样既拒绝FIFO/device/socket，也避免lstat与open之间替换为FIFO造成阻塞。此约束覆盖配置/selector/lock、资源与manifest、共享agent配置/安装record及显式append文件；不以“open后会检查类型”替代非阻塞打开。
+
 ## 3. 输入 JSON Schema（完整 v1 形状）
 
 core 提交三个文件 `schemas/modes.schema.json`、`selector.schema.json`、`lock.schema.json`。下列 JSON 就是各文件的规范内容；表后语义检查也是强制校验。Schema 的 `$id` 使用 URN，校验不联网。
@@ -379,6 +381,8 @@ wrapper只支持创建本地新会话及Claude `-p/--print`、Codex `exec`；不
 
 shell以外调用方若要更广参数，先扩展契约再实现，不能默默透传已知会改变目录/提示来源的参数。现有argv逐token解析；除消费掉的等值cwd、用户append及Codex developer override之外，其余支持token保留原顺序、值与字节（不重新shell分词）。重复标量安全相关flag一律拒绝；Codex -c 允许重复不同key，同key也拒绝。
 
+根级维护/配置子命令及Codex exec下的resume/review等已有会话路由均须拒绝，按已核查CLI的完整保留命令集合处理，不能只列少量黑名单。已知保留命令若是字面prompt，调用者须放在显式agent `--`之后；该分界之后始终是数据。其他裸prompt发送给agent前也插入真正的`--`数据边界，保证未来新增子命令不会把prompt解释成维护操作。检查只读help及假进程argv，不实际执行维护命令。
+
 cwd唯一来源是CLI `--cwd`的realpath；Codex用户的 -C/--cd（包括=形式）解析后必须与它相等，否则E_WRAPPER_CONFLICT（不擅自选一方）；相等则移除，最终固定注入一个 `-C <cwd>`，spawn也用同cwd。拒绝可能另建worktree/切换session的参数。Claude使用spawn cwd而无额外切目录参数；原生额外目录不代表mode选择根，首版不支持。解析冲突在prepare/启动之前完成。
 
 Claude：读取用户唯一append字符串或文件的原字节UTF-8文本（文件不要求在配置根，但必须显式指定且普通文件，不能symlink），保持它的字符内容；若非空，加 `\n\n` 后接mode text，通过单个 `--append-system-prompt` 传给CLI。无用户append则值严格为mode text。保留默认系统提示、cwd、原生CLAUDE.md及既有settings。首版wrapper拒绝resume，是因为本机help指出system prompt snapshot可能复用旧append，不能承诺新mode被纳入旧会话。合并值超过64KiB bytes时E_LIMIT，不经shell或临时路径降级。
@@ -395,6 +399,8 @@ Codex不能自己猜测`~/.codex/config.toml`的层叠规则。固定有效配�
 两个wrapper都用spawn(argv,{cwd,env,stdio:"inherit",shell:false})；不把stdin用于本工具探测（Codex探测使用独立pipe），保留用户stdin供agent。PATH选择后固定真实executable，不得解析回agent-modes自身。临时移除父进程已有AGENT_MODES_RUN_V1：若其存在则拒绝嵌套wrapper，避免错误去重。收到SIGINT/SIGTERM/SIGHUP时转发给子进程，等待退出后移除handler；正常退出保留exitCode，signal终止则bin以同信号终止自身（不能只返回0或吞信号）。spawn失败报E_IO。wrapper预检失败时绝不启动实际会话。
 
 ## 10. 安装、所有权与卸载
+
+无record时，入口skill根或自有runtime根的既有占用必须报冲突，包括空目录；不能把空目录当作不存在并接管。record.hookGroup必须与该agent的固定matcher/handler字段、record的config/state、runtimeDigest对应的实际runtime入口交叉核对，不能只接受任意单command对象；身份漂移时整体拒绝。命令中的Node绝对路径允许是安装时的旧路径，不要求等于当前process.execPath，避免Node升级后无法安全卸载或重新安装。
 
 每个显式target-home只管理下列位置；FileChange/ManagedFile/hookFile均相对此HOME，禁止把agent配置目录当路径根：
 

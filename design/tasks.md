@@ -96,6 +96,8 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 
 ## 6. 合并后的检查与白板 hard 验收输入
 
+首轮独立验收补充的阻断边界：core/resources/integration各自的外部文件读取须以普通文件预检、非阻塞且不跟随链接的open、已打开handle类型复检拒绝FIFO；包装器须拒绝维护/已有会话子命令，并为裸prompt增加agent数据分界；无record的空owned根不接管；record hook身份须与固定runtime及配置绑定交叉验证。这些修复仍归各原owner，只用临时fixture，不新增仓库测试代码。
+
 每人提交前只stage自己文件并检查git diff --cached；不整理其他人的未提交修改。最终集成者运行typecheck/build/npm pack；临时目录解包/安装tarball，从产品bin完成闭环。npm pack产生tarball放临时目录，不在仓库提交验收产物；无npm publish/git push。
 
 白板hard从干净配置开始独立检查以下结果；这是一份验证清单，不是要求新增测试代码：
