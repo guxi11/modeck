@@ -58,7 +58,8 @@ export const ensureDirectory = async (path: string): Promise<string> => {
 
 export const regularBytes = async (path: string, limit: number): Promise<{ readonly bytes: Buffer; readonly executable: boolean }> => {
   await safePath(dirname(path));
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  requireValue((await lstat(path)).isFile(), "E_PATH", "Expected a regular resource file", { path });
+  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   try {
     const before = await handle.stat();
     requireValue(before.isFile(), "E_PATH", "Expected a regular resource file", { path });
