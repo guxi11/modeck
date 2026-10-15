@@ -32,7 +32,9 @@ export const homePath = (home: string, path: string): string => { checkRelativeP
 export const readImage = async (path: string, limit: number = LIMITS.fileBytes): Promise<FileImage | null> => {
   await safeAbsolute(path);
   try {
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const entry = await lstat(path);
+    if (!entry.isFile()) throw modeError("E_INSTALL_CONFLICT", "Expected a regular file", { path });
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size > limit || stat.mode & 0o7000) throw modeError("E_INSTALL_CONFLICT", "Unsafe file", { path });

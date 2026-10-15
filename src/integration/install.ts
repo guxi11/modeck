@@ -1,5 +1,5 @@
 import { lstat, open, readdir, rmdir } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { realpath } from "node:fs/promises";
 import { canonical, checkRelativePath, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { Agent, ApplyInstallPlanRequest, Diagnostic, FileChange, FileImage, InstallPlan, InstallRecord,
@@ -103,6 +103,21 @@ const loadRecord = async (home: string, agent: Agent): Promise<InstallRecord | n
   if (new Set(files.map(file => file.path)).size !== files.length) return conflict("Duplicate owned path");
   const group = object(value.hookGroup);
   if (!Array.isArray(group.hooks) || group.hooks.length !== 1 || typeof object(group.hooks[0]).command !== "string") return conflict("Invalid owned hook group");
+  const runtime = `${loc.private}/runtime/${value.runtimeDigest}`;
+  const cli = `${runtime}/dist/bin/agent-modes.mjs`;
+  if (!files.some(file => file.path === cli) || files.some(file => !file.path.startsWith(`${runtime}/`) && !file.path.startsWith(`${loc.skill}/`))) {
+    return conflict("Manifest runtime identity does not match owned files");
+  }
+  const command = object(group.hooks[0]).command as string;
+  const suffix = hookGroup(agent, homePath(home, cli), value.configRoot, value.stateRoot, "").hooks[0]!.command.slice(2);
+  if (!command.endsWith(suffix)) return conflict("Manifest hook does not match its configuration and runtime");
+  const executable = command.slice(0, -suffix.length);
+  const node = executable.slice(1, -1).replaceAll("'\\''", "'");
+  // Validate the recorded absolute executable, without requiring an old Node installation to remain present.
+  if (!isAbsolute(node) || /\p{Cc}/u.test(node)
+    || canonical(group) !== canonical(hookGroup(agent, homePath(home, cli), value.configRoot, value.stateRoot, node))) {
+    return conflict("Manifest hook identity is invalid");
+  }
   if (value.beforeHookFile !== null) {
     const before = object(value.beforeHookFile);
     if (typeof before.data !== "string" || !["utf8", "base64"].includes(String(before.encoding))

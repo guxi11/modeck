@@ -18,23 +18,30 @@ const flags = {
 } as const;
 type Parsed = { readonly rest: readonly string[]; readonly overrides: readonly string[];
   readonly cd: string | null; readonly append: string | null; readonly appendFile: string | null };
+const commands: Readonly<Record<Agent, readonly string[]>> = {
+  codex: ["agents", "review", "login", "logout", "mcp", "plugin", "app-server", "remote-control", "app", "completion", "update",
+    "doctor", "sandbox", "debug", "apply", "a", "resume", "queue", "archive", "delete", "migrate-rollouts", "unarchive", "fork",
+    "cloud", "exec-server", "features", "help"],
+  claude: ["agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs", "mcp", "plugin", "plugins",
+    "purge", "respawn", "rm", "setup-token", "stop", "kill", "ultrareview", "update", "upgrade", "help"],
+};
 
 const parseArguments = (agent: Agent, argv: readonly string[]): Parsed => {
   const allowed: Readonly<Record<string, number>> = flags[agent];
   const execFlags: Readonly<Record<string, number>> = { "--json": 0, "--skip-git-repo-check": 0, "-o": 1, "--output-last-message": 1 };
-  const walk = (index: number, state: Parsed, seen: ReadonlySet<string>, exec: boolean, prompt: boolean): Parsed => {
+  const walk = (index: number, state: Parsed, seen: ReadonlySet<string>, exec: boolean, prompt: string | null): Parsed => {
     const token = argv[index];
-    if (token === undefined) return state;
-    if (token === "--") return { ...state, rest: [...state.rest, ...argv.slice(index)] };
+    if (token === undefined) return { ...state, rest: [...state.rest, ...(prompt === null ? [] : ["--", prompt])] };
+    if (token === "--") return { ...state, rest: [...state.rest, "--", ...(prompt === null ? [] : [prompt]), ...argv.slice(index + 1)] };
     if (!token.startsWith("-") || token === "-") {
-      if (agent === "codex" && ["exec", "e"].includes(token) && !exec && !prompt) {
-        return walk(index + 1, { ...state, rest: [...state.rest, token] }, seen, true, false);
+      if (agent === "codex" && ["exec", "e"].includes(token) && !exec && prompt === null) {
+        return walk(index + 1, { ...state, rest: [...state.rest, token] }, seen, true, null);
       }
-      if (agent === "codex" && !exec && !prompt && ["resume", "fork", "review", "login", "logout", "app-server", "mcp", "plugin", "debug", "app", "cloud"].includes(token)) {
-        throw modeError("E_WRAPPER_CONFLICT", "This Codex subcommand cannot be wrapped", { token });
+      if (prompt === null && commands[agent].includes(token)) {
+        throw modeError("E_WRAPPER_CONFLICT", "This agent subcommand cannot be wrapped; use an explicit -- for prompt data", { token });
       }
-      if (prompt) throw modeError("E_WRAPPER_CONFLICT", "Only one prompt argument is supported");
-      return walk(index + 1, { ...state, rest: [...state.rest, token] }, seen, exec, true);
+      if (prompt !== null) throw modeError("E_WRAPPER_CONFLICT", "Only one prompt argument is supported");
+      return walk(index + 1, state, seen, exec, token);
     }
     const equal = token.indexOf("=");
     const flag = equal >= 0 ? token.slice(0, equal) : token;
@@ -60,7 +67,7 @@ const parseArguments = (agent: Agent, argv: readonly string[]): Parsed => {
     if (updated.append !== null && updated.appendFile !== null) throw modeError("E_WRAPPER_CONFLICT", "Append prompt options are mutually exclusive");
     return walk(next, updated, new Set([...seen, identity]), exec, prompt);
   };
-  return walk(0, { rest: [], overrides: [], cd: null, append: null, appendFile: null }, new Set(), false, false);
+  return walk(0, { rest: [], overrides: [], cd: null, append: null, appendFile: null }, new Set(), false, null);
 };
 
 export const runAgent = async (request: RunAgentRequest): Promise<RunResult> => {

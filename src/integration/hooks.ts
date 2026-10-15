@@ -43,9 +43,9 @@ export const runMarker = (): RunMarker | null => {
   } catch { throw modeError("E_WRAPPER_CONFLICT", "Invalid or expired wrapper marker"); }
 };
 const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
-export const hookGroup = (agent: Agent, cli: string, configRoot: string, stateRoot: string): unknown => ({
+export const hookGroup = (agent: Agent, cli: string, configRoot: string, stateRoot: string, node = process.execPath) => ({
   matcher: "^(startup|resume|clear|compact|fork)$",
-  hooks: [{ type: "command", command: [process.execPath, cli, "hook", "--agent", agent,
+  hooks: [{ type: "command", command: [node, cli, "hook", "--agent", agent,
     "--config", configRoot, "--state", stateRoot].map(quote).join(" "), timeout: LIMITS.hookTimeoutSeconds,
   ...(agent === "codex" ? { additionalContextLimit: 0 } : {}) }],
 });
