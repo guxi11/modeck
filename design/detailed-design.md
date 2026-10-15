@@ -1,6 +1,6 @@
 # agent-modes 详细设计
 
-阶段：hard，2026-10-16。本文冻结 v1 Interface；任务与文件归属见 `tasks.md`。只设计，不实现、不写测试代码、不改真实全局配置、不发布或推送。以 `architecture.md` 为需求基线；本文明确收敛处优先作为 standard 实施契约。
+阶段：hard修订候选，2026-10-16；待ultra review收口后作为v1 Interface。任务与文件归属见 `tasks.md`。本轮只设计，不实现、不写测试代码、不操作真实全局配置、不发布或推送；这不限制产品在用户显式授权后安装到其真实HOME。以 `architecture.md` 为需求基线；本文明确收敛处优先作为standard实施契约。
 
 ## 1. 收敛后的闭环与 Module
 
@@ -14,7 +14,7 @@ Node.js >=20，TypeScript strict，ESM，首版支持 macOS/Linux。Windows 在�
 | --- | --- | --- |
 | core | 校验、特征采集、DAG 展开、稳定编译 | 规范化配置、纯 resolve/compile；唯一公共 contracts |
 | resources | Git、本地树快照、锁、内容库、校验与原子发布 | init/import、sync、离线 readResources |
-| integration | 命令行、hook 编码、wrapper、安装事务、入口 skill | CLI 与两套 Adapter；只编排前两个 Module |
+| integration | 命令行、hook 编码、wrapper、安装/进程内回滚、入口 skill | CLI 与两套 Adapter；只编排前两个 Module |
 
 core 不导入 resources/integration；resources 只导入 `contracts` 的类型、协议常量及公共纯工具，不导入 core Implementation；integration 只从三者的公开 index/contracts 导入。共享契约只能由 core owner 修改；另两人不自行复制或“补一份”类型。
 
@@ -297,7 +297,7 @@ type PreparedContext = { plan: ResolvedPlan; rendered: RenderedContext };
 type EncodeHookRequest = { event: HookEvent; rendered: RenderedContext; marker: RunMarker | null; configRoot: string; stateRoot: string };
 type PlanInstallRequest = { agent: Agent; targetHome: string; configRoot: string; stateRoot: string; runtimeRoot: string };
 type PlanUninstallRequest = { agent: Agent; targetHome: string };
-type ApplyInstallPlanRequest = { plan: InstallPlan; expectDigest: Sha256 };
+type ApplyInstallPlanRequest = { plan: InstallPlan; expectDigest?: Sha256 };
 type RunAgentRequest = PrepareRequest & { argv: string[]; executable: string };
 type RunResult = { exitCode: number | null; signal: NodeJS.Signals | null };
 type ModeErrorCode = "E_CONFIG" | "E_SELECTOR" | "E_MODE_CONFLICT" | "E_SCAN_LIMIT"
@@ -329,7 +329,7 @@ type ModeError = Error & { code: ModeErrorCode; details: Readonly<Record<string,
 | integration/index | `encodeHook({event,rendered,marker,configRoot,stateRoot})` | HookReply；纯编码/身份与摘要检查，marker:RunMarker\|null；pid存活检查在hook I/O入口完成 |
 | integration/index | `planInstall({agent,targetHome,configRoot,stateRoot,runtimeRoot})` | Promise<InstallPlan>；runtimeRoot为包根，预览无写入 |
 | integration/index | `planUninstall({agent,targetHome})` | Promise<InstallPlan>；读取record、共享JSON及现状 |
-| integration/index | `applyInstallPlan({plan,expectDigest})` | Promise<void>；仅应用本工具重建且摘要匹配的计划，不接收CLI任意JSON计划 |
+| integration/index | `applyInstallPlan({plan,expectDigest})` | Promise<void>；expectDigest可省略，提供则校验；始终复验本工具重建的计划，不接收CLI任意JSON计划 |
 | integration/index | `runAgent({agent,configRoot,stateRoot,cwd,argv,executable})` | Promise<{exitCode:number\|null,signal:NodeJS.Signals\|null}>；exec必须绝对路径/已解析PATH实体 |
 | cli/main | `main(argv: string[])` | Promise<number>；bin负责设置exitCode，禁止module import时自动启动 |
 
@@ -347,13 +347,13 @@ type ModeError = Error & { code: ModeErrorCode; details: Readonly<Record<string,
 | `resolve` | `--config`,`--state`,`--cwd` | ResolvedPlan（始终JSON，不另设 --json） |
 | `render` | 同resolve；必需 `--agent`；`--format text\|json` 默认text | text 原样；json为RenderedContext |
 | `hook` | 必需 `--agent`；`--config`,`--state` | stdin事件→一次HookReply JSON；去重/跳过stdout空，exit0 |
-| `install` | 必需 `--agent`,`--target-home`；`--config`,`--state`；`--format text\|json` 默认text；可选 `--apply --expect <digest>` | 默认预览 InstallPlan，不写；apply前重建计划并核验expect，成功仍输出本次InstallPlan |
-| `uninstall` | 必需 `--agent`,`--target-home`；format/apply/expect 同install | 输出InstallPlan；无record返回空changes幂等计划 |
+| `install` | 必需 `--agent`,`--target-home`；`--config`,`--state`；`--format text\|json` 默认text；可选 `--apply`、与apply联用的`--expect <digest>` | 默认预览InstallPlan，不写；apply前重建计划，提供expect时核验，成功仍输出本次InstallPlan |
+| `uninstall` | 必需 `--agent`,`--target-home`；format/apply/expect 同install | 输出InstallPlan；无record且无本工具遗留内容时返回空changes幂等计划 |
 | `run` | 必需 `--agent`；`--config`,`--state`,`--cwd`；可选 `--executable`；`--` 后 agent argv 原样分词 | stdio继承，退出码/信号见wrapper契约 |
 
-`--target-home` 是显式隔离HOME根，不是`.codex`/`.claude`目录，禁止省略；本参数替代旧草案的target-root，不保留含糊别名。Codex固定写`<target-home>/.codex/hooks.json`与`<target-home>/.agents/skills/agent-modes/`；Claude固定写`<target-home>/.claude/settings.json`与`<target-home>/.claude/skills/agent-modes/`。不跟随安装进程继承的CODEX_HOME/CLAUDE_CONFIG_DIR重定向写入。target-home等于OS账户真实home（通过os.userInfo().homedir取得，不用可被临时HOME覆盖的默认值）时只允许预览，apply报E_INSTALL_CONFLICT；不添加绕过flag。运行原生agent验证时由验证进程显式设置HOME及相应CODEX_HOME/CLAUDE_CONFIG_DIR到该隔离布局，工具安装本身不改父进程环境或真实全局配置。hook命令固定带绝对config/state路径，不受后来环境变量改变。
+`--target-home` 是显式HOME根，不是`.codex`/`.claude`目录，禁止省略；本参数替代旧草案的target-root，不保留含糊别名。Codex固定写`<target-home>/.codex/hooks.json`与`<target-home>/.agents/skills/agent-modes/`；Claude固定写`<target-home>/.claude/settings.json`与`<target-home>/.claude/skills/agent-modes/`。manifest/runtime固定在该HOME的`.agent-modes/<agent>/`下。不跟随安装进程继承的CODEX_HOME/CLAUDE_CONFIG_DIR重定向写入。产品允许用户通过显式target-home和apply安装到真实HOME，无额外永久拒绝或real-home绕过flag；所有权/evoloop/路径/权限冲突仍拒绝。当前任务仅获准在隔离HOME内调用产品，不能因此增加产品禁令。原生agent验证由验证进程显式设置HOME及相应CODEX_HOME/CLAUDE_CONFIG_DIR到隔离布局，工具不改父进程环境。hook命令固定带绝对config/state路径，不受后来环境变量改变。
 
-除 run 透传外，exit0成功；2=usage/config/selector/resolve/size；3=资源/Git/锁/路径/IO；4=安装冲突/陈旧计划/busy；5=hook事件非法或wrapper能力/冲突；错误 stderr 为 `{error:{code,message,details}}` 单行JSON，不在stdout夹日志。hook内部失败统一exit1，stderr同格式，stdout空；不伪装成功的空规则。install冲突预览仍输出完整plan但exit4；apply缺expect是E_USAGE。hook输入最多1MiB，session_id为非空string（最多256，无控制字符），忽略agent额外已知/未来字段，只严格校验本工具消费字段，hook_event_name/source不支持则E_HOOK_INPUT。hook入口先把stdin cwd校验并realpath规范化，再构造传给prepare/encodeHook的HookEvent；禁止退回进程cwd。
+除 run 透传外，exit0成功；2=usage/config/selector/resolve/size；3=资源/Git/锁/路径/IO；4=安装冲突/陈旧计划/busy；5=hook事件非法或wrapper能力/冲突；错误 stderr 为 `{error:{code,message,details}}` 单行JSON，不在stdout夹日志。hook内部失败统一exit1，stderr同格式，stdout空；不伪装成功的空规则。install冲突预览仍输出完整plan但exit4；apply不要求expect，expect未与apply联用是E_USAGE，提供但不匹配是E_PLAN_STALE。hook输入最多1MiB，session_id为非空string（最多256，无控制字符），忽略agent额外已知/未来字段，只严格校验本工具消费字段，hook_event_name/source不支持则E_HOOK_INPUT。hook入口先把stdin cwd校验并realpath规范化，再构造传给prepare/encodeHook的HookEvent；禁止退回进程cwd。
 
 ## 8. 两个 Adapter 与去重
 
@@ -404,9 +404,9 @@ Codex不能自己猜测`~/.codex/config.toml`的层叠规则。固定有效配�
 | `.agents/skills/agent-modes/`（Codex）/`.claude/skills/agent-modes/`（Claude） | owned完整入口skill树；已存在且无record即冲突，即使字节相同 |
 | `.agent-modes/<agent>/runtime/<runtimeDigest>/` | owned最小包布局：`dist/bin/agent-modes.mjs`、`schemas/`三份schema、`skills/agent-modes/`完整树及`package.json` |
 | `.agent-modes/<agent>/install.json` | owned InstallRecord；只记录本机绝对路径，可含安装前hook原字节；不进入config/lock |
-| `.agent-modes/<agent>/install.lock`、`transaction.json`、事务备份 | apply期间的专用互斥与恢复文件；完成后清理 |
+| `.agent-modes/<agent>/install.lock` | apply期间exclusive锁，内容仅owner/version/pid；正常完成或成功回滚后清理，异常残留用于阻止再次盲写 |
 
-同一隔离HOME可分别安装两个agent，record/runtime/journal互相隔离；每个agent只删除其列出的路径。Codex卸载不得删除`.agents/skills`下其他内容，也不删除旧`.codex/skills`内容。所有父目录仍按第2节安全校验；不能因为hook与skill在不同目录，就绕过同一HOME下的完整预览/事务。
+同一HOME可分别安装两个agent，record/runtime/lock互相隔离；每个agent只删除其列出的路径。Codex卸载不得删除`.agents/skills`下其他内容，也不删除旧`.codex/skills`内容。所有父目录仍按第2节安全校验；hook与skill虽在不同目录，也必须由同一完整计划预览、复验和写入。
 
 不得改AGENTS.md、CLAUDE.md、config.toml、其他native skill、信任文件或权限策略。npm包build生成的standalone JS bundle（第三方代码已打入）与schema/入口skill数据必须包含在tarball。core从`dist/core`下的schema加载文件用`../../schemas/`相对import.meta.url读取；打包后入口在`dist/bin`仍是同样两级路径。安装保留上表最小包布局，因此不依赖源码路径、cwd或外部node_modules；版本从该包根package.json读取。runtimeRoot在普通bundle与安装bundle中都由入口URL上溯两级得到，不由工作目录推断。安装runtime从当前包的已校验固定路径复制，不下载、不npm install、不执行生命周期脚本。
 
@@ -414,18 +414,20 @@ Node绝对路径进入hook命令，升级Node后需重新预览安装。runtimeD
 
 预览是只读操作：读取包资源/目标/config，构造按相对path排序的FileChange；path均相对target，beforeDigest是现有文件原始字节摘要，beforeMode是权限低9位（文件不存在时两者都为null），after为完整内容或null删除。共有JSON对象保留所有未知key和其他hooks；只接受UTF-8严格JSON object，无JSONC/注释/重复key，hooks/SessionStart形状错误报冲突，不自动修复。更新共有文件用稳定pretty JSON；同包重复install如果语义已满足且owned无变化，changes为空且不为重排原文件格式而写回。conflicts在写之前收齐，禁止部分安装。
 
-安装文件的mode为0..511整数，和资源锁只记录execute语义是不同契约：共享文件更新/恢复保持原0777权限，不得把0600配置扩大为0644；新共享JSON、record/journal/备份为0600，事务目录0700；自有普通产品文件0644、可执行产品文件0755。新target和`.agent-modes`目录0700，已有target目录权限不擅改；target及其下待操作目录须归当前uid且无group/other写权限，拒绝已有特殊权限位文件。manifest/journal权限不安全时拒绝读取/应用；beforeHookFile可能含其他工具私密配置，只存在受保护记录内。回滚恢复权限也恢复内容，验证不能只比较execute位。
+安装文件的mode为0..511整数，和资源锁只记录execute语义是不同契约：共享文件更新/恢复保持原0777权限，不得把0600配置扩大为0644；新共享JSON、record/lock/临时文件为0600，工具新建私有目录0700；自有普通产品文件0644、可执行产品文件0755。新target和`.agent-modes`目录0700，已有target目录权限不擅改；target及其下待操作目录须归当前uid且无group/other写权限，拒绝已有特殊权限位文件。manifest/lock权限不安全时拒绝读取/应用；beforeHookFile可能含其他工具私密配置，只存在受保护record内。回滚恢复权限也恢复内容，验证不能只比较execute位。
 
-planDigest=sha256(canonical(plan除planDigest字段))，覆盖agent/target/operation/全部内容及警告冲突。JSON预览包含FileImage完整文本；text预览列path/action/before/after摘要及hook/skill变更详情。`--apply --expect`重新按相同路径和包准备计划；不是反序列化/执行用户提供的任意计划文件。摘要不匹配、目标文件/权限/真实父路径变化都报E_PLAN_STALE；apply在目标内exclusive锁下复查路径类型、摘要及状态。目标及任一既有父段是symlink、目标由其他owner占用、共享配置或未被本工具record拥有的目标文件含字面标记`GENERATED by evoloop`时E_INSTALL_CONFLICT；不对自己的runtime代码做字面标记误判，不添加force绕过。工具不承诺抵抗另一个具有相同用户权限、专门在lstat与rename间恶意替换目录的进程，但要在rename前再次校验父inode/realpath，避免普通竞态误写。
+planDigest=sha256(canonical(plan除planDigest字段))，覆盖agent/target/operation/全部内容及警告冲突。JSON预览包含FileImage完整文本；text预览列path/action/before/after摘要及hook/skill变更详情。apply重新按相同路径和包准备计划；expect可省略，提供时必须匹配重建的planDigest；不反序列化/执行用户提供的任意计划文件。未提供expect意味着按本次新计划执行，不沿用旧预览；仍须在exclusive锁下、每次写入前复查目标原字节/权限/真实父路径，变化报E_PLAN_STALE。目标及任一既有父段是symlink、目标由其他owner占用、共享配置或未被本工具record拥有的目标文件含字面标记`GENERATED by evoloop`时E_INSTALL_CONFLICT；不对自己的runtime代码做字面标记误判，不添加force绕过。工具不承诺抵抗另一个具有相同用户权限、专门在lstat与rename间恶意替换目录的进程，但要在rename前再次校验父inode/realpath，避免普通竞态误写。
 
-事务流程：拿锁→完整复验→私有staging中写所有after并fsync→写journal/原字节备份→逐文件同目录rename（record最后）→fsync目录→清理journal/备份/锁。journal记录完整原plan、planDigest、每文件before/after及本次创建目录，只有父进程死亡且路径/owner校验通过时才允许恢复；残留锁中的pid仍存活即E_BUSY。多文件不是一次原子rename：中途异常必须按journal恢复原字节/缺失状态。预览发现journal报E_BUSY并在details给出原operation/planDigest，不隐式写入；重试同operation的`--apply --expect <原digest>`才有恢复授权，先在锁下回滚，再重建新计划核验expect，变化则仅恢复后报E_PLAN_STALE。这个顺序避免“预览永远报busy，apply无路可恢复”。每文件当前内容/权限必须等于journal的before或after才可回滚，第三方改动报冲突，禁止覆盖。空父目录仅删除本事务创建且仍为空者；不递归删除target。owned文件也要校验完整mode，不能只校验bytes。
+最小写入流程：拿exclusive锁→完整复验→将各待改文件原字节/权限及原缺失状态保存在进程内→逐文件在其父目录创建exclusive临时文件、写入/fchmod后rename替换（删除为校验后unlink）→record最后写入或删除→清理临时文件/锁。安装先写runtime/skill，再合并hook，最后写record；卸载先移除自身hook，再删除未改owned文件，最后删除record。每文件替换是原子的，多文件整体不是原子的，不宣称crash-safe事务。
 
-卸载重新解析当前共享JSON：若仍等于record.afterHookFileDigest则恢复beforeHookFile原字节（原先不存在则删除）；若他人已修改整个文件但本工具group仍完全相同，则只删除该group，保留其余key/组/顺序，移除本工具创建且现已为空的hooks/SessionStart容器；是否创建这些容器可由beforeHookFile判断。不能恢复整份旧备份盖掉新编辑。如果组丢失/变了、owned文件新增/变了、入口skill树多出未记录文件，就整体冲突，不删他人内容；record保留供处理。完成后移除record、未改owned runtime/skill文件、属于本工具的空目录；不删内容库/配置/Git资源。不存在record时uninstall无操作；有record而缺owned文件不是成功卸载，而是漂移冲突。
+可捕获异常时按已成功操作的逆序做进程内回滚，恢复原字节/权限或删除本次新建文件；回滚前确认当前文件仍等于本次写入的after，发现第三方改动则停止覆盖、保留lock并报冲突及未恢复路径。回滚成功后清理本次创建且仍为空的目录；不递归删除target。异常退出/断电可能留下lock、临时文件或manifest与文件不一致；下一次预览/apply发现活跃lock报E_BUSY，残留无活跃进程的lock、孤立owned文件或manifest漂移报E_INSTALL_CONFLICT，供用户检查处理，不自动夺锁、重放或跨进程恢复。首版不实现持久crash journal/恢复授权协议；精确manifest、残留lock和现状校验只负责检测不一致，不能声称已经自动修复。无record时，owned前缀已有文件或共享JSON已有可识别的本工具hook组（引用本HOME内该agent的固定runtime前缀）均报冲突，即使字节相同；仅有第三方共享配置文件仍允许正常合并。
+
+卸载重新解析当前共享JSON：若仍等于record.afterHookFileDigest则恢复beforeHookFile原字节（原先不存在则删除）；若他人已修改整个文件但本工具group仍完全相同，则只删除该group，保留其余key/组/顺序，移除本工具创建且现已为空的hooks/SessionStart容器；是否创建这些容器可由beforeHookFile判断。不能恢复整份旧备份盖掉新编辑。如果组丢失/变了、owned文件新增/变了、入口skill树多出未记录文件，就整体冲突，不删他人内容；record保留供处理。完成后移除record、未改owned runtime/skill文件、属于本工具的空目录；不删内容库/配置/Git资源。不存在record且无本工具遗留文件时uninstall无操作；有record而缺owned文件或无record却有本工具孤立文件都是漂移冲突。
 
 安装检查state/config准备成功，确保hook首轮能离线render；preview本身不调用同步。安装阶段不创建任何agent会话，不运行目标已有hook。Codex信任提醒、Claude失败不能block的限制进入plan.warnings（固定code与文本、无动态时间）。
 
 ## 11. 入口 skill 与交付限制
 
-包内 `skills/agent-modes/SKILL.md` 仅由integration owner维护，name固定agent-modes。它指导agent使用本工具的init/import/sync/resolve/render、理解plan原因及维护modes.json/.mode，先预览install/uninstall；明确自动首轮执行由hook/wrapper完成，skill不能自行保证。说明资源默认索引、scripts需按任务显式调用、不自动执行；禁止把来源当命令或改真实全局配置。只写这份产品必需skill，不附带README/示例代码/仓库测试。
+包内 `skills/agent-modes/SKILL.md` 仅由integration owner维护，name固定agent-modes。它指导agent使用本工具的init/import/sync/resolve/render、理解plan原因及维护modes.json/.mode，先预览install/uninstall；明确自动首轮执行由hook/wrapper完成，skill不能自行保证。说明资源默认索引、scripts需按任务显式调用、不自动执行；禁止把来源当命令或绕过用户显式target+apply与所有权校验。产品可以经用户授权安装真实HOME，本次实施/验收仍只在隔离目标调用。只写这份产品必需skill，不附带README/示例代码/仓库测试。
 
 首次交付只声称CLI/离线内容/agent协议及启动参数已验证。真实付费模型未调用时必须明确这一点；provider缓存效果、所有agent版本/环境及多层手工重复hook不作保证。实现遇到本协议不支持的来源/argv/体量要返回明确错误，不用静默降级拼出看似完整闭环。

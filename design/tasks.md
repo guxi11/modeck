@@ -1,6 +1,6 @@
 # agent-modes standard 实施任务
 
-依赖 `architecture.md` 与 `detailed-design.md`（2026-10-16 hard v1）。本文是交给3名standard的任务包；当前阶段仅提交两份设计，不派coder、不实现。实现均不新增测试代码/README，不改真实HOME/agent配置，不发布npm、不加远端、不推送。
+依赖 `architecture.md` 与 `detailed-design.md`（2026-10-16 hard修订候选，待ultra收口）。本文是交给3名standard的任务包；当前阶段仅提交两份设计，不派coder、不实现。实现均不新增测试代码/README；本次实施/验收只在隔离HOME/config/state调用，不修改真实HOME/agent配置，不发布npm、不加远端、不推送。产品仍允许用户显式target-home+apply安装真实HOME，不能把本次授权范围写成永久产品禁令。
 
 ## 1. 文件所有权（互不重叠）
 
@@ -25,7 +25,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 
 负责唯一公共contracts、配置校验、事实采集、纯resolver和稳定编译器。只改所有权表core文件，不写测试代码，不实现CLI/下载/安装。完整阅读detailed-design第2–7节；尤其不得靠对象枚举、mtime或绝对项目路径影响正文。
 
-**C0：先发布冻结契约，后写Implementation。**
+**C0：按ultra审定版本先发布公共契约，后写Implementation。**
 
 - 落3份输入JSON Schema（modes/selector/lock），声明规范化TS类型、所有Request/Return、错误工厂、PROTOCOL/SCHEMA_VERSION/LIMITS、parseJson/canonical/sha256/checkRelativePath。Schema与TS的optional/default语义一致；输入unknown，输出深层readonly。parseJson是全Module唯一严格JSON/重复key读取工具。
 - 定公共exports及build/typecheck/pack文件清单，统一Ajv2020/yaml等依赖和lock。忽略dist/node_modules及临时产物；不能新增README/样例/测试。
@@ -81,18 +81,18 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 
 - Codex hooks.json、Claude settings.json输出真实SessionStart group/JSON；有上限且CodexadditionalContextLimit=0；/hooks信任警告，不写信任或bypass参数。
 - 安装幂等+RunMarker身份/digest去重，hook依然校验资源，纯hook每次compact重新注入，不用永久session+source缓存。明确单生效安装限制和多层复制警告。
-- arity解析已冻结允许集，拒绝冲突cwd/未知改变来源的flag，prompt内同名字符串不误判。Claude保留用户append并追加，不替换system；不支持resume snapshot。
+- arity解析使用审定后的允许集，拒绝冲突cwd/未知改变来源的flag，prompt内同名字符串不误判。Claude保留用户append并追加，不替换system；不支持resume snapshot。
 - Codex独立app-server initialize/initialized/config/read探测effective developer_instructions及layers，保留原文；不可可靠读取/层变化就拒绝；精确移除原developer override并生成一个安全TOML字符串追加。强制--no-daemon、固定cwd，避免共享daemon丢marker。
 - argv无shell、stdio/exit/signals透传、嵌套wrapper拒绝。实际模型调用不属于本轮验收，使用临时假agent程序记录启动参数与模拟配置RPC，但不得把fake验证说成真实模型行为。
 
-**I3：安装事务。**
+**I3：最小安装与卸载。**
 
-- target-home必填且表示隔离HOME根、真实账户HOME的apply拒绝；Codex写`.codex/hooks.json`和`.agents/skills/agent-modes`，Claude写`.claude/settings.json`和`.claude/skills/agent-modes`。record/runtime/journal按`.agent-modes/<agent>/`隔离，两agent可共存。默认preview无写，--apply必须expect当前planDigest。预览包含完整JSON合并差异，未知共享字段/其他hooks保留。
+- target-home必填且表示HOME根，产品允许用户显式target-home+apply安装真实HOME；本次所有调用仅用隔离目录。Codex写`.codex/hooks.json`和`.agents/skills/agent-modes`，Claude写`.claude/settings.json`和`.claude/skills/agent-modes`。record/runtime/lock按`.agent-modes/<agent>/`隔离，两agent可共存。默认preview无写；apply的expect可选，提供时匹配当前planDigest，未提供时执行本次重建并复验的计划。预览包含完整JSON合并差异，未知共享字段/其他hooks保留。
 - standalone JS runtime保留最小包布局（dist/bin入口、3schema、完整入口skill、package.json），schema/版本从入口URL定位；不能只复制bundle后丢失数据。精确InstallRecord所有权；拒绝evoloop标记/symlink/无record同名文件，不能force覆盖。
-- 并发锁/前置摘要和路径复验/journal/失败恢复/record最后；保持共享文件完整权限，0600不能扩大为0644，记录/备份0600、事务目录0700。中断后同operation的apply+原expect能先恢复再重建计划，不能让busy堵死所有入口。卸载只动完整未改owned文件与精确自身hook组，保留他人后续编辑，缺失或篡改冲突而非全目录删除。
-- 同包重复install应空变化；无record卸载为空变化；卸载不删state/config/CAS。包内资源路径必须在npm pack tarball安装后也成立。
+- exclusive锁+前置摘要/权限/路径复验+逐文件原子替换+record最后；原字节和权限仅为可捕获异常保存在进程内，失败逆序回滚，第三方新编辑不覆盖。保持共享文件完整权限，0600不能扩大为0644，record/lock/临时文件0600、私有目录0700。不实现持久crash journal、重放或恢复授权；残留lock/孤立文件/manifest漂移报冲突，不能声称多文件原子或crash自动恢复。卸载只动完整未改owned文件与精确自身hook组，保留他人后续编辑，缺失或篡改冲突而非全目录删除。
+- 同包重复install应空变化；无record且无本工具遗留文件的卸载为空变化，发现孤立文件仍报冲突；卸载不删state/config/CAS。包内资源路径必须在npm pack tarball安装后也成立。
 
-完成标准：临时HOME/config/state/target下所有CLI闭环；预览不写、合并/二次安装/卸载对称、编辑其他hook后仍保留、改own内容冲突、陈旧expect拒绝；两个hook JSON及marker匹配/不匹配/纯hook重复compact；wrapper的有效baseline（含多行/引号/空值）、cwd冲突、prompt数据、argv/stdin/exit/signals、probe失败不启动；tarball独立安装运行且入口skill和bundle依赖完整。只用临时fixture，不提交测试代码。真实模型未调用写清楚。只提交自己文件，回传commit与证据。
+完成标准：临时HOME/config/state/target下所有CLI闭环；预览不写、带/不带expect都能显式apply、陈旧expect拒绝、合并/二次安装/卸载对称、编辑其他hook后仍保留、改own内容冲突、进程内异常回滚、崩溃残留检测后报冲突；两个hook JSON及marker匹配/不匹配/纯hook重复compact；wrapper的有效baseline（含多行/引号/空值）、cwd冲突、prompt数据、argv/stdin/exit/signals、probe失败不启动；tarball独立安装运行且入口skill和bundle依赖完整。只用临时fixture，不提交测试代码。真实模型未调用写清楚。只提交自己文件，回传commit与证据。
 
 ## 6. 合并后的检查与白板 hard 验收输入
 
@@ -110,7 +110,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 | hook | JSON shape、15秒timeout、Codex信任警告、Claude首轮等待依据、失败不保证阻断；compact不被旧标记吞掉 |
 | 原生skill发现 | 隔离HOME/CODEX_HOME下验证Codex读到`.agents/skills/agent-modes`，不能以旧`.codex/skills`落盘替代；可用`codex debug prompt-input`离线检查model-visible prompt，原生绝对路径索引仍属于缓存边界 |
 | wrapper | baseline不丢、cwd不分叉、unknown/替换prompt参数拒绝、marker不双注入、--no-daemon、stdin/exit/signals真实进程行为 |
-| 安装安全 | preview零写、stale拒绝、symlink/evoloop拒绝、重复安装零变化、第三方JSON保留、own漂移不删、事务恢复 |
+| 安装安全 | preview零写、expect可选且提供时校验、symlink/evoloop拒绝、重复安装零变化、第三方JSON保留、own漂移不删、进程内失败回滚、崩溃残留只报冲突；全部实际调用仅在隔离HOME验证 |
 | 分发 | pack含所有exports/standalone bundle/3schema/入口skill；临时安装bin可启动，无源码/node_modules路径泄漏 |
 
 白板hard把发现回派所属owner，禁止越区直接改。最终验收记录由上游按需求另行授权保存；本次只写两份设计。协议与argv已验证但没有真实付费请求时，交付必须明确“未验证真实模型加载/缓存命中”，不能把digest或CLI参数当KV缓存证明。
