@@ -114,12 +114,18 @@ const loadRecord = async (home: string, agent: Agent): Promise<InstallRecord | n
 
 const verifyOwned = async (home: string, agent: Agent, record: InstallRecord | null, groups: readonly unknown[]): Promise<void> => {
   const loc = locations(agent);
-  const files = [...(await treeFiles(home, loc.skill)).map(path => `${loc.skill}/${path}`),
-    ...(await treeFiles(home, `${loc.private}/runtime`)).map(path => `${loc.private}/runtime/${path}`)];
   if (!record) {
-    if (files.length || canonical(groups).includes(join(home, loc.private, "runtime"))) return conflict("Unrecorded agent-modes files or hooks already exist");
+    const occupied = await Promise.all([loc.skill, `${loc.private}/runtime`].map(async path => {
+      try { await lstat(homePath(home, path)); return path; }
+      catch (error) { if (missing(error)) return null; throw error; }
+    }));
+    const existing = occupied.find(path => path !== null);
+    if (existing) return conflict("Unrecorded agent-modes destination already exists", existing);
+    if (canonical(groups).includes(join(home, loc.private, "runtime"))) return conflict("Unrecorded agent-modes hook already exists");
     return;
   }
+  const files = [...(await treeFiles(home, loc.skill)).map(path => `${loc.skill}/${path}`),
+    ...(await treeFiles(home, `${loc.private}/runtime`)).map(path => `${loc.private}/runtime/${path}`)];
   const expected = record.files.map(file => file.path).sort();
   if (canonical(files.sort()) !== canonical(expected)) return conflict("Owned file set has changed");
   await Promise.all(record.files.map(async file => {
