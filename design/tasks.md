@@ -40,9 +40,9 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 **C2：稳定编译。**
 
 - VerifiedResourceSet与plan身份一致，严格按正文协议生成rule/skill索引/preload；目录/入口路径能直接使用，不写cwd/原因/时间到正文。
-- 摘要覆盖实际输出bytes；state位置不同则可不同，不能伪称跨机相同。lock变化即使未选中资源也进入正文；9000 UTF-16和32768-byte上限均报错，不截断。
+- selectionDigest只覆盖协议/agent/选中mode顺序/有序选中资源的id-kind-treeDigest-preload；正文不写configDigest/lockDigest。未选资源合法更新并sync、无关detector变化不改正文；Git commit变化但选中树不变也不改正文。contentDigest覆盖实际输出bytes，state位置不同则可不同，不伪称跨机相同。9000 UTF-16和32768-byte上限均报错，不截断。
 
-完成标准：导出完全匹配C0；临时fixture下显式/自动/禁用/DAG/顺序可解释，不同cwd但相同结果渲染bytes一致，规则或锁变化digest变化，size/非法输入失败。只写临时fixture/脚本不进仓库。集成后typecheck/build通过。提交自己文件，回传commit、导出清单、验证命令/结果和真实限制。
+完成标准：导出完全匹配C0；临时fixture下显式/自动/禁用/DAG/顺序可解释；不同cwd相同选中结果的text/digest一致；无关detector/未选资源更新不变，选中树（含asset/exec位）/顺序/agent变化才改变身份。完整性错误仍失败，不能以输出稳定为由绕过local未同步修改；size/非法输入失败。只写临时fixture/脚本不进仓库。集成后typecheck/build通过。提交自己文件，回传commit、导出清单、验证命令/结果和真实限制。
 
 ## 4. resources 任务包（可直接派发）
 
@@ -104,7 +104,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 | --- | --- |
 | init/import分享 | 新Git目录可提交；导入锁复用，无真实HOME变化/来源代码执行 |
 | JSON/解析 | 重复key/未知引用/未选中DAG循环报错；最近.mode、不跨边界；禁父冲突与顺序固定 |
-| 稳定正文 | 两个cwd同mode同锁同state输出逐字节相等；变资源/lock/agent改变digest；绝对项目路径不入正文 |
+| 稳定正文 | 同state下两个cwd选中mode/树/顺序相同则text逐字节相等；无关detector、已sync未选资源、同树Git换commit不改正文；选中树/顺序/agent变化改digest；resolve/JSON诊断可变，绝对项目路径不入正文 |
 | 技能定位 | root/entry实际存在；scripts/reference/assets全在且exec保留；preload正文准确；超限失败无截断 |
 | frozen完整性 | lock不变；移动Git ref仍取旧commit；坏/缺对象、本地漂移、增删asset均失败；只sync能补对象 |
 | hook | JSON shape、15秒timeout、Codex信任警告、Claude首轮等待依据、失败不保证阻断；compact不被旧标记吞掉 |

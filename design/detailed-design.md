@@ -26,7 +26,7 @@ CLI 的 `--config <dir>` 指配置目录，不是文件。优先级：显式参�
 
 统一 `Sha256` 为 64 位小写 hex（不含 `sha256:`）；Git commit 是 40 位小写 SHA-1（首版拒绝 Git SHA-256 仓库）。所有 JSON 为 UTF-8，拒绝重复 key、非有限数字、孤立surrogate及未知字段；不做字符串到布尔/数字转换。JSON Schema 用 draft 2020-12，不启用自动 removeAdditional/coerceTypes。输入 JSON 上限 1 MiB，锁/本机 manifest 上限 8 MiB。公共 `parseJson` 在 JSON.parse 前检测重复 key，不能靠解析后的对象补查；各读取入口都调用它，大小上限由调用方按文件类别先检查。该工具也用于读取共享agent JSON，不让resources/integration另写宽松解析器。
 
-canonical JSON：对象 key 递归按 JS 字符串 `<` 顺序排序，数组保序，无空白，UTF-8；展示用 JSON 另以两空格缩进加一个 LF。配置补齐本文规定默认值后计算 configDigest；`resources`/`modes` 是对象，其 key 不参与声明顺序。所有显式有序项必须是数组。摘要不含绝对路径、mtime、日志、时间或临时文件名。
+canonical JSON：对象 key 递归按 JS 字符串 `<` 顺序排序，数组保序，无空白，UTF-8；展示用 JSON 另以两空格缩进加一个 LF。配置补齐本文规定默认值后计算 configDigest；`resources`/`modes` 是对象，其 key 不参与声明顺序。所有显式有序项必须是数组。共享配置/锁/selection身份摘要不含绝对路径、mtime、日志、时间或临时文件名；contentDigest及安装planDigest分别按其契约覆盖实际正文/计划字节数据，不能为稳定比较漏掉真实路径。
 
 ## 3. 输入 JSON Schema（完整 v1 形状）
 
@@ -226,7 +226,7 @@ compile 不采集文件或联网；输入 plan 与 resources 返回的 VerifiedR
 
 协议 `agent-modes-context/1` 的正文顺序及标点固定：
 
-- 第一行 `# agent-modes-context/1`；其后依次 `agent: <codex|claude>`、`config: <configDigest>`、`lock: <lockDigest>`、`modes: <canonical JSON modeIds>`，空行。
+- 第一行 `# agent-modes-context/1`；其后依次 `agent: <codex|claude>`、`selection: <selectionDigest>`、`modes: <canonical JSON modeIds>`，空行。不写整配置或整锁摘要。
 - 每个 rule 按最终有序资源中的 rule 顺序：`## rule <id>`、空行、规范化全部正文、空行。
 - `## skills`，空行，固定一行 `Skill paths resolve from the indexed root; scripts are not run automatically.`，空行；每个 skill 按最终 skill 顺序一行 canonical JSON，字段为 `id,name,description,root,entry,preload`；root 是内容库 tree 的绝对路径，entry 为 root + `/SKILL.md`。JSON 字符串引用路径，不能裸拼路径到指令/shell。
 - 每个 preload skill：空行、`## skill <id>`、空行、去掉 frontmatter 后的完整正文。
@@ -234,7 +234,11 @@ compile 不采集文件或联网；输入 plan 与 resources 返回的 VerifiedR
 
 rule/preload 文本按 UTF-8 fatal 解码，去单个 BOM，CRLF/CR统一LF，去末尾连续换行后加一个LF；内部空格/空行不重排。description 使用 YAML 解析后的字符串，JSON escape 换行，不产生额外正文行。正文总上限为9,000 UTF-16单位且32,768 UTF-8 bytes，两者都检查；超限 `E_CONTEXT_SIZE`，不截断、摘要化或偷偷关闭 preload。所有 render/hook/wrapper 一致执行该上限；它让 Claude 的10,000字符 spill 阈值留有余量。Codex handler 设 additionalContextLimit=0，依靠本工具硬上限避免其默认2,500 token spill。完整技能树不受正文上限限制，默认只索引按需读取。
 
-`lockDigest = sha256(canonical(已校验锁))`；即使非选中资源或固定 commit 变化也会改变正文。`contentDigest = sha256(实际 text UTF-8 bytes)`，text 自己不包含 contentDigest，避免递归。`RenderedContext` 同时返回 text/digest/byteLength。同配置、锁、mode顺序、agent、协议和 state绝对位置产生相同 bytes；切换 cwd 但结果一致时正文相同。迁移 state 路径会改变 skill 定位及正文摘要，这个稳定性只保证同一安装位置；不能承诺跨机器前缀、provider cache key、KV/cache hit。
+`lockDigest = sha256(canonical(已校验锁))`，只用于输入一致性校验、resolve/JSON诊断，不参与稳定正文。按本轮稳定性补充，这一契约优先于architecture中将整锁变化视为上下文变化的早期描述。`selectionDigest = sha256(canonical({protocol,agent,modeIds,resources}))`，其中resources严格取plan最终有序绑定，逐项仅为`{id,kind,treeDigest,preload}`；不取全配置、全锁、detector、选择原因、source URL/ref或Git commit。treeDigest覆盖选中资源完整树及execute语义，因此未preload的skill资产/脚本变化也能改变身份；Git固定commit变了但同一选中树不变则正文不变。
+
+`contentDigest = sha256(实际 text UTF-8 bytes)`，text自己不包含contentDigest，避免递归。RenderedContext同时返回selectionDigest/text/contentDigest/byteLength；其中configDigest/lockDigest只是诊断元数据，禁止被Adapter再拼进注入正文。在同一state绝对位置内，只要选中mode顺序、选中资源绑定/树/preload、agent和协议相同，text与contentDigest必须相同：无关detector或未选资源的合法变更即使改变configDigest/lockDigest，也不扰动正文。整JSON输出的诊断字段可以不同，验收比较text/selectionDigest/contentDigest，不比较整个render JSON。
+
+稳定输出不豁免第4节完整性检查：未选资源合法变更并显式sync后才有有效锁；任何local源改变但未sync仍报E_LOCK_MISMATCH，不能只读旧内容库绕锁。迁移state路径会改变skill实际定位及正文摘要，这个稳定性只保证同一安装位置；不能承诺跨机器前缀、provider cache key、KV/cache hit。
 
 这个摘要只覆盖本工具text。Codex/Claude原生skill初始索引也可能包含绝对路径；迁移HOME或入口skill安装位置会改变agent自己的model-visible prompt，即使本工具text/digest不变也不能声称完整前缀相同。不得为了缓存比较从原生索引里删去实际资源定位。
 
@@ -268,7 +272,7 @@ type BoundResource = { id: Id; kind: Kind; preload: boolean };
 type ResolvedPlan = { schemaVersion: 1; configDigest: Sha256; lockDigest: Sha256; cwd: string; boundary: string; selectorPath: string | null; modeIds: Id[]; resources: BoundResource[]; reasons: Reason[]; diagnostics: Diagnostic[] };
 type VerifiedResource = { id: Id; kind: Kind; treeDigest: Sha256; root: string; entry: string; entryBytes: Uint8Array; skill: { name: string; description: string; body: string } | null };
 type VerifiedResourceSet = { schemaVersion: 1; configDigest: Sha256; lock: ResourceLock; lockDigest: Sha256; resources: VerifiedResource[] };
-type RenderedContext = { schemaVersion: 1; protocol: "agent-modes-context/1"; agent: Agent; configDigest: Sha256; lockDigest: Sha256; modeIds: Id[]; text: string; contentDigest: Sha256; byteLength: number };
+type RenderedContext = { schemaVersion: 1; protocol: "agent-modes-context/1"; agent: Agent; configDigest: Sha256; lockDigest: Sha256; selectionDigest: Sha256; modeIds: Id[]; text: string; contentDigest: Sha256; byteLength: number };
 type HookEvent = { hook_event_name: "SessionStart"; cwd: string; session_id: string; source: "startup" | "resume" | "clear" | "compact" | "fork" };
 type HookReply = { hookSpecificOutput: { hookEventName: "SessionStart"; additionalContext: string } } | null;
 type RunMarker = { version: 1; agent: Agent; configRoot: string; stateRoot: string; cwd: string; contentDigest: Sha256; ownerPid: number };
