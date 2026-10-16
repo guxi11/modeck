@@ -8,7 +8,7 @@ import { snapshotLocal, writeSnapshot } from "../resources/tree.js";
 
 type Entry = Readonly<{ url: string; path: string; target: string; ref: string; commit: string; digest: string; date: string; tag: string | null }>;
 type Lock = Readonly<{ version: 1; resources: readonly Entry[] }>;
-const lockName = "modup-resources.lock.json";
+const resourceFile = "modup-resources.json";
 const validate = (root: string, entry: Entry): void => {
   requireValue(entry && [entry.url, entry.path, entry.target, entry.ref, entry.commit, entry.digest].every(value => typeof value === "string" && value.length > 0), "E_CONFIG", "Invalid external resource entry");
   requireValue((entry.date === undefined || typeof entry.date === "string" && Number.isFinite(Date.parse(entry.date)))
@@ -16,11 +16,11 @@ const validate = (root: string, entry: Entry): void => {
   childPath(root, entry.path, true);
   childPath(root, entry.target);
   requireValue(!entry.target.split("/").some(part => part.startsWith(".")) && !/[\s*?![\]\\#]/.test(entry.target)
-    && ![lockName, "update-skills.mjs", "AGENTS.md", "package.json", "package-lock.json"].includes(entry.target), "E_PATH", "Unsafe external resource target");
+    && ![resourceFile, "update-skills.mjs", "AGENTS.md", "package.json", "package-lock.json"].includes(entry.target), "E_PATH", "Unsafe external resource target");
   requireValue(commitPattern.test(entry.commit) && hashPattern.test(entry.digest), "E_CONFIG", "Invalid external resource lock digest");
 };
 const readLock = async (root: string): Promise<Lock> => {
-  const file = join(root, lockName);
+  const file = join(root, resourceFile);
   if (!await exists(file)) return { version: 1, resources: [] };
   const lock = parseJson(utf8((await regularBytes(file, LIMITS.jsonBytes)).bytes)) as Lock;
   requireValue(lock?.version === 1 && Array.isArray(lock.resources), "E_CONFIG", "Invalid external resource lock");
@@ -101,7 +101,7 @@ export const manageResources = async (root: string, action: string, input: Reado
       }, Promise.resolve());
       const result: Lock = { version: 1, resources: prepared.map(item => item.entry) };
       await writeFile(join(mutex, "lock"), `${JSON.stringify(result, null, 2)}\n`);
-      await rename(join(mutex, "lock"), join(root, lockName));
+      await rename(join(mutex, "lock"), join(root, resourceFile));
       return result;
     } finally { await rm(staging, { recursive: true, force: true }); }
   } finally { await rm(mutex, { recursive: true, force: true }); }
