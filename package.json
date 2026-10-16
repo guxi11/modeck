@@ -1,12 +1,12 @@
 {
-  "name": "@guxi11/agent-modes",
+  "name": "@guxi11/modup",
   "version": "0.1.0",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "bin": {
-    "agent-modes": "dist/bin/agent-modes.mjs"
+    "modup": "dist/bin/modup.mjs"
   },
   "exports": {
     "./contracts": {
@@ -33,7 +33,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc && esbuild src/cli/bin.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/bin/agent-modes.mjs --banner:js=\"import { createRequire as __agentModesCreateRequire } from 'node:module'; const require = __agentModesCreateRequire(import.meta.url);\""
+    "build": "tsc && esbuild src/cli/bin.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/bin/modup.mjs --banner:js=\"import { createRequire as __modupCreateRequire } from 'node:module'; const require = __modupCreateRequire(import.meta.url);\""
   },
   "dependencies": {
     "ajv": "8.20.0",

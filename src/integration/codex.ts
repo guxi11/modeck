@@ -31,7 +31,7 @@ export const codexConfig = async (executable: string, cwd: string, overrides: re
           } catch { fail(); }
         });
       });
-      send({ id: 1, method: "initialize", params: { clientInfo: { name: "agent-modes", version }, capabilities: { experimentalApi: false } } });
+      send({ id: 1, method: "initialize", params: { clientInfo: { name: "modup", version }, capabilities: { experimentalApi: false } } });
     });
     const result = object(value);
     const config = object(result.config);

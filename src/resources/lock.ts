@@ -56,7 +56,7 @@ export const makeLock = (context: ConfigContext, resources: readonly LockedResou
 };
 
 export const withConfigLock = async <T>(root: string, operation: () => Promise<T>): Promise<T> => {
-  const path = join(root, ".agent-modes-sync.lock");
+  const path = join(root, ".modup-sync.lock");
   await safePath(root);
   const handle = await open(path, "wx", 0o600).catch(error => {
     if (error instanceof Error && "code" in error && error.code === "EEXIST") throw modeError("E_BUSY", "Config sync is already locked", { path });
@@ -64,7 +64,7 @@ export const withConfigLock = async <T>(root: string, operation: () => Promise<T
   });
   const own = await handle.stat();
   try {
-    await handle.writeFile(`${canonical({ schemaVersion: 1, owner: "agent-modes/v1", pid: process.pid })}\n`);
+    await handle.writeFile(`${canonical({ schemaVersion: 1, owner: "modup/v1", pid: process.pid })}\n`);
     await handle.sync();
     return await operation();
   } finally {

@@ -71,7 +71,7 @@ const parseArguments = (agent: Agent, argv: readonly string[]): Parsed => {
 };
 
 export const runAgent = async (request: RunAgentRequest): Promise<RunResult> => {
-  if (process.env.AGENT_MODES_RUN_V1 !== undefined) throw modeError("E_WRAPPER_CONFLICT", "Nested wrappers are not supported");
+  if (process.env.MODUP_RUN_V1 !== undefined) throw modeError("E_WRAPPER_CONFLICT", "Nested wrappers are not supported");
   const { agent } = request;
   const configRoot = await safeAbsolute(request.configRoot);
   const stateRoot = await safeAbsolute(request.stateRoot);
@@ -104,7 +104,7 @@ export const runAgent = async (request: RunAgentRequest): Promise<RunResult> => 
     contentDigest: prepared.rendered.contentDigest, ownerPid: process.pid });
   return new Promise<RunResult>((resolveResult, reject) => {
     const child = spawn(executable, [...injection, ...parsed.rest],
-      { cwd, env: { ...process.env, AGENT_MODES_RUN_V1: marker }, stdio: "inherit", shell: false });
+      { cwd, env: { ...process.env, MODUP_RUN_V1: marker }, stdio: "inherit", shell: false });
     const signals: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
     const handlers = signals.map(signal => ({ signal, handler: (): void => { child.kill(signal); } }));
     handlers.forEach(({ signal, handler }) => process.on(signal, handler));

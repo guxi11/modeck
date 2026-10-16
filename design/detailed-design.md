@@ -1,10 +1,10 @@
-# agent-modes 详细设计
+# modup 详细设计
 
 阶段：hard详细设计，2026-10-16；经ultra review修订并收口，作为v1 Interface。任务与文件归属见 `tasks.md`。本轮只设计，不实现、不写测试代码、不操作真实全局配置、不发布或推送；这不限制产品在用户显式授权后安装到其真实HOME。以 `architecture.md` 为需求基线；本文明确收敛处优先作为standard实施契约。
 
 ## 1. 收敛后的闭环与 Module
 
-Node.js >=20，TypeScript strict，ESM，首版支持 macOS/Linux。Windows 在写入前报 `E_PLATFORM`，不生成不能执行的 shell hook。包名暂为 `@guxi11/agent-modes`，bin 为 `agent-modes`；无 ai-rulez 依赖。只提供 Claude Code、Codex 两个真实 Adapter。
+Node.js >=20，TypeScript strict，ESM，首版支持 macOS/Linux。Windows 在写入前报 `E_PLATFORM`，不生成不能执行的 shell hook。包名暂为 `@guxi11/modup`，bin 为 `modup`；无 ai-rulez 依赖。只提供 Claude Code、Codex 两个真实 Adapter。
 
 闭环是 `init/import → 编辑 modes.json → sync → resolve/render → install 或 run → uninstall`。init 创建有 Git 元数据的新配置目录；import 导入指定 Git revision 到新目录；两者都不隐式安装、联网同步资源或修改本机指针。配置仓库由用户正常 Git 提交/分享，下载内容及机器状态不进入仓库。
 
@@ -20,7 +20,7 @@ core 不导入 resources/integration；resources 只导入 `contracts` 的类型
 
 ## 2. 路径、编码与身份
 
-CLI 的 `--config <dir>` 指配置目录，不是文件。优先级：显式参数 > `AGENT_MODES_CONFIG` > `$HOME/.config/agent-modes`。状态目录：`--state <dir>` > `AGENT_MODES_STATE` > `$HOME/.local/share/agent-modes/v1`。相对 CLI 路径在入口进程原 cwd 下解释一次，再检查路径链并转为realpath；不存在的目标从最近存在父目录解析。config/state/destination/target先逐段lstat拒绝symlink，再取得真实路径，不能先realpath抹掉恶意symlink证据（隔离验证使用真实`/private/tmp`路径）。禁止配置目录和状态目录相同或状态目录位于配置目录内；无额外“当前配置指针文件”。
+CLI 的 `--config <dir>` 指配置目录，不是文件。优先级：显式参数 > `MODUP_CONFIG` > `$HOME/.config/modup`。状态目录：`--state <dir>` > `MODUP_STATE` > `$HOME/.local/share/modup/v1`。相对 CLI 路径在入口进程原 cwd 下解释一次，再检查路径链并转为realpath；不存在的目标从最近存在父目录解析。config/state/destination/target先逐段lstat拒绝symlink，再取得真实路径，不能先realpath抹掉恶意symlink证据（隔离验证使用真实`/private/tmp`路径）。禁止配置目录和状态目录相同或状态目录位于配置目录内；无额外“当前配置指针文件”。
 
 共享路径统一为 POSIX 相对路径：非空，无绝对前缀、反斜杠、空段、`.` 段（单独的资源根 `.` 除外）、`..` 段、NUL/控制字符、`.git` 段；文件名必须 NFC。标识符匹配 `^[a-z][a-z0-9-]{0,63}$`。本地资源路径必须在配置根内；Git path 必须在指定 commit 内。仅普通文件/目录，首版拒绝全部 symlink、gitlink、设备、FIFO、socket；不是只检查字符串。每次访问以 lstat/realpath、根内 containment 和父目录逐段检查共同校验，拒绝 symlink 父目录。入口 cwd 可以是 symlink 的别名，先 realpath；共享内容及安装目标不接受 symlink。
 
@@ -39,7 +39,7 @@ core 提交三个文件 `schemas/modes.schema.json`、`selector.schema.json`、`
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:agent-modes:modes:1",
+  "$id": "urn:modup:modes:1",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "modes", "resources"],
@@ -122,7 +122,7 @@ core 提交三个文件 `schemas/modes.schema.json`、`selector.schema.json`、`
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:agent-modes:selector:1",
+  "$id": "urn:modup:selector:1",
   "type": "object", "additionalProperties": false, "required": ["schemaVersion"],
   "properties": {
     "schemaVersion": { "const": 1 }, "auto": { "type": "boolean" },
@@ -145,7 +145,7 @@ core 提交三个文件 `schemas/modes.schema.json`、`selector.schema.json`、`
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:agent-modes:lock:1",
+  "$id": "urn:modup:lock:1",
   "type": "object", "additionalProperties": false,
   "required": ["schemaVersion", "resourceSpecDigest", "resources"],
   "properties": {
@@ -184,11 +184,11 @@ core 提交三个文件 `schemas/modes.schema.json`、`selector.schema.json`、`
 }
 ```
 
-`sourceDigest = sha256(canonical({kind,source}))`，其中 source 是规范化描述；`resourceSpecDigest = sha256(canonical(config.resources))`。lock.resources 按 id 升序，与配置 id 集合严格相等；local 的 commit 必须 null，git 必须 commit。entries 按相对 path 升序、唯一，目录条目包含空目录，根目录不入列表；父目录必须存在且为 directory，不允许文件/目录冲突或大小写折叠碰撞。treeDigest 是 `sha256(UTF8("agent-modes-tree-v1\n") + UTF8(canonical(entries)))`。文件 digest 是原始字节的 SHA-256，executable 是源任一 execute bit 是否置位；不记录 uid/gid/mtime/其余权限。
+`sourceDigest = sha256(canonical({kind,source}))`，其中 source 是规范化描述；`resourceSpecDigest = sha256(canonical(config.resources))`。lock.resources 按 id 升序，与配置 id 集合严格相等；local 的 commit 必须 null，git 必须 commit。entries 按相对 path 升序、唯一，目录条目包含空目录，根目录不入列表；父目录必须存在且为 directory，不允许文件/目录冲突或大小写折叠碰撞。treeDigest 是 `sha256(UTF8("modup-tree-v1\n") + UTF8(canonical(entries)))`。文件 digest 是原始字节的 SHA-256，executable 是源任一 execute bit 是否置位；不记录 uid/gid/mtime/其余权限。
 
 rule 源必须是一个 UTF-8 文件，物化后统一名为 `tree/content.md`；skill 源必须是包含根级 `SKILL.md` 的目录，完整物化全部目录/文件，绝不只复制 SKILL.md。不得默认排除 scripts/references/assets 或任意隐藏文件（`.git` 是拒绝而非静默忽略）；包含不安全条目则整个资源失败。每树最多 10,000 条目、总文件 64 MiB、单文件 16 MiB；rule/SKILL.md 各至多 1 MiB；资源总量最多 512 MiB。超限失败，不发布部分树。
 
-SKILL.md 使用 UTF-8 YAML frontmatter，单个文档，无自定义 tag/alias，根为 mapping，必需 `name`/`description` 两个非空 string；name 匹配上述 id（最多64），description 最多1024 UTF-16 单位，允许LF/CR/TAB以支持常见YAML folded/literal多行描述，拒绝其余控制字符。其他 frontmatter 字段保存在原文件，但本工具不执行或解释其中 hooks/权限等字段。全配置 skill name 唯一，保留名 `agent-modes` 不可占用。YAML 用受限 yaml parser，不写简陋正则解析多行 description；原始 frontmatter/脚本均纳入树摘要。
+SKILL.md 使用 UTF-8 YAML frontmatter，单个文档，无自定义 tag/alias，根为 mapping，必需 `name`/`description` 两个非空 string；name 匹配上述 id（最多64），description 最多1024 UTF-16 单位，允许LF/CR/TAB以支持常见YAML folded/literal多行描述，拒绝其余控制字符。其他 frontmatter 字段保存在原文件，但本工具不执行或解释其中 hooks/权限等字段。全配置 skill name 唯一，保留名 `modup` 不可占用。YAML 用受限 yaml parser，不写简陋正则解析多行 description；原始 frontmatter/脚本均纳入树摘要。
 
 固定内容库位置：`<state>/store/sha256/<treeDigest>/tree/`，旁边是 `manifest.json`（entries 的 canonical JSON + LF）。内容库独立于配置路径，可跨配置复用。文件物化成 0444/0555，目录 0555，执行位语义保留；验证摘要不依赖其余权限。发布用同文件系统 staging + rename，已有目标必须验证后才复用，损坏目标报 `E_INTEGRITY`，不可“相信目录名”。不自动 GC；因此已输出的 skill 绝对路径在卸载 adapter 后仍然有效。
 
@@ -215,7 +215,7 @@ init 的最小内容为 `modes.json`（schemaVersion1、defaults=[base]、单个
 
 collectFacts：验证 cwd 为目录，用 Git worktree 根为 boundary（支持 `.git` 文件、嵌套仓库以最近 Git 根为准）；非 Git boundary=cwd。不在 Git 时不向上读 `.mode`；在 Git 内从 cwd 向 boundary 逐级查找，最近的一个 `.mode` 生效。路径上的无效/不可读 `.mode` 立即失败；找到了就不继续叠加父级。
 
-检测只扫描 boundary 内普通文件，排序后输出相对路径；不跟随 symlink。固定排除目录名 `.git,node_modules,dist,build,coverage,.next,.turbo,.cache,.agent-modes`，以及位于 boundary 内的 state 真实目录。最多遍历20,000条目录项/10,000文件，深度64，文件路径1024字符；package.json/selector 各1MiB。即使可提前判定 exists，也必须完成限额检查；超限 `E_SCAN_LIMIT`，无部分 plan。不存在根 package.json 则依赖集合为空；存在但不可读/非法则失败。相对路径按第2节排序；检测不读正文、不看 dirty/mtime/分支。
+检测只扫描 boundary 内普通文件，排序后输出相对路径；不跟随 symlink。固定排除目录名 `.git,node_modules,dist,build,coverage,.next,.turbo,.cache,.modup`，以及位于 boundary 内的 state 真实目录。最多遍历20,000条目录项/10,000文件，深度64，文件路径1024字符；package.json/selector 各1MiB。即使可提前判定 exists，也必须完成限额检查；超限 `E_SCAN_LIMIT`，无部分 plan。不存在根 package.json 则依赖集合为空；存在但不可读/非法则失败。相对路径按第2节排序；检测不读正文、不看 dirty/mtime/分支。
 
 resolve 为纯函数，输入规范配置、facts、configDigest/lockDigest，输出 ResolvedPlan：
 
@@ -226,9 +226,9 @@ resolve 为纯函数，输入规范配置、facts、configDigest/lockDigest，�
 
 compile 不采集文件或联网；输入 plan 与 resources 返回的 VerifiedResourceSet（绑定文件已读成字节）。必须确认二者 configDigest/lockDigest 一致；不在 Adapter 重算 plan。公开 CLI resolve 也先离线验证资源，随后输出 plan；render/hook/run 复用同一个准备流程。
 
-协议 `agent-modes-context/1` 的正文顺序及标点固定：
+协议 `modup-context/1` 的正文顺序及标点固定：
 
-- 第一行 `# agent-modes-context/1`；其后依次 `agent: <codex|claude>`、`selection: <selectionDigest>`、`modes: <canonical JSON modeIds>`，空行。不写整配置或整锁摘要。
+- 第一行 `# modup-context/1`；其后依次 `agent: <codex|claude>`、`selection: <selectionDigest>`、`modes: <canonical JSON modeIds>`，空行。不写整配置或整锁摘要。
 - 每个 rule 按最终有序资源中的 rule 顺序：`## rule <id>`、空行、规范化全部正文、空行。
 - `## skills`，空行，固定一行 `Skill paths resolve from the indexed root; scripts are not run automatically.`，空行；每个 skill 按最终 skill 顺序一行 canonical JSON，字段为 `id,name,description,root,entry,preload`；root 是内容库 tree 的绝对路径，entry 为 root + `/SKILL.md`。JSON 字符串引用路径，不能裸拼路径到指令/shell。
 - 每个 preload skill：空行、`## skill <id>`、空行、去掉 frontmatter 后的完整正文。
@@ -274,15 +274,15 @@ type BoundResource = { id: Id; kind: Kind; preload: boolean };
 type ResolvedPlan = { schemaVersion: 1; configDigest: Sha256; lockDigest: Sha256; cwd: string; boundary: string; selectorPath: string | null; modeIds: Id[]; resources: BoundResource[]; reasons: Reason[]; diagnostics: Diagnostic[] };
 type VerifiedResource = { id: Id; kind: Kind; treeDigest: Sha256; root: string; entry: string; entryBytes: Uint8Array; skill: { name: string; description: string; body: string } | null };
 type VerifiedResourceSet = { schemaVersion: 1; configDigest: Sha256; lock: ResourceLock; lockDigest: Sha256; resources: VerifiedResource[] };
-type RenderedContext = { schemaVersion: 1; protocol: "agent-modes-context/1"; agent: Agent; configDigest: Sha256; lockDigest: Sha256; selectionDigest: Sha256; modeIds: Id[]; text: string; contentDigest: Sha256; byteLength: number };
+type RenderedContext = { schemaVersion: 1; protocol: "modup-context/1"; agent: Agent; configDigest: Sha256; lockDigest: Sha256; selectionDigest: Sha256; modeIds: Id[]; text: string; contentDigest: Sha256; byteLength: number };
 type HookEvent = { hook_event_name: "SessionStart"; cwd: string; session_id: string; source: "startup" | "resume" | "clear" | "compact" | "fork" };
 type HookReply = { hookSpecificOutput: { hookEventName: "SessionStart"; additionalContext: string } } | null;
 type RunMarker = { version: 1; agent: Agent; configRoot: string; stateRoot: string; cwd: string; contentDigest: Sha256; ownerPid: number };
 type FileImage = { data: string; encoding: "utf8" | "base64"; mode: number };
 type FileChange = { path: string; category: "shared-json" | "owned"; beforeDigest: Sha256 | null; beforeMode: number | null; after: FileImage | null };
-type InstallPlan = { schemaVersion: 1; operation: "install" | "uninstall"; agent: Agent; targetHome: string; owner: "agent-modes/v1"; changes: FileChange[]; conflicts: Diagnostic[]; warnings: Diagnostic[]; planDigest: Sha256 };
+type InstallPlan = { schemaVersion: 1; operation: "install" | "uninstall"; agent: Agent; targetHome: string; owner: "modup/v1"; changes: FileChange[]; conflicts: Diagnostic[]; warnings: Diagnostic[]; planDigest: Sha256 };
 type ManagedFile = { path: string; digest: Sha256; mode: number };
-type InstallRecord = { schemaVersion: 1; owner: "agent-modes/v1"; agent: Agent; configRoot: string; stateRoot: string; runtimeDigest: Sha256; files: ManagedFile[]; hookFile: string; hookGroup: unknown; beforeHookFile: FileImage | null; afterHookFileDigest: Sha256 };
+type InstallRecord = { schemaVersion: 1; owner: "modup/v1"; agent: Agent; configRoot: string; stateRoot: string; runtimeDigest: Sha256; files: ManagedFile[]; hookFile: string; hookGroup: unknown; beforeHookFile: FileImage | null; afterHookFileDigest: Sha256 };
 type LockParser = (value: unknown) => ResourceLock;
 type ImportValidator = (stagingRoot: string) => Promise<void>;
 type LoadConfigRequest = { configRoot: string };
@@ -353,7 +353,7 @@ type ModeError = Error & { code: ModeErrorCode; details: Readonly<Record<string,
 | `uninstall` | 必需 `--agent`,`--target-home`；format/apply/expect 同install | 输出InstallPlan；无record且无本工具遗留内容时返回空changes幂等计划 |
 | `run` | 必需 `--agent`；`--config`,`--state`,`--cwd`；可选 `--executable`；`--` 后 agent argv 原样分词 | stdio继承，退出码/信号见wrapper契约 |
 
-`--target-home` 是显式HOME根，不是`.codex`/`.claude`目录，禁止省略；本参数替代旧草案的target-root，不保留含糊别名。Codex固定写`<target-home>/.codex/hooks.json`与`<target-home>/.agents/skills/agent-modes/`；Claude固定写`<target-home>/.claude/settings.json`与`<target-home>/.claude/skills/agent-modes/`。manifest/runtime固定在该HOME的`.agent-modes/<agent>/`下。不跟随安装进程继承的CODEX_HOME/CLAUDE_CONFIG_DIR重定向写入。产品允许用户通过显式target-home和apply安装到真实HOME，无额外永久拒绝或real-home绕过flag；所有权/evoloop/路径/权限冲突仍拒绝。当前任务仅获准在隔离HOME内调用产品，不能因此增加产品禁令。原生agent验证由验证进程显式设置HOME及相应CODEX_HOME/CLAUDE_CONFIG_DIR到隔离布局，工具不改父进程环境。hook命令固定带绝对config/state路径，不受后来环境变量改变。
+`--target-home` 是显式HOME根，不是`.codex`/`.claude`目录，禁止省略；本参数替代旧草案的target-root，不保留含糊别名。Codex固定写`<target-home>/.codex/hooks.json`与`<target-home>/.agents/skills/modup/`；Claude固定写`<target-home>/.claude/settings.json`与`<target-home>/.claude/skills/modup/`。manifest/runtime固定在该HOME的`.modup/<agent>/`下。不跟随安装进程继承的CODEX_HOME/CLAUDE_CONFIG_DIR重定向写入。产品允许用户通过显式target-home和apply安装到真实HOME，无额外永久拒绝或real-home绕过flag；所有权/evoloop/路径/权限冲突仍拒绝。当前任务仅获准在隔离HOME内调用产品，不能因此增加产品禁令。原生agent验证由验证进程显式设置HOME及相应CODEX_HOME/CLAUDE_CONFIG_DIR到隔离布局，工具不改父进程环境。hook命令固定带绝对config/state路径，不受后来环境变量改变。
 
 除 run 透传外，exit0成功；2=usage/config/selector/resolve/size；3=资源/Git/锁/路径/IO；4=安装冲突/陈旧计划/busy；5=hook事件非法或wrapper能力/冲突；错误 stderr 为 `{error:{code,message,details}}` 单行JSON，不在stdout夹日志。hook内部失败统一exit1，stderr同格式，stdout空；不伪装成功的空规则。install冲突预览仍输出完整plan但exit4；apply不要求expect，expect未与apply联用是E_USAGE，提供但不匹配是E_PLAN_STALE。hook输入最多1MiB，session_id为非空string（最多256，无控制字符），忽略agent额外已知/未来字段，只严格校验本工具消费字段，hook_event_name/source不支持则E_HOOK_INPUT。hook入口先把stdin cwd校验并realpath规范化，再构造传给prepare/encodeHook的HookEvent；禁止退回进程cwd。
 
@@ -368,9 +368,9 @@ type ModeError = Error & { code: ModeErrorCode; details: Readonly<Record<string,
 去重分两层，不把“同session已经注入过”当通用依据：
 
 1. 安装幂等：record中保存完整hook group，重复install复用/替换该组而不是append；保留其他handler/group及其相对顺序。一个target-home内每个agent只允许一个配置绑定，换config/state须先uninstall该agent。识别同runtime/owner的重复或手工改写组即冲突，不猜测并删除。Codex该层同时存在inline hook时保留它并警告；不得擅自迁移。
-2. wrapper去重：仅在spawn已准备好完整附加指令时，将 canonical RunMarker 放入子进程环境 `AGENT_MODES_RUN_V1`（不写父环境/正文）。hook入口检查marker结构与ownerPid存活，再prepare并验证资源；encodeHook检查真实cwd/config/state/agent及contentDigest全部匹配，才返回null/exit0。marker非法、父wrapper已死、摘要/cwd不一致时抛E_WRAPPER_CONFLICT，不能当没看见然后追加第二份。wrapper子进程后续clear/compact在同配置/目录下仍由持久system/developer指令覆盖，匹配marker时继续跳过；wrapper路径不支持会话中切换mode/cwd，要重启。
+2. wrapper去重：仅在spawn已准备好完整附加指令时，将 canonical RunMarker 放入子进程环境 `MODUP_RUN_V1`（不写父环境/正文）。hook入口检查marker结构与ownerPid存活，再prepare并验证资源；encodeHook检查真实cwd/config/state/agent及contentDigest全部匹配，才返回null/exit0。marker非法、父wrapper已死、摘要/cwd不一致时抛E_WRAPPER_CONFLICT，不能当没看见然后追加第二份。wrapper子进程后续clear/compact在同配置/目录下仍由持久system/developer指令覆盖，匹配marker时继续跳过；wrapper路径不支持会话中切换mode/cwd，要重启。
 
-纯hook路径的resume/clear/compact/fork每次重新注入，不落持久session去重文件；避免第二次compact或不同会话丢规则。一次安装保证本工具在该target只有一个组；首版不承诺对手工复制到多个config层/第三方plugin的重复hook去重，预览发现已知多来源时告警。不能用`session_id+source`永久缓存假装解决这一问题。支持的部署方式为每个agent一个生效的agent-modes安装；多层手工复制属于冲突配置，须清理后使用。
+纯hook路径的resume/clear/compact/fork每次重新注入，不落持久session去重文件；避免第二次compact或不同会话丢规则。一次安装保证本工具在该target只有一个组；首版不承诺对手工复制到多个config层/第三方plugin的重复hook去重，预览发现已知多来源时告警。不能用`session_id+source`永久缓存假装解决这一问题。支持的部署方式为每个agent一个生效的modup安装；多层手工复制属于冲突配置，须清理后使用。
 
 ## 9. wrapper 契约与 Codex 有效配置
 
@@ -390,13 +390,13 @@ Claude：读取用户唯一append字符串或文件的原字节UTF-8文本（文
 Codex不能自己猜测`~/.codex/config.toml`的层叠规则。固定有效配置探测协议：
 
 1. 使用同一已解析codex executable、相同env/CODEX_HOME、同cwd、用户原始全部`-c key=value`启动独立`codex [这些-c] app-server --stdio`，不连接proxy/daemon。仅交换本地JSON-RPC，不创建thread、不请求模型、不调用config/write。
-2. newline JSON messages：`initialize` id1，params为 `{clientInfo:{name:"agent-modes",version:<包版本>},capabilities:{experimentalApi:false}}`；成功后`initialized`通知；`config/read` id2，params为 `{cwd:<real cwd>,includeLayers:true}`。这是0.162.1生成的ConfigReadParams契约；ConfigReadResponse含config、origins及请求的layers。只接受对应id的result，不把notification当result；总10秒、响应上限8MiB、错误即终止探测进程并报E_CODEX_CONFIG。
+2. newline JSON messages：`initialize` id1，params为 `{clientInfo:{name:"modup",version:<包版本>},capabilities:{experimentalApi:false}}`；成功后`initialized`通知；`config/read` id2，params为 `{cwd:<real cwd>,includeLayers:true}`。这是0.162.1生成的ConfigReadParams契约；ConfigReadResponse含config、origins及请求的layers。只接受对应id的result，不把notification当result；总10秒、响应上限8MiB、错误即终止探测进程并报E_CODEX_CONFIG。
 3. 取`result.config.developer_instructions`。string原样保留，null/缺失仅在有效layers均无该配置时视为空；类型不符、响应缺layers、发现层中有值但effective缺失、disabledReason不明导致无法判定时拒绝。不从调试prompt里提取/重复原生AGENTS.md，不靠JSON中第一条developer消息猜基线。logs不得输出已有指令正文。
 4. `-c` key只接受无引号的 `[A-Za-z_][A-Za-z0-9_.-]*` 后接`=`，value原样交给Codex解析；拒绝`profile`、`model_instructions_file`、`instructions`及其下级，防止替换基础提示；developer_instructions只允许精确顶层key，值由config/read解释。启用的layers中若指定model_instructions_file或不可解释的开发者指令替代来源，也拒绝，保留不了原生语义就不覆盖。用户-c和层中已有developer_instructions可为多行/引号/backslash，必须保持内容前缀不变。
 5. 合并值是 baseline +（非空时`\n\n`）+ mode text；不规范化baseline。删除原argv里精确developer_instructions override，其他-c原样保留；最终生成一个`-c developer_instructions=<JSON.stringify(合并值)>`，JSON字符串仅作为TOML基本字符串的编码（拒绝NUL/不合法Unicode；校验编码 round-trip），绝不作为shell quoting。合并值上限64KiB。启动前再次config/read并比对layers版本、effective值/origins，变化则E_CODEX_CONFIG；这是缩小竞态而非声称跨外部修改的原子快照。
 6. 实际启动强制 `--no-daemon`、固定-C；同env中放RunMarker。共享daemon可能不继承本次wrapper marker，因此禁止该路径。若版本不支持config/read、--no-daemon或协议形状变更，明确拒绝该wrapper；hook适配仍可单独使用。已读内容仍由Codex自行加载原生instructions；不得使用model_instructions_file替换基础提示。
 
-两个wrapper都用spawn(argv,{cwd,env,stdio:"inherit",shell:false})；不把stdin用于本工具探测（Codex探测使用独立pipe），保留用户stdin供agent。PATH选择后固定真实executable，不得解析回agent-modes自身。临时移除父进程已有AGENT_MODES_RUN_V1：若其存在则拒绝嵌套wrapper，避免错误去重。收到SIGINT/SIGTERM/SIGHUP时转发给子进程，等待退出后移除handler；正常退出保留exitCode，signal终止则bin以同信号终止自身（不能只返回0或吞信号）。spawn失败报E_IO。wrapper预检失败时绝不启动实际会话。
+两个wrapper都用spawn(argv,{cwd,env,stdio:"inherit",shell:false})；不把stdin用于本工具探测（Codex探测使用独立pipe），保留用户stdin供agent。PATH选择后固定真实executable，不得解析回modup自身。临时移除父进程已有MODUP_RUN_V1：若其存在则拒绝嵌套wrapper，避免错误去重。收到SIGINT/SIGTERM/SIGHUP时转发给子进程，等待退出后移除handler；正常退出保留exitCode，signal终止则bin以同信号终止自身（不能只返回0或吞信号）。spawn失败报E_IO。wrapper预检失败时绝不启动实际会话。
 
 ## 10. 安装、所有权与卸载
 
@@ -407,10 +407,10 @@ Codex不能自己猜测`~/.codex/config.toml`的层叠规则。固定有效配�
 | 位置 | 所有权与内容 |
 | --- | --- |
 | `.codex/hooks.json`（Codex）/`.claude/settings.json`（Claude） | shared-json；仅record记载的独立SessionStart组归本工具 |
-| `.agents/skills/agent-modes/`（Codex）/`.claude/skills/agent-modes/`（Claude） | owned完整入口skill树；已存在且无record即冲突，即使字节相同 |
-| `.agent-modes/<agent>/runtime/<runtimeDigest>/` | owned最小包布局：`dist/bin/agent-modes.mjs`、`schemas/`三份schema、`skills/agent-modes/`完整树及`package.json` |
-| `.agent-modes/<agent>/install.json` | owned InstallRecord；只记录本机绝对路径，可含安装前hook原字节；不进入config/lock |
-| `.agent-modes/<agent>/install.lock` | apply期间exclusive锁，内容仅owner/version/pid；正常完成或成功回滚后清理，异常残留用于阻止再次盲写 |
+| `.agents/skills/modup/`（Codex）/`.claude/skills/modup/`（Claude） | owned完整入口skill树；已存在且无record即冲突，即使字节相同 |
+| `.modup/<agent>/runtime/<runtimeDigest>/` | owned最小包布局：`dist/bin/modup.mjs`、`schemas/`三份schema、`skills/modup/`完整树及`package.json` |
+| `.modup/<agent>/install.json` | owned InstallRecord；只记录本机绝对路径，可含安装前hook原字节；不进入config/lock |
+| `.modup/<agent>/install.lock` | apply期间exclusive锁，内容仅owner/version/pid；正常完成或成功回滚后清理，异常残留用于阻止再次盲写 |
 
 同一HOME可分别安装两个agent，record/runtime/lock互相隔离；每个agent只删除其列出的路径。Codex卸载不得删除`.agents/skills`下其他内容，也不删除旧`.codex/skills`内容。所有父目录仍按第2节安全校验；hook与skill虽在不同目录，也必须由同一完整计划预览、复验和写入。
 
@@ -420,7 +420,7 @@ Node绝对路径进入hook命令，升级Node后需重新预览安装。runtimeD
 
 预览是只读操作：读取包资源/目标/config，构造按相对path排序的FileChange；path均相对target，beforeDigest是现有文件原始字节摘要，beforeMode是权限低9位（文件不存在时两者都为null），after为完整内容或null删除。共有JSON对象保留所有未知key和其他hooks；只接受UTF-8严格JSON object，无JSONC/注释/重复key，hooks/SessionStart形状错误报冲突，不自动修复。更新共有文件用稳定pretty JSON；同包重复install如果语义已满足且owned无变化，changes为空且不为重排原文件格式而写回。conflicts在写之前收齐，禁止部分安装。
 
-安装文件的mode为0..511整数，和资源锁只记录execute语义是不同契约：共享文件更新/恢复保持原0777权限，不得把0600配置扩大为0644；新共享JSON、record/lock/临时文件为0600，工具新建私有目录0700；自有普通产品文件0644、可执行产品文件0755。新target和`.agent-modes`目录0700，已有target目录权限不擅改；target及其下待操作目录须归当前uid且无group/other写权限，拒绝已有特殊权限位文件。manifest/lock权限不安全时拒绝读取/应用；beforeHookFile可能含其他工具私密配置，只存在受保护record内。回滚恢复权限也恢复内容，验证不能只比较execute位。
+安装文件的mode为0..511整数，和资源锁只记录execute语义是不同契约：共享文件更新/恢复保持原0777权限，不得把0600配置扩大为0644；新共享JSON、record/lock/临时文件为0600，工具新建私有目录0700；自有普通产品文件0644、可执行产品文件0755。新target和`.modup`目录0700，已有target目录权限不擅改；target及其下待操作目录须归当前uid且无group/other写权限，拒绝已有特殊权限位文件。manifest/lock权限不安全时拒绝读取/应用；beforeHookFile可能含其他工具私密配置，只存在受保护record内。回滚恢复权限也恢复内容，验证不能只比较execute位。
 
 planDigest=sha256(canonical(plan除planDigest字段))，覆盖agent/target/operation/全部内容及警告冲突。JSON预览包含FileImage完整文本；text预览列path/action/before/after摘要及hook/skill变更详情。apply重新按相同路径和包准备计划；expect可省略，提供时必须匹配重建的planDigest；不反序列化/执行用户提供的任意计划文件。未提供expect意味着按本次新计划执行，不沿用旧预览；仍须在exclusive锁下、每次写入前复查目标原字节/权限/真实父路径，变化报E_PLAN_STALE。目标及任一既有父段是symlink、目标由其他owner占用、共享配置或未被本工具record拥有的目标文件含字面标记`GENERATED by evoloop`时E_INSTALL_CONFLICT；不对自己的runtime代码做字面标记误判，不添加force绕过。工具不承诺抵抗另一个具有相同用户权限、专门在lstat与rename间恶意替换目录的进程，但要在rename前再次校验父inode/realpath，避免普通竞态误写。
 
@@ -434,6 +434,6 @@ planDigest=sha256(canonical(plan除planDigest字段))，覆盖agent/target/opera
 
 ## 11. 入口 skill 与交付限制
 
-包内 `skills/agent-modes/SKILL.md` 仅由integration owner维护，name固定agent-modes。它指导agent使用本工具的init/import/sync/resolve/render、理解plan原因及维护modes.json/.mode，先预览install/uninstall；明确自动首轮执行由hook/wrapper完成，skill不能自行保证。说明资源默认索引、scripts需按任务显式调用、不自动执行；禁止把来源当命令或绕过用户显式target+apply与所有权校验。产品可以经用户授权安装真实HOME，本次实施/验收仍只在隔离目标调用。只写这份产品必需skill，不附带README/示例代码/仓库测试。
+包内 `skills/modup/SKILL.md` 仅由integration owner维护，name固定modup。它指导agent使用本工具的init/import/sync/resolve/render、理解plan原因及维护modes.json/.mode，先预览install/uninstall；明确自动首轮执行由hook/wrapper完成，skill不能自行保证。说明资源默认索引、scripts需按任务显式调用、不自动执行；禁止把来源当命令或绕过用户显式target+apply与所有权校验。产品可以经用户授权安装真实HOME，本次实施/验收仍只在隔离目标调用。只写这份产品必需skill，不附带README/示例代码/仓库测试。
 
 首次交付只声称CLI/离线内容/agent协议及启动参数已验证。真实付费模型未调用时必须明确这一点；provider缓存效果、所有agent版本/环境及多层手工重复hook不作保证。实现遇到本协议不支持的来源/argv/体量要返回明确错误，不用静默降级拼出看似完整闭环。

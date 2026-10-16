@@ -26,7 +26,7 @@ export const resourceEntry = (snapshot: Snapshot, kind: Kind): {
   const name: unknown = values.get("name");
   const description: unknown = values.get("description");
   requireValue(typeof name === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(name)
-    && name !== "agent-modes", "E_INTEGRITY", "Invalid or reserved skill name");
+    && name !== "modup", "E_INTEGRITY", "Invalid or reserved skill name");
   requireValue(typeof description === "string" && description.trim().length > 0
     && description.length <= LIMITS.skillDescriptionChars && !/\p{Cc}/u.test(description.replace(/[\n\r\t]/g, "")),
   "E_INTEGRITY", "Invalid skill description");

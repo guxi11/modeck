@@ -1,6 +1,6 @@
-# agent-modes：需求与架构方案
+# modup：需求与架构方案
 
-阶段：ultra 架构方案，2026-10-16。实现完成前必须经过 hard 详细设计与任务拆分、standard 实现、白板 hard 独立验证。包名暂定 `@guxi11/agent-modes`，命令 `agent-modes`；未核验 npm 名称可用性，不发布。
+阶段：ultra 架构方案，2026-10-16。实现完成前必须经过 hard 详细设计与任务拆分、standard 实现、白板 hard 独立验证。包名暂定 `@guxi11/modup`，命令 `modup`；未核验 npm 名称可用性，不发布。
 
 ## 需求判断
 

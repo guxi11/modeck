@@ -9,7 +9,7 @@ import { parseSelector } from "./validation.js";
 import { compare, immutable } from "./values.js";
 
 const execute = promisify(execFile);
-const excluded = new Set([".git", "node_modules", "dist", "build", "coverage", ".next", ".turbo", ".cache", ".agent-modes"]);
+const excluded = new Set([".git", "node_modules", "dist", "build", "coverage", ".next", ".turbo", ".cache", ".modup"]);
 
 const gitMarker = async (directory: string): Promise<string | null> => {
   try {

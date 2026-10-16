@@ -18,7 +18,7 @@ const localSnapshot = async (context: ConfigContext, spec: ResourceSpec, locked:
     const source = await safePath(childPath(context.configRoot, spec.source.path, spec.kind === "skill"));
     // A tree containing our own mutable lock cannot have a reproducible identity.
     requireValue(!(spec.kind === "skill" && source === context.configRoot)
-      && ![join(context.configRoot, "modes.lock.json"), join(context.configRoot, ".agent-modes-sync.lock")].includes(source),
+      && ![join(context.configRoot, "modes.lock.json"), join(context.configRoot, ".modup-sync.lock")].includes(source),
     "E_PATH", "Local resource must not include the configuration lock; use a dedicated skill directory");
     return await snapshotLocal(source, spec.kind);
   }

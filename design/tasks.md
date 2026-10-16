@@ -1,4 +1,4 @@
-# agent-modes standard 实施任务
+# modup standard 实施任务
 
 依赖 `architecture.md` 与 `detailed-design.md`（2026-10-16 hard设计，已由ultra修订收口）。本文是交给3名standard的任务包。实现均不新增测试代码/README；本次实施/验收只在隔离HOME/config/state调用，不修改真实HOME/agent配置，不发布npm、不加远端、不推送。产品仍允许用户显式target-home+apply安装真实HOME，不能把本次授权范围写成永久产品禁令。
 
@@ -8,11 +8,11 @@
 | --- | --- | --- |
 | core | `package.json`、`package-lock.json`、`tsconfig.json`、`.gitignore`；`schemas/**`；`src/contracts/**`；`src/core/**` | resources/integration/CLI/skill |
 | resources | `src/resources/**` | 全部公共types/schema/包配置、core与integration |
-| integration | `src/integration/**`、`src/cli/**`、`skills/agent-modes/**` | contracts/schema、包配置/lock、资源下载实现 |
+| integration | `src/integration/**`、`src/cli/**`、`skills/modup/**` | contracts/schema、包配置/lock、资源下载实现 |
 
 `design/**` 本轮设计owner保有，实现者不改；`dist/**`、node_modules、内容库、fixture和验收临时记录不能提交。尚无其他产品文件，不自行新增第四个共享utils目录。公共错误、版本、限额、hash/path词法工具也属于core。各owner可以在自身目录内拆小文件，不跨区重构，不新建测试代码。新增第三方依赖需求报给core owner，由它统一写package/lock；另两人不得npm install改变lock。
 
-package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.mjs`；exports至少`./contracts`、`./core`、`./resources`、`./integration`对应dist JS和.d.ts；files只纳入dist、schemas、skills及npm元数据。`typecheck`使用tsc --noEmit；`build`先tsc输出模块/声明，再esbuild把`src/cli/bin.ts`构建为Node20 ESM standalone JS bundle到dist/bin/agent-modes.mjs（node: builtin external，其余依赖打入）；bin须有shebang，main.ts仅导出无启动副作用。包无ai-rulez；schema验证用Ajv2020，受限frontmatter用yaml，tsc/esbuild及@types/node为开发依赖。schema和package.json用相对模块URL定位，普通包/安装runtime布局一致。版本由core统一确定/锁定，不让3人各自写一套构建方式。
+package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/modup.mjs`；exports至少`./contracts`、`./core`、`./resources`、`./integration`对应dist JS和.d.ts；files只纳入dist、schemas、skills及npm元数据。`typecheck`使用tsc --noEmit；`build`先tsc输出模块/声明，再esbuild把`src/cli/bin.ts`构建为Node20 ESM standalone JS bundle到dist/bin/modup.mjs（node: builtin external，其余依赖打入）；bin须有shebang，main.ts仅导出无启动副作用。包无ai-rulez；schema验证用Ajv2020，受限frontmatter用yaml，tsc/esbuild及@types/node为开发依赖。schema和package.json用相对模块URL定位，普通包/安装runtime布局一致。版本由core统一确定/锁定，不让3人各自写一套构建方式。
 
 ## 2. 执行依赖和集成节奏
 
@@ -69,7 +69,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 
 ## 5. integration 任务包（可直接派发）
 
-负责`src/integration/**`、`src/cli/**`、产品入口`skills/agent-modes/SKILL.md`。只导入C0 contracts及core/resources公开index，禁止改共享contracts/package/锁/schema。完整阅读详细设计第6–11节，复用prepare，禁止Adapter各算一套mode。
+负责`src/integration/**`、`src/cli/**`、产品入口`skills/modup/SKILL.md`。只导入C0 contracts及core/resources公开index，禁止改共享contracts/package/锁/schema。完整阅读详细设计第6–11节，复用prepare，禁止Adapter各算一套mode。
 
 **I1：CLI与入口。**
 
@@ -87,7 +87,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 
 **I3：最小安装与卸载。**
 
-- target-home必填且表示HOME根，产品允许用户显式target-home+apply安装真实HOME；本次所有调用仅用隔离目录。Codex写`.codex/hooks.json`和`.agents/skills/agent-modes`，Claude写`.claude/settings.json`和`.claude/skills/agent-modes`。record/runtime/lock按`.agent-modes/<agent>/`隔离，两agent可共存。默认preview无写；apply的expect可选，提供时匹配当前planDigest，未提供时执行本次重建并复验的计划。预览包含完整JSON合并差异，未知共享字段/其他hooks保留。
+- target-home必填且表示HOME根，产品允许用户显式target-home+apply安装真实HOME；本次所有调用仅用隔离目录。Codex写`.codex/hooks.json`和`.agents/skills/modup`，Claude写`.claude/settings.json`和`.claude/skills/modup`。record/runtime/lock按`.modup/<agent>/`隔离，两agent可共存。默认preview无写；apply的expect可选，提供时匹配当前planDigest，未提供时执行本次重建并复验的计划。预览包含完整JSON合并差异，未知共享字段/其他hooks保留。
 - standalone JS runtime保留最小包布局（dist/bin入口、3schema、完整入口skill、package.json），schema/版本从入口URL定位；不能只复制bundle后丢失数据。精确InstallRecord所有权；拒绝evoloop标记/symlink/无record同名文件，不能force覆盖。
 - exclusive锁+前置摘要/权限/路径复验+逐文件原子替换+record最后；原字节和权限仅为可捕获异常保存在进程内，失败逆序回滚，第三方新编辑不覆盖。保持共享文件完整权限，0600不能扩大为0644，record/lock/临时文件0600、私有目录0700。不实现持久crash journal、重放或恢复授权；残留lock/孤立文件/manifest漂移报冲突，不能声称多文件原子或crash自动恢复。卸载只动完整未改owned文件与精确自身hook组，保留他人后续编辑，缺失或篡改冲突而非全目录删除。
 - 同包重复install应空变化；无record且无本工具遗留文件的卸载为空变化，发现孤立文件仍报冲突；卸载不删state/config/CAS。包内资源路径必须在npm pack tarball安装后也成立。
@@ -110,7 +110,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/agent-modes.
 | 技能定位 | root/entry实际存在；scripts/reference/assets全在且exec保留；preload正文准确；超限失败无截断 |
 | frozen完整性 | lock不变；移动Git ref仍取旧commit；坏/缺对象、本地漂移、增删asset均失败；只sync能补对象 |
 | hook | JSON shape、15秒timeout、Codex信任警告、Claude首轮等待依据、失败不保证阻断；compact不被旧标记吞掉 |
-| 原生skill发现 | 隔离HOME/CODEX_HOME下验证Codex读到`.agents/skills/agent-modes`，不能以旧`.codex/skills`落盘替代；可用`codex debug prompt-input`离线检查model-visible prompt，原生绝对路径索引仍属于缓存边界 |
+| 原生skill发现 | 隔离HOME/CODEX_HOME下验证Codex读到`.agents/skills/modup`，不能以旧`.codex/skills`落盘替代；可用`codex debug prompt-input`离线检查model-visible prompt，原生绝对路径索引仍属于缓存边界 |
 | wrapper | baseline不丢、cwd不分叉、unknown/替换prompt参数拒绝、marker不双注入、--no-daemon、stdin/exit/signals真实进程行为 |
 | 安装安全 | preview零写、expect可选且提供时校验、symlink/evoloop拒绝、重复安装零变化、第三方JSON保留、own漂移不删、进程内失败回滚、崩溃残留只报冲突；全部实际调用仅在隔离HOME验证 |
 | 分发 | pack含所有exports/standalone bundle/3schema/入口skill；临时安装bin可启动，无源码/node_modules路径泄漏 |

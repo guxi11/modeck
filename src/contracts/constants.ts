@@ -1,5 +1,5 @@
 export const SCHEMA_VERSION = 1 as const;
-export const PROTOCOL = "agent-modes-context/1" as const;
+export const PROTOCOL = "modup-context/1" as const;
 
 export const LIMITS = Object.freeze({
   jsonBytes: 1_048_576,

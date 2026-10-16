@@ -143,7 +143,7 @@ export const parseLock = (value: unknown): ResourceLock => {
       "E_LOCK_MISMATCH", "Missing or oversized resource entry file", { id: resource.id });
     requireValue(resource.kind !== "rule" || resource.entries.length === 1,
       "E_LOCK_MISMATCH", "Rule tree must contain only content.md", { id: resource.id });
-    const digest = sha256(Buffer.from(`agent-modes-tree-v1\n${canonical(resource.entries)}`));
+    const digest = sha256(Buffer.from(`modup-tree-v1\n${canonical(resource.entries)}`));
     requireValue(digest === resource.treeDigest, "E_LOCK_MISMATCH", "Tree manifest digest mismatch", { id: resource.id });
     return total + bytes;
   }, 0);

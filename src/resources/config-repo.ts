@@ -10,7 +10,7 @@ const createConfig = async (destination: string, populate: (staging: string) => 
   const target = await safePath(absolute(destination), true);
   requireValue(!await exists(target), "E_PATH", "Config destination must not exist", { path: target });
   const parent = await ensureDirectory(dirname(target));
-  const staging = await mkdtemp(join(parent, ".agent-modes-config-"));
+  const staging = await mkdtemp(join(parent, ".modup-config-"));
   try {
     await initGit(staging);
     await populate(staging);

@@ -27,7 +27,7 @@ export const parseEvent = (value: unknown): HookEvent => {
   return { hook_event_name: "SessionStart", cwd: event.cwd, session_id: event.session_id, source: event.source as HookEvent["source"] };
 };
 export const runMarker = (): RunMarker | null => {
-  const raw = process.env.AGENT_MODES_RUN_V1;
+  const raw = process.env.MODUP_RUN_V1;
   if (raw === undefined) return null;
   try {
     const marker = object(parseJson(raw));

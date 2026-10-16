@@ -28,15 +28,15 @@ export type BoundResource = DeepReadonly<{ id: Id; kind: Kind; preload: boolean 
 export type ResolvedPlan = DeepReadonly<{ schemaVersion: 1; configDigest: Sha256; lockDigest: Sha256; cwd: string; boundary: string; selectorPath: string | null; modeIds: Id[]; resources: BoundResource[]; reasons: Reason[]; diagnostics: Diagnostic[] }>;
 export type VerifiedResource = DeepReadonly<{ id: Id; kind: Kind; treeDigest: Sha256; root: string; entry: string; entryBytes: Uint8Array; skill: { name: string; description: string; body: string } | null }>;
 export type VerifiedResourceSet = DeepReadonly<{ schemaVersion: 1; configDigest: Sha256; lock: ResourceLock; lockDigest: Sha256; resources: VerifiedResource[] }>;
-export type RenderedContext = DeepReadonly<{ schemaVersion: 1; protocol: "agent-modes-context/1"; agent: Agent; configDigest: Sha256; lockDigest: Sha256; selectionDigest: Sha256; modeIds: Id[]; text: string; contentDigest: Sha256; byteLength: number }>;
+export type RenderedContext = DeepReadonly<{ schemaVersion: 1; protocol: "modup-context/1"; agent: Agent; configDigest: Sha256; lockDigest: Sha256; selectionDigest: Sha256; modeIds: Id[]; text: string; contentDigest: Sha256; byteLength: number }>;
 export type HookEvent = DeepReadonly<{ hook_event_name: "SessionStart"; cwd: string; session_id: string; source: "startup" | "resume" | "clear" | "compact" | "fork" }>;
 export type HookReply = DeepReadonly<{ hookSpecificOutput: { hookEventName: "SessionStart"; additionalContext: string } } | null>;
 export type RunMarker = DeepReadonly<{ version: 1; agent: Agent; configRoot: string; stateRoot: string; cwd: string; contentDigest: Sha256; ownerPid: number }>;
 export type FileImage = DeepReadonly<{ data: string; encoding: "utf8" | "base64"; mode: number }>;
 export type FileChange = DeepReadonly<{ path: string; category: "shared-json" | "owned"; beforeDigest: Sha256 | null; beforeMode: number | null; after: FileImage | null }>;
-export type InstallPlan = DeepReadonly<{ schemaVersion: 1; operation: "install" | "uninstall"; agent: Agent; targetHome: string; owner: "agent-modes/v1"; changes: FileChange[]; conflicts: Diagnostic[]; warnings: Diagnostic[]; planDigest: Sha256 }>;
+export type InstallPlan = DeepReadonly<{ schemaVersion: 1; operation: "install" | "uninstall"; agent: Agent; targetHome: string; owner: "modup/v1"; changes: FileChange[]; conflicts: Diagnostic[]; warnings: Diagnostic[]; planDigest: Sha256 }>;
 export type ManagedFile = DeepReadonly<{ path: string; digest: Sha256; mode: number }>;
-export type InstallRecord = DeepReadonly<{ schemaVersion: 1; owner: "agent-modes/v1"; agent: Agent; configRoot: string; stateRoot: string; runtimeDigest: Sha256; files: ManagedFile[]; hookFile: string; hookGroup: unknown; beforeHookFile: FileImage | null; afterHookFileDigest: Sha256 }>;
+export type InstallRecord = DeepReadonly<{ schemaVersion: 1; owner: "modup/v1"; agent: Agent; configRoot: string; stateRoot: string; runtimeDigest: Sha256; files: ManagedFile[]; hookFile: string; hookGroup: unknown; beforeHookFile: FileImage | null; afterHookFileDigest: Sha256 }>;
 export type LockParser = DeepReadonly<(value: unknown) => ResourceLock>;
 export type ImportValidator = DeepReadonly<(stagingRoot: string) => Promise<void>>;
 export type LoadConfigRequest = DeepReadonly<{ configRoot: string }>;

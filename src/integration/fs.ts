@@ -81,7 +81,7 @@ export const atomic = async (path: string, image: FileImage | null, expectedPare
   const parent = expectedParent ?? await parentIdentity(path);
   await verifyParent(path, parent);
   if (image === null) { await unlink(path); return parent; }
-  const temp = join(dirname(path), `.agent-modes-${randomUUID()}`);
+  const temp = join(dirname(path), `.modup-${randomUUID()}`);
   const handle = await open(temp, "wx", 0o600);
   const temporary = await handle.stat();
   try {

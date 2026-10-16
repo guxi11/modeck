@@ -6,26 +6,29 @@ import { fileURLToPath } from "node:url";
 import { canonical, LIMITS, modeError, parseJson, sha256 } from "../contracts/index.js";
 import type { Agent, ImportConfigRequest, InstallPlan, ModeError, ResourceLock, VerifiedResourceSet } from "../contracts/index.js";
 import { loadConfig, parseConfig, parseLock } from "../core/index.js";
-import { importConfig, initConfig, syncResources } from "../resources/index.js";
+import { importConfig, initConfig, scanHome, syncResources } from "../resources/index.js";
+import { migrate } from "./migrate.js";
 import { applyInstallPlan, encodeHook, planInstall, planUninstall, prepare, runAgent } from "../integration/index.js";
 import { data, imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
 import { parseEvent, runMarker } from "../integration/hooks.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
-const help = "agent-modes <init|import|sync|resolve|render|hook|install|uninstall|run> [options]\n"
+const help = "modup <init|import|scan|migrate|sync|resolve|render|hook|install|uninstall|run> [options]\n"
   + "--config <dir>  --state <dir>  --agent <codex|claude>\n"
   + "init --dir <new-dir> | import --from <git-url> --dir <new-dir> [--ref HEAD]\n"
+  + "scan --home <HOME> --format json | migrate --home <HOME> --config <existing-repo> [--bindings <JSON>] [--apply --expect <digest>]\n"
   + "sync [--frozen|--update] | resolve [--cwd <dir>] | render --agent <agent> [--cwd <dir>] [--format text|json]\n"
   + "hook --agent <agent> (SessionStart JSON on stdin)\n"
   + "install|uninstall --agent <agent> --target-home <HOME-root> [--format text|json] [--apply [--expect <digest>]]\n"
   + "run --agent <agent> [--cwd <dir>] [--executable <path>] -- <agent arguments>\n";
 const values: Readonly<Record<string, readonly string[]>> = {
   init: ["dir"], import: ["from", "dir", "ref"], sync: ["config", "state"],
+  scan: ["home", "format"], migrate: ["home", "config", "bindings", "expect", "format"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
   hook: ["config", "state", "agent"], install: ["config", "state", "agent", "target-home", "format", "expect"],
   uninstall: ["agent", "target-home", "format", "expect"], run: ["config", "state", "cwd", "agent", "executable"],
 };
-const booleans: Readonly<Record<string, readonly string[]>> = { sync: ["update", "frozen"], install: ["apply"], uninstall: ["apply"] };
+const booleans: Readonly<Record<string, readonly string[]>> = { sync: ["update", "frozen"], install: ["apply"], uninstall: ["apply"], migrate: ["apply"] };
 const options = (command: string, argv: readonly string[]): Readonly<Record<string, string | boolean>> => {
   const parse = (index: number, result: Readonly<Record<string, string | boolean>>): Readonly<Record<string, string | boolean>> => {
     const token = argv[index];
@@ -98,7 +101,7 @@ const showPlan = (plan: InstallPlan, format: string): void => {
   if (format === "json") { json(plan); return; }
   process.stdout.write(`${plan.operation} ${plan.agent} ${plan.targetHome}\nplan: ${plan.planDigest}\n`);
   plan.changes.forEach(change => process.stdout.write(`${change.after === null ? "delete" : change.beforeDigest === null ? "create" : "update"} ${change.path}\n`));
-  plan.changes.filter(change => change.category === "shared-json" || /\/skills\/agent-modes\/SKILL.md$/.test(change.path)).forEach(change => {
+  plan.changes.filter(change => change.category === "shared-json" || /\/skills\/modup\/SKILL.md$/.test(change.path)).forEach(change => {
     if (change.after) process.stdout.write(`${change.path}:\n${data(change.after).toString("utf8")}\n`);
   });
   [...plan.warnings, ...plan.conflicts].forEach(item => process.stdout.write(`${item.code}: ${item.message}\n`));
@@ -122,11 +125,22 @@ export const main = async (argv: string[]): Promise<number> => {
     const opts = options(command, argv.slice(1, separator < 0 ? undefined : separator));
     if (opts.help) { process.stdout.write(help); return 0; }
     const configured = async () => ({
-      configRoot: await pathFor(String(opts.config ?? process.env.AGENT_MODES_CONFIG ?? join(homedir(), ".config/agent-modes"))),
-      stateRoot: await pathFor(String(opts.state ?? process.env.AGENT_MODES_STATE ?? join(homedir(), ".local/share/agent-modes/v1"))),
+      configRoot: await pathFor(String(opts.config ?? process.env.MODUP_CONFIG ?? join(homedir(), ".config/modup"))),
+      stateRoot: await pathFor(String(opts.state ?? process.env.MODUP_STATE ?? join(homedir(), ".local/share/modup/v1"))),
     });
     const format = String(opts.format ?? "text");
     if (!["text", "json"].includes(format)) throw modeError("E_USAGE", "Unknown output format");
+    if (command === "scan") {
+      json(await scanHome(await pathFor(required(opts, "home")))); return 0;
+    }
+    if (command === "migrate") {
+      if (opts.expect !== undefined && !opts.apply) throw modeError("E_USAGE", "expect requires apply");
+      if (typeof opts.bindings === "string" && Buffer.byteLength(opts.bindings) > LIMITS.jsonBytes) throw modeError("E_LIMIT", "bindings JSON exceeds byte limit");
+      const result = await migrate({ home: await pathFor(required(opts, "home")), configRoot: await pathFor(required(opts, "config")),
+        apply: opts.apply === true, ...(typeof opts.bindings === "string" ? { bindings: parseJson(opts.bindings) } : {}),
+        ...(typeof opts.expect === "string" ? { expect: opts.expect } : {}) });
+      json(result); return 0;
+    }
     if (command === "init") {
       const config = parseConfig({ schemaVersion: 1, defaults: ["base"], modes: { base: {} }, resources: {} });
       json({ schemaVersion: 1, configRoot: await initConfig({ destination: await pathFor(required(opts, "dir")), initialConfig: config }) }); return 0;
