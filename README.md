@@ -116,7 +116,7 @@ skill 保持标准目录结构：入口为带 `name`、`description` frontmatter
 skills: [{ id: 'review-skill', preload: true }],
 ```
 
-规则正文总是注入；skill 默认只注入名称、描述和可读取的资源路径，`preload: true` 才注入入口正文，脚本不会自动执行。原生项目 skills 仍由 agent 自己发现；modup 当前不会自动跳过与它们重名的资源。
+规则正文总是注入；skill 默认只注入名称、描述和可读取的资源路径，`preload: true` 才注入入口正文，脚本不会自动执行。原生项目 skills 仍由 agent 自己发现。CodeBuddy 接线会按 skill 名称跳过当前目录 `.codebuddy/skills` 与 HOME 下 `.codebuddy/skills` 中已有的资源；Claude / Codex 当前没有这层自动去重。
 
 ## 会话启动时加载
 
@@ -139,7 +139,7 @@ Codex 安装后仍需在 `/hooks` 审查并信任定义；安装不会代替授�
 
 wrapper 在启动子进程前准备上下文，适合未启用 hook 的场景。它只接受已支持的参数；Codex 还需要 `app-server` 的有效配置读取能力，无法安全保留既有指令时会拒绝启动。同次 wrapper 启动的 hook 可识别已注入的内容，避免重复注入。
 
-CodeBuddy 适配正在集成，当前版本暂不列为可用启动路径。modup 不管理 MCP。
+CodeBuddy Code CLI 接线已落盘，最终独立验收仍待确认，暂不列为已验证启动路径；目标配置为 `~/.codebuddy/settings.json`，旧 `.codebuddy-cli` 与 IDE 扩展不在已验证范围。modup 不管理 MCP。
 
 ## 扫描与迁移已有资源
 
@@ -166,6 +166,6 @@ modup migrate --home "$HOME" --config ./aiconfig-import --apply --expect <planDi
 
 `modup.config.mjs`、auto 模块和资源一起提交到自己的 Git 仓库即可分享，也可以用 `modup import --from <git-url> --dir <new-dir> --ref <ref>` 导入。资源支持配置仓库内的本地路径，以及带 `url`、`ref`、`path` 的 Git 来源。
 
-版本由 Git、submodule 或 npm 等已有工具管理；modup 不要求独立 lock 文件。使用 Git 来源时，先运行 `modup sync` 准备资源再启动会话；它会准备配置中的全部资源，`modup sync --update` 刷新 Git 来源；本地资源按当前内容读取。缓存用于复用资源，不保证 agent 侧命中提示词缓存或不同 agent 共享缓存。
+版本由 Git、submodule 或 npm 等已有工具管理；modup 不要求独立 lock 文件。内置 `import` 不支持含 Git submodule（gitlink）的配置仓库，此类仓库需自行检出并初始化子模块。使用 Git 来源时，先运行 `modup sync` 准备资源再启动会话；它会准备配置中的全部资源，`modup sync --update` 刷新 Git 来源；本地资源按当前内容读取。缓存用于复用资源，不保证 agent 侧命中提示词缓存或不同 agent 共享缓存。
 
 旧 `.mode` 与 JSON 配置仅用于迁移兼容；新项目使用 `.modes` 和 JS 配置。
