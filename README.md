@@ -2,7 +2,7 @@
 
 <p align="center"><b>让工作目录决定 agent 加载哪些 rules 和 skills。</b></p>
 
-借鉴 Emacs modes，把编程、运维、写作等工作方式声明为 mode。rules 和 skills 集中放在自己的配置目录，业务项目只需一个纯文本 `.modes` 文件。支持 Claude Code、Codex 和 CodeBuddy Code CLI。
+借鉴 Emacs modes，把编程、运维、写作等工作方式声明为 mode。rules 和 skills 集中放在自己的配置目录，业务项目默认自动识别，需要固定选择时再添加纯文本 `.modes` 文件。支持 Claude Code、Codex 和 CodeBuddy Code CLI。
 
 ## 开始使用
 
@@ -54,13 +54,7 @@ export default {
 
 把示例路径和名称换成初始化时选定的资源。规则正文会注入会话；skill 先提供名称、描述和路径，正文按需读取。
 
-在业务项目中创建 `.modes`：
-
-```text
-prog
-```
-
-把业务项目的 `.modes` 写为 `auto`，即可让 `modep-auto.mjs` 根据目录内容自动选择 mode；显式写 `prog` 时不会运行自动检测：
+默认无需创建 `.modes`：文件缺失或内容空白时，`modep-auto.mjs` 会根据目录内容自动选择 mode：
 
 ```js
 export default ({ files, dependencies }) =>
@@ -71,13 +65,19 @@ export default ({ files, dependencies }) =>
 
 `auto` 是普通 JS 函数，可以导入自己的模块，也支持异步。它收到 `cwd`、`boundary`、`files` 和 `dependencies`，返回配置中已声明的 mode 名称数组。文件路径与依赖基于工作区根目录收集。配置及 auto 脚本以本机用户权限执行。
 
+需要固定选择时，在业务项目中创建非空 `.modes`；例如以下内容会选择 `prog` 和 `ops`，覆盖自动检测：
+
+```text
+prog,ops
+```
+
 ## 从配置到会话
 
 ```mermaid
 flowchart LR
   Config["配置目录<br/>modup.mjs · modep-auto.mjs<br/>rules/*.md · skills/*/"] --> Bind["modup bind"]
   Bind --> Hook["agent 的 SessionStart hook"]
-  Project["业务项目<br/>.modes / 自动识别"] --> Hook
+  Project["业务项目<br/>默认自动识别 / .modes 固定选择"] --> Hook
   Hook --> Context["选择的 rules 和 skills"]
   Context --> Session["新会话上下文"]
 ```
