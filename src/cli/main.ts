@@ -21,13 +21,23 @@ import { imageJson, object, readImage, safeAbsolute } from "../integration/fs.js
 import { parseEvent, runMarker } from "../integration/hooks.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
-const help = "modup <res|init|scan|migrate|sync|resolve|render|hook|register|unregister|config|run> [options]\n"
-  + "res <add|init|update> [--config <dir>] [--url <url> --path <source-path> --target <dir> --ref <ref>]\n"
-  + "init|scan [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>]\n"
-  + "migrate [--config <dir>] [--mode <name>] [--list | --answers <file>]\n"
-  + "register|unregister [--config <dir>] [--target-home <dir>]\n"
-  + "config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--dry-run] [--expect <digest>]\n"
-  + "config answers: {configs:[registered absolute paths],agents:[claude|codex|codebuddy]}\n";
+const help = "Usage: modup <command> [options]\n\nCommands:\n"
+  + "  res <add|init|update>  Manage external resources\n  init                   Initialize configuration\n"
+  + "  scan                   Import resources from agent homes\n  migrate                Migrate existing configuration\n"
+  + "  sync                   Synchronize resources\n  resolve                Resolve context\n"
+  + "  render                 Render context\n  hook                   Handle agent session hooks\n"
+  + "  register               Register a configuration\n  unregister             Unregister a configuration\n"
+  + "  config                 Manage registered configurations\n  run                    Run an agent with context\n\n"
+  + "Options:\n  -h, --help              Show help\n  -v, --version           Show version\n";
+const commandHelp: Readonly<Record<string, string>> = {
+  init: "Usage: modup init [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
+  scan: "Usage: modup scan [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
+  migrate: "Usage: modup migrate [--config <dir>] [--mode <name>] [--list | --answers <file>] [-h|--help]\n",
+  register: "Usage: modup register [--config <dir>] [--target-home <dir>] [-h|--help]\n",
+  unregister: "Usage: modup unregister [--config <dir>] [--target-home <dir>] [-h|--help]\n",
+  config: "Usage: modup config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--dry-run] [--expect <digest>] [-h|--help]\n",
+  resource: "Usage: modup res <add|init|update> [--config <dir>] [--url <url> --path <source-path> --target <dir> --ref <ref>] [-h|--help]\n",
+};
 const values: Readonly<Record<string, readonly string[]>> = {
   resource: ["config", "url", "path", "target", "ref"],
   init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"], sync: ["config", "state"],
@@ -40,6 +50,7 @@ const options = (command: string, argv: readonly string[]): Readonly<Record<stri
   const parse = (index: number, result: Readonly<Record<string, string | boolean>>): Readonly<Record<string, string | boolean>> => {
     const token = argv[index];
     if (token === undefined) return result;
+    if (token === "-h" && !Object.hasOwn(result, "help")) return parse(index + 1, { ...result, help: true });
     if (!token.startsWith("--")) throw modeError("E_USAGE", "Unexpected positional argument", { token });
     const equal = token.indexOf("=");
     const key = token.slice(2, equal < 0 ? undefined : equal);
@@ -105,14 +116,14 @@ const exitFor = (error: ModeError, hook: boolean): number => {
 export const main = async (argv: string[]): Promise<number> => {
   const command = argv[0] === "res" ? "resource" : argv[0] ?? "--help";
   try {
-    if (command === "--help") { process.stdout.write(help); return 0; }
-    if (command === "--version") { process.stdout.write(`${await packageVersion()}\n`); return 0; }
+    if (command === "--help" || command === "-h") { process.stdout.write(help); return 0; }
+    if (command === "--version" || command === "-v") { process.stdout.write(`${await packageVersion()}\n`); return 0; }
     if (Number(process.versions.node.split(".")[0]) < 20 || process.platform === "win32") throw modeError("E_PLATFORM", "Node20+ on macOS/Linux is required");
     if (!Object.hasOwn(values, command)) throw modeError("E_USAGE", "Unknown command", { command });
     const separator = argv.indexOf("--", 1);
     if (separator >= 0 && command !== "run") throw modeError("E_USAGE", "Only run accepts agent arguments");
     const opts = options(command, argv.slice(command === "resource" && !argv[1]?.startsWith("--") ? 2 : 1, separator < 0 ? undefined : separator));
-    if (opts.help) { process.stdout.write(help); return 0; }
+    if (opts.help) { process.stdout.write(commandHelp[command] ?? help); return 0; }
     if (command === "resource") {
       json(await manageResources(await pathFor(String(opts.config ?? process.cwd())), argv[1] ?? "", opts)); return 0;
     }
@@ -194,7 +205,7 @@ export const main = async (argv: string[]): Promise<number> => {
   } catch (caught) {
     const error = caught instanceof Error && "code" in caught && String(caught.code).startsWith("E_") ? caught as ModeError
       : modeError("E_IO", "Operation failed", { cause: String(caught) });
-    process.stderr.write(`${JSON.stringify({ error: { code: error.code, message: error.message, details: error.details } })}\n`);
+    process.stderr.write(`modup: ${error.message} [${error.code}]\n`);
     return exitFor(error, command === "hook");
   }
 };
