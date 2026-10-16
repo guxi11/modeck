@@ -3,7 +3,7 @@ export const PROTOCOL = "modup-context/1" as const;
 
 export const LIMITS = Object.freeze({
   jsonBytes: 1_048_576,
-  lockBytes: 8_388_608,
+  manifestBytes: 8_388_608,
   modes: 256,
   resources: 512,
   idLength: 64,

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:modup:lock:1",
+  "$id": "urn:modup:manifest:1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,7 @@
       "type": "array",
       "maxItems": 512,
       "items": {
-        "$ref": "#/$defs/locked"
+        "$ref": "#/$defs/resource"
       }
     }
   },
@@ -79,7 +79,7 @@
         }
       ]
     },
-    "locked": {
+    "resource": {
       "type": "object",
       "additionalProperties": false,
       "required": [

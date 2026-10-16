@@ -6,30 +6,21 @@ import {
   canonical, checkRelativePath, LIMITS, modeError, parseJson, sha256,
 } from "../contracts/index.js";
 import type {
-  Config, Mode, ResourceLock, ResourceSpec, Selector, ModeErrorCode,
+  Config, Mode, ResourceManifest, ResourceSpec, Selector, ModeErrorCode,
 } from "../contracts/index.js";
 import { compare, copyJson, immutable, requireValue } from "./values.js";
 
-type ModeInput = Omit<Mode, "extends" | "priority" | "rules" | "skills"> & {
-  readonly extends?: readonly string[];
-  readonly priority?: number;
-  readonly rules?: readonly string[];
-  readonly skills?: readonly { readonly id: string; readonly preload?: boolean }[];
-};
-type ConfigInput = Omit<Config, "defaults" | "modes"> & {
-  readonly defaults?: readonly string[];
-  readonly modes: Readonly<Record<string, ModeInput>>;
-};
-type SelectorInput = { readonly schemaVersion: 1; readonly auto?: boolean;
-  readonly add?: readonly string[]; readonly disable?: readonly string[] };
-
+type ModeInput = { readonly extends?: readonly string[]; readonly priority?: number;
+  readonly rules?: readonly string[]; readonly skills?: readonly string[] };
+type ConfigInput = { readonly defaults?: readonly string[]; readonly modes: Readonly<Record<string, ModeInput>>;
+  readonly resources: { readonly rules?: Readonly<Record<string, string | ResourceSpec["source"]>>;
+    readonly skills?: Readonly<Record<string, string | ResourceSpec["source"]>> } };
 const ajv = new Ajv2020({ strict: true, allErrors: true });
 const schema = <T>(name: string): ValidateFunction<T> => ajv.compile<T>(parseJson(
   readFileSync(new URL(`../../schemas/${name}.schema.json`, import.meta.url), "utf8"),
 ) as object);
 const configSchema = schema<ConfigInput>("modes");
-const selectorSchema = schema<SelectorInput>("selector");
-const lockSchema = schema<ResourceLock>("lock");
+const manifestSchema = schema<ResourceManifest>("manifest");
 
 const validated = <T>(value: unknown, validate: ValidateFunction<T>, code: ModeErrorCode): T => {
   let candidate: unknown;
@@ -67,19 +58,11 @@ const checkGraph = (config: Config): void => {
   ids.forEach(id => {
     const mode = config.modes[id]!;
     mode.extends.forEach(known);
-    requireValue(new Set(mode.skills.map(skill => skill.id)).size === mode.skills.length,
+    requireValue(new Set(mode.skills).size === mode.skills.length,
       "E_CONFIG", "Duplicate skill binding", { mode: id });
     [...mode.rules.map(resource => ({ id: resource, kind: "rule" })),
-      ...mode.skills.map(resource => ({ id: resource.id, kind: "skill" }))].forEach(binding => {
+      ...mode.skills.map(resource => ({ id: resource, kind: "skill" }))].forEach(binding => {
       requireValue(config.resources[binding.id]?.kind === binding.kind, "E_CONFIG", "Missing or wrong-kind resource", { mode: id, ...binding });
-    });
-    mode.detect?.any.forEach(condition => {
-      if (condition.type === "dependency") return;
-      const path = condition.type === "exists" ? condition.path : condition.pattern;
-      checkRelativePath(path, false);
-      if (condition.type === "glob") requireValue(!/[?\[\]{}!()|]/.test(path)
-        && path.split("/").every(part => !part.includes("**") || part === "**"),
-      "E_CONFIG", "Unsupported glob", { pattern: path });
     });
   });
   const visit = (id: string, chain: readonly string[], done: ReadonlySet<string>): ReadonlySet<string> => {
@@ -93,15 +76,19 @@ const checkGraph = (config: Config): void => {
 
 export const parseConfig = (value: unknown): Config => {
   const input = validated(value, configSchema, "E_CONFIG");
+  const ruleIds = Object.keys(input.resources.rules ?? {});
+  requireValue(ruleIds.length + Object.keys(input.resources.skills ?? {}).length <= LIMITS.resources, "E_LIMIT", "Too many resources");
+  requireValue(!ruleIds.some(id => Object.hasOwn(input.resources.skills ?? {}, id)), "E_CONFIG", "Resource IDs must be globally unique");
   const config: Config = {
-    schemaVersion: 1,
     defaults: [...input.defaults ?? []],
-    resources: input.resources,
+    resources: Object.fromEntries((["rules", "skills"] as const).flatMap(group =>
+      Object.entries(input.resources[group] ?? {}).map(([id, source]) => [id,
+        { kind: group === "rules" ? "rule" as const : "skill" as const,
+          source: typeof source === "string" ? { type: "local" as const, path: source } : source }]))),
     modes: Object.fromEntries(Object.entries(input.modes).map(([id, mode]) => [id, {
       extends: [...mode.extends ?? []], priority: mode.priority ?? 0,
-      ...(mode.detect ? { detect: mode.detect } : {}),
       rules: [...mode.rules ?? []],
-      skills: (mode.skills ?? []).map(skill => ({ id: skill.id, preload: skill.preload ?? false })),
+      skills: [...mode.skills ?? []],
     }])),
   };
   Object.values(config.resources).forEach(checkSource);
@@ -109,29 +96,30 @@ export const parseConfig = (value: unknown): Config => {
   return immutable(config);
 };
 
-export const parseSelector = (value: unknown): Selector => {
-  const input = validated(value, selectorSchema, "E_SELECTOR");
-  return immutable({ schemaVersion: 1 as const, auto: input.auto ?? true,
-    add: [...input.add ?? []], disable: [...input.disable ?? []] });
+export const parseSelector = (text: string): Selector => {
+  const ids = text.replace(/^\uFEFF/u, "").trim().split(/[,\r\n]+/u).map(id => id.trim()).filter(Boolean);
+  requireValue(ids.length > 0 && ids.length <= LIMITS.modes && ids.every(id => /^[a-z][a-z0-9-]{0,63}$/.test(id)),
+    "E_SELECTOR", "Selector must list mode IDs separated by commas or newlines");
+  return immutable({ auto: ids.includes("auto"), add: [...new Set(ids.filter(id => id !== "auto"))] });
 };
 
-export const parseLock = (value: unknown): ResourceLock => {
-  const lock = validated(value, lockSchema, "E_LOCK_MISMATCH");
-  const ids = lock.resources.map(resource => resource.id);
+export const parseManifest = (value: unknown): ResourceManifest => {
+  const manifest = validated(value, manifestSchema, "E_MANIFEST_MISMATCH");
+  const ids = manifest.resources.map(resource => resource.id);
   requireValue(ids.every((id, index) => index === 0 || compare(ids[index - 1]!, id) < 0),
-    "E_LOCK_MISMATCH", "Lock resources must be unique and sorted");
-  const totalBytes = lock.resources.reduce((total, resource) => {
+    "E_MANIFEST_MISMATCH", "Manifest resources must be unique and sorted");
+  const totalBytes = manifest.resources.reduce((total, resource) => {
     const paths = resource.entries.map(entry => entry.path);
     const entries = new Map(resource.entries.map(entry => [entry.path, entry]));
     requireValue(new Set(paths.map(path => path.toLowerCase())).size === paths.length,
-      "E_LOCK_MISMATCH", "Resource tree has case-folded path collisions", { id: resource.id });
+      "E_MANIFEST_MISMATCH", "Resource tree has case-folded path collisions", { id: resource.id });
     const bytes = resource.entries.reduce((sum, entry, index) => {
       checkRelativePath(entry.path, false);
       requireValue(index === 0 || compare(paths[index - 1]!, entry.path) < 0,
-        "E_LOCK_MISMATCH", "Tree entries must be unique and sorted", { id: resource.id });
+        "E_MANIFEST_MISMATCH", "Tree entries must be unique and sorted", { id: resource.id });
       const parent = posix.dirname(entry.path);
       requireValue(parent === "." || entries.get(parent)?.kind === "directory",
-        "E_LOCK_MISMATCH", "Missing tree parent directory", { id: resource.id, path: entry.path });
+        "E_MANIFEST_MISMATCH", "Missing tree parent directory", { id: resource.id, path: entry.path });
       requireValue(entry.kind !== "file" || Number.isSafeInteger(entry.bytes) && entry.bytes <= LIMITS.fileBytes,
         "E_LIMIT", "Resource file exceeds byte limit", { id: resource.id, path: entry.path });
       return sum + (entry.kind === "file" ? entry.bytes : 0);
@@ -140,13 +128,13 @@ export const parseLock = (value: unknown): ResourceLock => {
     const entryPath = resource.kind === "rule" ? "content.md" : "SKILL.md";
     const main = entries.get(entryPath);
     requireValue(main?.kind === "file" && main.bytes <= LIMITS.textFileBytes,
-      "E_LOCK_MISMATCH", "Missing or oversized resource entry file", { id: resource.id });
+      "E_MANIFEST_MISMATCH", "Missing or oversized resource entry file", { id: resource.id });
     requireValue(resource.kind !== "rule" || resource.entries.length === 1,
-      "E_LOCK_MISMATCH", "Rule tree must contain only content.md", { id: resource.id });
+      "E_MANIFEST_MISMATCH", "Rule tree must contain only content.md", { id: resource.id });
     const digest = sha256(Buffer.from(`modup-tree-v1\n${canonical(resource.entries)}`));
-    requireValue(digest === resource.treeDigest, "E_LOCK_MISMATCH", "Tree manifest digest mismatch", { id: resource.id });
+    requireValue(digest === resource.treeDigest, "E_MANIFEST_MISMATCH", "Tree manifest digest mismatch", { id: resource.id });
     return total + bytes;
   }, 0);
   requireValue(totalBytes <= LIMITS.allResourceBytes, "E_LIMIT", "Total resource byte limit exceeded");
-  return immutable(lock);
+  return immutable(manifest);
 };

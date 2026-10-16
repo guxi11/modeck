@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { canonical, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { Config, ConfigContext, LoadConfigRequest } from "../contracts/index.js";
 import { regularBytes } from "../resources/fs.js";
-import { safePath, readJsonFile, isMissing } from "./files.js";
+import { safePath } from "./files.js";
 import { executableConfig } from "./executable.js";
 import { parseConfig } from "./validation.js";
 import { compare, immutable } from "./values.js";
@@ -14,7 +14,7 @@ export const configIdentity = (root: string, config: Config, sources?: readonly 
     sources: sources.map(source => ({ path: relative(root, source.path).split("\\").join("/"), digest: source.digest })) } : config)));
 
 export const validateConfig = async (context: ConfigContext): Promise<void> => {
-  const sources = context.configSources ?? [{ path: join(context.configRoot, "modes.json"), digest: context.rawConfigDigest }];
+  const sources = context.configSources ?? [{ path: join(context.configRoot, "modup.mjs"), digest: context.rawConfigDigest }];
   await Promise.all(sources.map(async source => {
     const { bytes } = await regularBytes(source.path, LIMITS.fileBytes);
     if (sha256(bytes) !== source.digest) throw modeError("E_CONFIG", "Configuration or imported plugin changed after loading", { path: source.path });
@@ -28,13 +28,7 @@ export const loadConfig = async ({ configRoot, facts }: LoadConfigRequest): Prom
   try {
     const root = await safePath(configRoot);
     if (!(await lstat(root)).isDirectory()) throw modeError("E_PATH", "Config root must be a directory", { path: root });
-    const executable = join(root, "modup.config.mjs");
-    const hasExecutable = await lstat(executable).then(() => true).catch(error => { if (isMissing(error)) return false; throw error; });
-    if (!hasExecutable) {
-      const { value, bytes } = await readJsonFile(join(root, "modes.json"), LIMITS.jsonBytes, "E_CONFIG");
-      const config = parseConfig(value);
-      return immutable({ configRoot: root, config, configDigest: configIdentity(root, config), rawConfigDigest: sha256(bytes) });
-    }
+    const executable = join(root, "modup.mjs");
     const { bytes } = await regularBytes(executable, LIMITS.jsonBytes);
     const loaded = await executableConfig(executable, facts);
     const config = parseConfig(loaded.config);

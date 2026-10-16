@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
-import { checkRelativePath, LIMITS, modeError, parseJson } from "../contracts/index.js";
+import { checkRelativePath, LIMITS, modeError } from "../contracts/index.js";
 import type { CollectFactsRequest, ProjectFacts } from "../contracts/index.js";
 import { absolute, isMissing, readJsonFile, safePath, within } from "./files.js";
 import { parseSelector } from "./validation.js";
@@ -41,9 +41,7 @@ const boundaryFor = async (cwd: string): Promise<string> => {
 };
 
 const selectorAt = async (cwd: string, boundary: string): Promise<ProjectFacts["selector"]> => {
-  const preferred = join(cwd, ".modes");
-  const modern = await lstat(preferred).then(() => true).catch(error => { if (isMissing(error)) return false; throw error; });
-  const path = modern ? preferred : join(cwd, ".mode");
+  const path = join(cwd, ".modes");
   try {
     const info = await lstat(path);
     if (!info.isFile() || info.isSymbolicLink()) throw modeError("E_SELECTOR", "Selector must be a regular file", { path });
@@ -51,19 +49,7 @@ const selectorAt = async (cwd: string, boundary: string): Promise<ProjectFacts["
     let text: string;
     try { text = utf8(bytes).replace(/^\uFEFF/u, "").trim(); }
     catch { throw modeError("E_SELECTOR", "Selector must contain valid UTF-8", { path }); }
-    if (!modern && (text.startsWith("{") || text.startsWith("["))) {
-      try { return { path, value: parseSelector(parseJson(text)) }; }
-      catch (error) {
-        if (error instanceof Error && "code" in error && error.code === "E_SELECTOR") throw error;
-        throw modeError("E_SELECTOR", "Selector JSON is invalid", { path });
-      }
-    }
-    const ids = text.split(/[,\r\n]+/u).map(id => id.trim()).filter(Boolean);
-    if (!ids.length || ids.some(id => !/^[a-z][a-z0-9-]{0,63}$/.test(id))) {
-      throw modeError("E_SELECTOR", "Selector must list mode IDs separated by commas or newlines", { path });
-    }
-    return { path, value: parseSelector({ schemaVersion: 1, auto: modern && ids.includes("auto"),
-      add: [...new Set(modern ? ids.filter(id => id !== "auto") : ids)] }) };
+    return { path, value: parseSelector(text) };
   } catch (error) {
     if (!isMissing(error)) throw error;
     return cwd === boundary ? null : selectorAt(dirname(cwd), boundary);

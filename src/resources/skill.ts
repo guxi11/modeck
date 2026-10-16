@@ -26,12 +26,10 @@ export const resourceEntry = (snapshot: Snapshot, kind: Kind): {
   const name: unknown = values.get("name");
   const description: unknown = values.get("description");
   requireValue(typeof name === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(name), "E_INTEGRITY", "Invalid skill name");
-  requireValue(name !== "modup", "E_INTEGRITY", "Reserved modup entry skill", { reservedEntry: true });
   requireValue(typeof description === "string" && description.trim().length > 0
     && description.length <= LIMITS.skillDescriptionChars && !/\p{Cc}/u.test(description.replace(/[\n\r\t]/g, "")),
   "E_INTEGRITY", "Invalid skill description");
-  return { entryBytes, skill: { name: name as string, description: description as string,
-    body: text.slice(4 + end!.index + end![0].length) } };
+  return { entryBytes, skill: { name: name as string, description: description as string } };
 };
 
 export const validateNames = (resources: readonly VerifiedResource[]): void => {

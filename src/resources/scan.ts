@@ -1,7 +1,7 @@
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { canonical, checkRelativePath, LIMITS, parseJson, sha256 } from "../contracts/index.js";
-import type { Kind, ModeError, TreeEntry } from "../contracts/index.js";
+import type { Kind, TreeEntry } from "../contracts/index.js";
 import { compare, exists, regularBytes, requireValue, safePath, utf8 } from "./fs.js";
 import { resourceEntry } from "./skill.js";
 import { snapshotLocal } from "./tree.js";
@@ -49,15 +49,7 @@ export const scanHome = async (home: string): Promise<ScanResult> => {
     const source = await realpath(alias);
     if (platformSource(source)) { excluded.push({ path: alias, reason: "Alias to platform installation/cache; excluded without traversal" }); return; }
     const snapshot = await snapshotLocal(source, kind);
-    const entry = (() => {
-      try { return resourceEntry(snapshot, kind); }
-      catch (error) {
-        if (error instanceof Error && "code" in error && error.code === "E_INTEGRITY"
-          && (error as ModeError).details.reservedEntry === true) return null;
-        throw error;
-      }
-    })();
-    if (entry === null) { excluded.push({ path: alias, reason: "Reserved modup entry skill; excluded to prevent recursive migration" }); return; }
+    const entry = resourceEntry(snapshot, kind);
     const expectedSource = managedSkills.get(alias) ?? null;
     const origin = { path: alias, type: expectedSource === null ? "global" as const
       : await exists(join(expectedSource, "SKILL.md")) ? "evoloop" as const : "evoloop-orphan" as const, sourcePath: expectedSource };
@@ -98,7 +90,7 @@ export const scanHome = async (home: string): Promise<ScanResult> => {
     const directory = join(root, target);
     const manifestPath = join(directory, ".evoloop-manifest.json");
     if (!await exists(manifestPath)) return;
-    const { bytes } = await regularBytes(manifestPath, LIMITS.lockBytes);
+    const { bytes } = await regularBytes(manifestPath, LIMITS.manifestBytes);
     const manifest = object(parseJson(utf8(bytes)));
     requireValue(typeof manifest.root === "string", "E_CONFIG", "Invalid evoloop source root", { path: manifestPath });
     const source = await safePath(manifest.root as string);

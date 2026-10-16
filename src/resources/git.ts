@@ -27,7 +27,7 @@ export const gitSource = async (url: string, configRoot: string | null): Promise
 };
 
 export const git = async (directory: string, args: readonly string[], protocol: GitSource["protocol"] = "file",
-  maxBuffer: number = LIMITS.lockBytes, input?: Uint8Array): Promise<Buffer> => {
+  maxBuffer: number = LIMITS.manifestBytes, input?: Uint8Array): Promise<Buffer> => {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
   const env = { ...inherited, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_SYSTEM: "/dev/null",
     GIT_CONFIG_GLOBAL: "/dev/null", GIT_ATTR_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
@@ -77,20 +77,12 @@ const advertisedRef = async (directory: string, source: GitSource, ref: string):
   return refs[0]!;
 };
 
-export const fetchCommit = async (directory: string, source: GitSource, ref: string,
-  pinned: string | null = null): Promise<string> => {
-  if (pinned !== null) requireValue(commitPattern.test(pinned), "E_LOCK_MISMATCH", "Invalid pinned Git commit");
-  try {
-    const target = pinned ?? await advertisedRef(directory, source, ref);
-    await git(directory, ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--depth=1", "--", source.url, target], source.protocol);
-    const commit = utf8(await git(directory, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"])).trim();
-    requireValue(commitPattern.test(commit) && (pinned === null || commit === pinned),
-      "E_GIT_COMMIT_UNAVAILABLE", "Fetched Git commit does not match the lock");
-    return commit;
-  } catch (error) {
-    if (pinned !== null) throw modeError("E_GIT_COMMIT_UNAVAILABLE", "Pinned Git commit cannot be fetched", { commit: pinned });
-    throw error;
-  }
+export const fetchCommit = async (directory: string, source: GitSource, ref: string): Promise<string> => {
+  const target = await advertisedRef(directory, source, ref);
+  await git(directory, ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--depth=1", "--", source.url, target], source.protocol);
+  const commit = utf8(await git(directory, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"])).trim();
+  requireValue(commitPattern.test(commit), "E_GIT_COMMIT_UNAVAILABLE", "Invalid fetched Git commit");
+  return commit;
 };
 
 type GitEntry = { readonly path: string; readonly mode: string; readonly oid: string; readonly bytes: number };
@@ -130,7 +122,7 @@ const readBlobs = async (directory: string, entries: readonly GitEntry[], maxByt
   return data;
 };
 
-export const extractTree = async (directory: string, commit: string, path: string, kind: Kind | "config"): Promise<Snapshot> => {
+export const extractTree = async (directory: string, commit: string, path: string, kind: Kind): Promise<Snapshot> => {
   requireValue(commitPattern.test(commit), "E_GIT", "Invalid extraction commit");
   checkRelativePath(path, kind !== "rule");
   const root = path === "." ? null : entriesFrom(await git(directory, ["ls-tree", "-lz", commit, "--", path]));
@@ -142,11 +134,11 @@ export const extractTree = async (directory: string, commit: string, path: strin
     const files = await readBlobs(directory, [{ ...entry!, path: "content.md" }], LIMITS.textFileBytes);
     return fromFiles([], files);
   }
-  requireValue(!entry || entry.mode === "040000", "E_PATH", "Skill/config source must be a Git tree");
+  requireValue(!entry || entry.mode === "040000", "E_PATH", "Skill source must be a Git tree");
   const tree = entry?.oid ?? `${commit}^{tree}`;
   const entries = entriesFrom(await git(directory, ["ls-tree", "-rlzt", tree]));
-  const maxEntries = kind === "config" ? LIMITS.treeEntries * LIMITS.resources : LIMITS.treeEntries;
-  const maxBytes = kind === "config" ? LIMITS.allResourceBytes : LIMITS.treeBytes;
+  const maxEntries = LIMITS.treeEntries;
+  const maxBytes = LIMITS.treeBytes;
   requireValue(entries.length <= maxEntries, "E_LIMIT", "Git tree entry limit exceeded");
   const files = await readBlobs(directory, entries, maxBytes);
   return fromFiles(entries.filter(item => item.mode === "040000").map(item => item.path), files, maxEntries, maxBytes);

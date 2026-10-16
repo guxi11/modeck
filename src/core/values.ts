@@ -17,26 +17,3 @@ export const requireValue = (condition: unknown, code: ModeErrorCode, message: s
   details: Readonly<Record<string, unknown>> = {}): void => {
   if (!condition) throw modeError(code, message, details);
 };
-
-const matchSequence = <T>(tokens: readonly (T | null)[], values: readonly string[],
-  accepts: (token: T, value: string) => boolean): boolean => {
-  const initial = [true, ...values.map(() => false)];
-  const last = tokens.reduce((previous, token) => {
-    // A wildcard consumes zero or more values: propagate reachable prefixes once, without backtracking.
-    if (token === null) {
-      let reachable = false;
-      return previous.map(value => (reachable ||= value));
-    }
-    return previous.map((_, index) => index > 0 && previous[index - 1]!
-      && accepts(token, values[index - 1]!));
-  }, initial);
-  return last[values.length]!;
-};
-
-export const glob = (pattern: string): { readonly test: (path: string) => boolean } => {
-  const parts = pattern.split("/").map(part => part === "**" ? null
-    : [...part].map(character => character === "*" ? null : character));
-  // Apply the same bounded DP to path segments and Unicode characters: O(pattern length * path length).
-  return { test: path => matchSequence(parts, path.split("/"), (characters, segment) =>
-    matchSequence(characters, [...segment], (character, value) => character === value)) };
-};

@@ -3,12 +3,12 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { canonical, LIMITS, modeError, parseJson, sha256 } from "../contracts/index.js";
 import type {
-  ConfigContext, LockedResource, ReadResourcesRequest, ResourceLock, ResourceSpec,
+  ConfigContext, ManifestResource, ReadResourcesRequest, ResourceManifest, ResourceSpec,
   SyncResourcesRequest, VerifiedResource, VerifiedResourceSet,
 } from "../contracts/index.js";
 import { childPath, compare, ensureDirectory, exists, missing, regularBytes, removeTemporary, requireValue, safePath, utf8 } from "./fs.js";
 import { extractTree, fetchCommit, gitSource, initGit } from "./git.js";
-import { validateContext } from "./lock.js";
+import { validateContext } from "./manifest.js";
 import { resourceEntry, validateNames } from "./skill.js";
 import { publishObject, readObject } from "./store.js";
 import { snapshotLocal } from "./tree.js";
@@ -45,11 +45,11 @@ Promise<{ readonly snapshot: Snapshot; readonly commit: string }> => {
 const cachePath = (context: ConfigContext, stateRoot: string, id: string, spec: ResourceSpec): string =>
   join(stateRoot, "git", `${digest({ configRoot: context.configRoot, id, spec })}.json`);
 
-const cachedGit = async (request: ReadResourcesRequest, stateRoot: string, id: string, spec: ResourceSpec): Promise<LockedResource | null> => {
+const cachedGit = async (request: ReadResourcesRequest, stateRoot: string, id: string, spec: ResourceSpec): Promise<ManifestResource | null> => {
   const path = cachePath(request.context, stateRoot, id, spec);
   if (!await exists(path)) return null;
-  const { bytes } = await regularBytes(path, LIMITS.lockBytes);
-  const manifest = request.parseLock(parseJson(utf8(bytes)));
+  const { bytes } = await regularBytes(path, LIMITS.manifestBytes);
+  const manifest = request.parseManifest(parseJson(utf8(bytes)));
   const resource = manifest.resources[0];
   requireValue(manifest.resources.length === 1 && resource?.id === id && resource.kind === spec.kind
     && resource.sourceDigest === digest(spec) && resource.commit !== null
@@ -57,12 +57,12 @@ const cachedGit = async (request: ReadResourcesRequest, stateRoot: string, id: s
   return resource!;
 };
 
-const cacheGit = async (context: ConfigContext, stateRoot: string, id: string, spec: ResourceSpec, locked: LockedResource): Promise<void> => {
+const cacheGit = async (context: ConfigContext, stateRoot: string, id: string, spec: ResourceSpec, manifestResource: ManifestResource): Promise<void> => {
   const directory = await ensureDirectory(join(stateRoot, "git"));
   const temporary = join(directory, `.stage-${randomUUID()}`);
-  const manifest: ResourceLock = { schemaVersion: 1, resourceSpecDigest: digest({ [id]: spec }), resources: [locked] };
+  const manifest: ResourceManifest = { schemaVersion: 1, resourceSpecDigest: digest({ [id]: spec }), resources: [manifestResource] };
   const bytes = Buffer.from(`${canonical(manifest)}\n`);
-  requireValue(bytes.length <= LIMITS.lockBytes, "E_LIMIT", "Git cache manifest exceeds byte limit");
+  requireValue(bytes.length <= LIMITS.manifestBytes, "E_LIMIT", "Git cache manifest exceeds byte limit");
   try {
     await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
     await safePath(directory);
@@ -70,22 +70,22 @@ const cacheGit = async (context: ConfigContext, stateRoot: string, id: string, s
   } finally { await unlink(temporary).catch(error => { if (!missing(error)) throw error; }); }
 };
 
-type ResourceImage = { readonly locked: LockedResource; readonly verified: VerifiedResource };
+type ResourceImage = { readonly manifestResource: ManifestResource; readonly verified: VerifiedResource };
 const resourceImage = async (request: ReadResourcesRequest, stateRoot: string, id: string, spec: ResourceSpec,
   sync: "reuse" | "update" | null): Promise<ResourceImage> => {
   if (spec.source.type === "git" && sync !== "update") {
     const cached = await cachedGit(request, stateRoot, id, spec);
-    if (cached) return { locked: cached, verified: await readObject(stateRoot, cached) };
+    if (cached) return { manifestResource: cached, verified: await readObject(stateRoot, cached) };
     requireValue(sync !== null, "E_RESOURCE_MISSING", "Git resource is not cached; run modup sync", { id });
   }
   const fetched = spec.source.type === "git" ? await gitSnapshot(request.context, stateRoot, spec)
     : { snapshot: await localSnapshot(request.context, spec), commit: null };
   resourceEntry(fetched.snapshot, spec.kind);
-  const locked: LockedResource = { id, kind: spec.kind, sourceDigest: digest(spec), commit: fetched.commit,
+  const manifestResource: ManifestResource = { id, kind: spec.kind, sourceDigest: digest(spec), commit: fetched.commit,
     treeDigest: fetched.snapshot.treeDigest, entries: fetched.snapshot.entries };
-  const verified = await publishObject(stateRoot, locked, fetched.snapshot);
-  if (spec.source.type === "git") await cacheGit(request.context, stateRoot, id, spec, locked);
-  return { locked, verified };
+  const verified = await publishObject(stateRoot, manifestResource, fetched.snapshot);
+  if (spec.source.type === "git") await cacheGit(request.context, stateRoot, id, spec, manifestResource);
+  return { manifestResource, verified };
 };
 
 const resourcesFor = async (request: ReadResourcesRequest, sync: "reuse" | "update" | null): Promise<VerifiedResourceSet> => {
@@ -102,13 +102,13 @@ const resourcesFor = async (request: ReadResourcesRequest, sync: "reuse" | "upda
     }, Promise.resolve([] as readonly ResourceImage[]));
     const resources = images.map(image => image.verified);
     validateNames(resources);
-    // This in-memory manifest describes bytes just read; no repository version lock exists.
-    const lock = request.parseLock({ schemaVersion: 1, resourceSpecDigest: digest(context.config.resources),
-      resources: images.map(image => image.locked) });
-    requireValue(Buffer.byteLength(canonical(lock)) <= LIMITS.lockBytes, "E_LIMIT", "Resource manifest exceeds byte limit");
+    // Describe verified bytes without writing version metadata into the configuration.
+    const manifest = request.parseManifest({ schemaVersion: 1, resourceSpecDigest: digest(context.config.resources),
+      resources: images.map(image => image.manifestResource) });
+    requireValue(Buffer.byteLength(canonical(manifest)) <= LIMITS.manifestBytes, "E_LIMIT", "Resource manifest exceeds byte limit");
     await validateContext(context, stateRoot);
     return Object.freeze({ schemaVersion: 1 as const, configDigest: context.configDigest,
-      lock, lockDigest: digest(lock), resources: Object.freeze(resources) });
+      manifest, resourceDigest: digest(manifest), resources: Object.freeze(resources) });
   } catch (error) {
     if (error instanceof Error && "code" in error && String(error.code).startsWith("E_")) throw error;
     throw modeError("E_IO", "Resource operation failed", { cause: String(error) });
@@ -119,6 +119,6 @@ export const readResources = async (request: ReadResourcesRequest): Promise<Veri
 
 export const syncResources = async (request: SyncResourcesRequest): Promise<VerifiedResourceSet> => {
   requireValue(request.mode === "reuse" || request.mode === "update", "E_USAGE",
-    "Frozen sync is unsupported without a modup version lock; manage versions in Git or your package manager");
+    "Unsupported resource synchronization mode");
   return resourcesFor(request, request.mode === "update" ? "update" : "reuse");
 };

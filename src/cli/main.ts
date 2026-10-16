@@ -4,31 +4,25 @@ import { homedir } from "node:os";
 import { delimiter, join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LIMITS, modeError, parseJson } from "../contracts/index.js";
-import type { Agent, ImportConfigRequest, InstallPlan, ModeError, VerifiedResourceSet } from "../contracts/index.js";
-import { loadConfig, parseConfig, parseLock } from "../core/index.js";
-import { importConfig, initConfig, scanHome, syncResources } from "../resources/index.js";
-import { migrate } from "./migrate.js";
-import { applyInstallPlan, encodeHook, planInstall, planUninstall, prepare, runAgent } from "../integration/index.js";
+import type { Agent, BindPlan, ModeError, VerifiedResourceSet } from "../contracts/index.js";
+import { loadConfig, parseManifest } from "../core/index.js";
+import { syncResources } from "../resources/index.js";
+import { initialize } from "./init.js";
+import { applyBindPlan, encodeHook, planBind, planUnbind, prepare, runAgent } from "../integration/index.js";
 import { data, imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
 import { parseEvent, runMarker } from "../integration/hooks.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
-const help = "modup <init|import|scan|migrate|sync|resolve|render|hook|install|uninstall|run> [options]\n"
-  + "--config <dir>  --state <dir>  --agent <codex|claude|codebuddy>\n"
-  + "init --dir <new-dir> | import --from <git-url> --dir <new-dir> [--ref HEAD]\n"
-  + "scan --home <HOME> --format json | migrate --home <HOME> --config <existing-repo> [--bindings <JSON>] [--apply --expect <digest>]\n"
-  + "sync [--update] | resolve [--cwd <dir>] | render --agent <agent> [--cwd <dir>] [--format text|json]\n"
-  + "hook --agent <agent> (SessionStart JSON on stdin)\n"
-  + "install|uninstall --agent <agent> --target-home <HOME-root> [--format text|json] [--apply [--expect <digest>]]\n"
-  + "run --agent <agent> [--cwd <dir>] [--executable <path>] -- <agent arguments>\n";
+const help = "modup <init|sync|resolve|render|hook|bind|unbind|run> [options]\n"
+  + "init [--home <dir>] [--list | --answers <file>]\n"
+  + "bind|unbind --agent <claude|codex|codebuddy> [--config <dir>] [--dry-run] [--expect <digest>]\n";
 const values: Readonly<Record<string, readonly string[]>> = {
-  init: ["dir"], import: ["from", "dir", "ref"], sync: ["config", "state"],
-  scan: ["home", "format"], migrate: ["home", "config", "bindings", "expect", "format"],
+  init: ["home", "answers"], sync: ["config", "state"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
-  hook: ["config", "state", "agent"], install: ["config", "state", "agent", "target-home", "format", "expect"],
-  uninstall: ["agent", "target-home", "format", "expect"], run: ["config", "state", "cwd", "agent", "executable"],
+  hook: ["config", "state", "agent"], bind: ["config", "state", "agent", "target-home", "format", "expect"],
+  unbind: ["config", "agent", "target-home", "format", "expect"], run: ["config", "state", "cwd", "agent", "executable"],
 };
-const booleans: Readonly<Record<string, readonly string[]>> = { sync: ["update", "frozen"], install: ["apply"], uninstall: ["apply"], migrate: ["apply"] };
+const booleans: Readonly<Record<string, readonly string[]>> = { init: ["list"], sync: ["update"], bind: ["dry-run"], unbind: ["dry-run"] };
 const options = (command: string, argv: readonly string[]): Readonly<Record<string, string | boolean>> => {
   const parse = (index: number, result: Readonly<Record<string, string | boolean>>): Readonly<Record<string, string | boolean>> => {
     const token = argv[index];
@@ -88,7 +82,7 @@ const executableFor = async (agent: Agent, supplied?: string): Promise<string> =
   if (found === self) throw modeError("E_WRAPPER_CONFLICT", "Wrapper cannot launch itself");
   return found;
 };
-const showPlan = (plan: InstallPlan, format: string): void => {
+const showPlan = (plan: BindPlan, format: string): void => {
   if (format === "json") { json(plan); return; }
   process.stdout.write(`${plan.operation} ${plan.agent} ${plan.targetHome}\nplan: ${plan.planDigest}\n`);
   plan.changes.forEach(change => process.stdout.write(`${change.after === null ? "delete" : change.beforeDigest === null ? "create" : "update"} ${change.path}\n`));
@@ -116,50 +110,31 @@ export const main = async (argv: string[]): Promise<number> => {
     const opts = options(command, argv.slice(1, separator < 0 ? undefined : separator));
     if (opts.help) { process.stdout.write(help); return 0; }
     const configured = async () => ({
-      configRoot: await pathFor(String(opts.config ?? process.env.MODUP_CONFIG ?? join(homedir(), ".config/modup"))),
+      configRoot: await pathFor(String(opts.config ?? process.cwd())),
       stateRoot: await pathFor(String(opts.state ?? process.env.MODUP_STATE ?? join(homedir(), ".local/share/modup/v1"))),
     });
     const format = String(opts.format ?? "text");
     if (!["text", "json"].includes(format)) throw modeError("E_USAGE", "Unknown output format");
-    if (command === "scan") {
-      json(await scanHome(await pathFor(required(opts, "home")))); return 0;
-    }
-    if (command === "migrate") {
-      if (opts.expect !== undefined && !opts.apply) throw modeError("E_USAGE", "expect requires apply");
-      if (typeof opts.bindings === "string" && Buffer.byteLength(opts.bindings) > LIMITS.jsonBytes) throw modeError("E_LIMIT", "bindings JSON exceeds byte limit");
-      const result = await migrate({ home: await pathFor(required(opts, "home")), configRoot: await pathFor(required(opts, "config")),
-        apply: opts.apply === true, ...(typeof opts.bindings === "string" ? { bindings: parseJson(opts.bindings) } : {}),
-        ...(typeof opts.expect === "string" ? { expect: opts.expect } : {}) });
-      json(result); return 0;
-    }
     if (command === "init") {
-      const config = parseConfig({ schemaVersion: 1, defaults: ["base"], modes: { base: {} }, resources: {} });
-      json({ schemaVersion: 1, configRoot: await initConfig({ destination: await pathFor(required(opts, "dir")), initialConfig: config }) }); return 0;
+      if (opts.list && opts.answers) throw modeError("E_USAGE", "--list and --answers cannot be combined");
+      json(await initialize(await pathFor(process.cwd()), await pathFor(String(opts.home ?? homedir())), {
+        list: opts.list === true, ...(typeof opts.answers === "string" ? { answers: await pathFor(opts.answers) } : {}),
+      })); return 0;
     }
-    if (command === "import") {
-      const destination = await pathFor(required(opts, "dir"));
-      const request: ImportConfigRequest = { destination, url: required(opts, "from"), ref: String(opts.ref ?? "HEAD"), validate: async stagingRoot => {
-        await loadConfig({ configRoot: stagingRoot });
-      } };
-      const imported = await importConfig(request);
-      json({ schemaVersion: 1, configRoot: imported }); return 0;
-    }
-    if (command === "install" || command === "uninstall") {
-      if (opts.expect !== undefined && !opts.apply) throw modeError("E_USAGE", "expect requires apply");
+    if (command === "bind" || command === "unbind") {
       const expected = opts.expect;
       if (expected !== undefined && (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected))) throw modeError("E_USAGE", "Invalid expected plan digest");
-      const request = { agent: agentFor(opts), targetHome: await pathFor(required(opts, "target-home")) };
-      const plan = command === "install" ? await planInstall({ ...request, ...await configured(), runtimeRoot }) : await planUninstall(request);
-      if (opts.apply && !plan.conflicts.length) await applyInstallPlan({ plan, ...(typeof expected === "string" ? { expectDigest: expected } : {}) });
+      const request = { agent: agentFor(opts), targetHome: await pathFor(String(opts["target-home"] ?? homedir())) };
+      const plan = command === "bind" ? await planBind({ ...request, ...await configured(), runtimeRoot }) : await planUnbind(request);
+      if (!opts["dry-run"] && !plan.conflicts.length) await applyBindPlan({ plan, ...(typeof expected === "string" ? { expectDigest: expected } : {}) });
       showPlan(plan, format); return plan.conflicts.length ? 4 : 0;
     }
     const { configRoot, stateRoot } = await configured();
     if (command === "sync") {
-      if (opts.frozen) throw modeError("E_USAGE", "--frozen is unsupported without a modup version lock; manage versions in Git or your package manager");
       const result: VerifiedResourceSet = await syncResources({ context: await loadConfig({ configRoot }), stateRoot,
-        mode: opts.update ? "update" : "reuse", parseLock });
-      json({ schemaVersion: 1, configDigest: result.configDigest, lockDigest: result.lockDigest,
-        resources: result.lock.resources.map(({ id, treeDigest, commit }) => ({ id, treeDigest, commit })) }); return 0;
+        mode: opts.update ? "update" : "reuse", parseManifest });
+      json({ schemaVersion: 1, configDigest: result.configDigest, resourceDigest: result.resourceDigest,
+        resources: result.manifest.resources.map(({ id, treeDigest, commit }) => ({ id, treeDigest, commit })) }); return 0;
     }
     if (command === "hook") {
       const agent = agentFor(opts);

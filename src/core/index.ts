@@ -1,4 +1,4 @@
-export { parseConfig, parseSelector, parseLock } from "./validation.js";
+export { parseConfig, parseSelector, parseManifest } from "./validation.js";
 export { loadConfig } from "./config.js";
 export { collectFacts } from "./facts.js";
 export { resolve } from "./resolve.js";

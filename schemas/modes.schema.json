@@ -4,14 +4,10 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion",
-    "modes",
-    "resources"
+    "resources",
+    "modes"
   ],
   "properties": {
-    "schemaVersion": {
-      "const": 1
-    },
     "defaults": {
       "$ref": "#/$defs/ids"
     },
@@ -27,12 +23,42 @@
     },
     "resources": {
       "type": "object",
-      "maxProperties": 512,
-      "propertyNames": {
-        "$ref": "#/$defs/id"
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/resource"
+      "additionalProperties": false,
+      "properties": {
+        "rules": {
+          "type": "object",
+          "maxProperties": 512,
+          "propertyNames": {
+            "$ref": "#/$defs/id"
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/path"
+              },
+              {
+                "$ref": "#/$defs/source"
+              }
+            ]
+          }
+        },
+        "skills": {
+          "type": "object",
+          "maxProperties": 512,
+          "propertyNames": {
+            "$ref": "#/$defs/id"
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/path"
+              },
+              {
+                "$ref": "#/$defs/source"
+              }
+            ]
+          }
+        }
       }
     }
   },
@@ -102,94 +128,6 @@
         }
       ]
     },
-    "resource": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "kind",
-        "source"
-      ],
-      "properties": {
-        "kind": {
-          "enum": [
-            "rule",
-            "skill"
-          ]
-        },
-        "source": {
-          "$ref": "#/$defs/source"
-        }
-      }
-    },
-    "condition": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "path"
-          ],
-          "properties": {
-            "type": {
-              "const": "exists"
-            },
-            "path": {
-              "$ref": "#/$defs/path"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "pattern"
-          ],
-          "properties": {
-            "type": {
-              "const": "glob"
-            },
-            "pattern": {
-              "$ref": "#/$defs/path"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "name"
-          ],
-          "properties": {
-            "type": {
-              "const": "dependency"
-            },
-            "name": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 214
-            }
-          }
-        }
-      ]
-    },
-    "skillBinding": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "id"
-      ],
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/id"
-        },
-        "preload": {
-          "type": "boolean"
-        }
-      }
-    },
     "mode": {
       "type": "object",
       "additionalProperties": false,
@@ -202,32 +140,11 @@
           "minimum": -10000,
           "maximum": 10000
         },
-        "detect": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "any"
-          ],
-          "properties": {
-            "any": {
-              "type": "array",
-              "minItems": 1,
-              "maxItems": 64,
-              "items": {
-                "$ref": "#/$defs/condition"
-              }
-            }
-          }
-        },
         "rules": {
           "$ref": "#/$defs/ids"
         },
         "skills": {
-          "type": "array",
-          "maxItems": 256,
-          "items": {
-            "$ref": "#/$defs/skillBinding"
-          }
+          "$ref": "#/$defs/ids"
         }
       }
     }
