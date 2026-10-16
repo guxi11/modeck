@@ -43,7 +43,7 @@ const locked = async <T>(home: string, root: string, action: (retain: () => void
   const parent = await parentIdentity(path);
   const handle = await open(path, "wx", 0o600).catch(() => { throw modeError("E_BUSY", "Configuration management is in progress; inspect registry.lock if interrupted", { path }); });
   const identity = await handle.stat();
-  const image = jsonImage({ owner: "modup/v1", pid: process.pid, nonce: randomUUID() });
+  const image = jsonImage({ owner: "modeck/v1", pid: process.pid, nonce: randomUUID() });
   let retained = false;
   try {
     await handle.writeFile(image.data);
@@ -123,7 +123,7 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
     const project = command === "register" ? await safeAbsolute(specified) : specified;
     if (project === root) throw modeError("E_CONFIG", "The registry directory cannot be registered as a configuration project");
     if (command === "unregister" && before.records.some(record => record?.configRoot === project)) {
-      throw modeError("E_CONFIG", "Legacy agent bindings still reference this project; run modup config before unregistering it", { project });
+      throw modeError("E_CONFIG", "Legacy agent bindings still reference this project; run modeck config before unregistering it", { project });
     }
     if (command === "register") await loadConfig({ configRoot: project });
     const exists = before.registry.projects.some(entry => entry.root === project);
@@ -142,8 +142,8 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
     ...project, enabled: selected.configs.includes(project.root),
   })) };
   const roots = registry.projects.filter(project => project.enabled).map(project => project.root);
-  const stateFor = async (index: number): Promise<string> => safeAbsolute(resolve(String(opts.state ?? process.env.MODUP_STATE
-    ?? before.records[index]?.stateRoot ?? join(home, ".local/share/modup/v1"))));
+  const stateFor = async (index: number): Promise<string> => safeAbsolute(resolve(String(opts.state ?? process.env.MODECK_STATE
+    ?? before.records[index]?.stateRoot ?? join(home, ".local/share/modeck/v1"))));
   const validationAgents = agents.filter(agent => selected.agents.includes(agent));
   const fingerprints = async () => Promise.all((validationAgents.length ? validationAgents : ["codex" as const]).map(async agent => {
     const stateRoot = await stateFor(agents.indexOf(agent));
@@ -193,7 +193,7 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
       }, Promise.resolve(true));
       const interrupted = error instanceof Error && "code" in error && error.code === "E_INSTALL_CONFLICT"
         && (await Promise.all(plans.map(async plan => {
-          try { await lstat(join(home, ".modup", plan.agent, "install.lock")); return true; }
+          try { await lstat(join(home, ".modeck", plan.agent, "install.lock")); return true; }
           catch (caught) { return !missing(caught); }
         }))).some(Boolean);
       if (!restored || interrupted) {

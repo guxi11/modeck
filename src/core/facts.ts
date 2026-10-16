@@ -10,7 +10,7 @@ import { compare, immutable } from "./values.js";
 import { regularBytes, utf8 } from "../resources/fs.js";
 
 const execute = promisify(execFile);
-const excluded = new Set([".git", "node_modules", "dist", "build", "coverage", ".next", ".turbo", ".cache", ".modup"]);
+const excluded = new Set([".git", "node_modules", "dist", "build", "coverage", ".next", ".turbo", ".cache", ".modeck"]);
 
 const gitMarker = async (directory: string): Promise<string | null> => {
   try {

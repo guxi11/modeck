@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:modup:manifest:1",
+  "$id": "urn:modeck:manifest:1",
   "type": "object",
   "additionalProperties": false,
   "required": [

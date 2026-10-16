@@ -5,7 +5,7 @@ import type { ConfigRegistry } from "../contracts/index.js";
 import { findConfigPath } from "../core/config-file.js";
 import { checkDirectory, imageJson, object, readImage, safeAbsolute } from "./fs.js";
 
-export const registryRoot = (home: string): string => join(home, ".local/share/modup/registry");
+export const registryRoot = (home: string): string => join(home, ".local/share/modeck/registry");
 export const registryPath = (root: string): string => join(root, "registry.json");
 
 export const loadRegistry = async (root: string): Promise<ConfigRegistry | null> => {

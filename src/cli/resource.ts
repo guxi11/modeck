@@ -8,7 +8,7 @@ import { snapshotLocal, writeSnapshot } from "../resources/tree.js";
 
 type Entry = Readonly<{ url: string; path: string; target: string; ref: string; commit: string; digest: string; date: string; tag: string | null }>;
 type Lock = Readonly<{ version: 1; resources: readonly Entry[] }>;
-const resourceFile = "modup-resources.json";
+const resourceFile = "modeck-resources.json";
 const validate = (root: string, entry: Entry): void => {
   requireValue(entry && [entry.url, entry.path, entry.target, entry.ref, entry.commit, entry.digest].every(value => typeof value === "string" && value.length > 0), "E_CONFIG", "Invalid external resource entry");
   requireValue((entry.date === undefined || typeof entry.date === "string" && Number.isFinite(Date.parse(entry.date)))
@@ -32,7 +32,7 @@ const readLock = async (root: string): Promise<Lock> => {
 export const manageResources = async (root: string, action: string, input: Readonly<Record<string, string | boolean>>): Promise<Lock> => {
   requireValue(["add", "init", "update"].includes(action), "E_USAGE", "Expected resource add, init or update");
   await safePath(root);
-  const mutex = join(root, ".modup-resources-busy");
+  const mutex = join(root, ".modeck-resources-busy");
   try { await mkdir(mutex); } catch { requireValue(false, "E_BUSY", "External resources are already being modified"); }
   try {
     const lock = await readLock(root);
@@ -50,7 +50,7 @@ export const manageResources = async (root: string, action: string, input: Reado
     const ignoreFile = join(root, ".gitignore");
     await safePath(ignoreFile, true);
     const ignore = await exists(ignoreFile) ? utf8((await regularBytes(ignoreFile, LIMITS.jsonBytes)).bytes) : "";
-    const staging = await mkdtemp(join(await realpath(tmpdir()), "modup-external-"));
+    const staging = await mkdtemp(join(await realpath(tmpdir()), "modeck-external-"));
     try {
       const prepared = await entries.reduce(async (pending, entry, index) => {
         const previous = await pending;
@@ -88,7 +88,7 @@ export const manageResources = async (root: string, action: string, input: Reado
         await pending;
         if (!item.staged) return;
         await mkdir(dirname(item.target), { recursive: true });
-        const sibling = await mkdtemp(join(dirname(item.target), ".modup-resource-"));
+        const sibling = await mkdtemp(join(dirname(item.target), ".modeck-resource-"));
         try {
           // Copy into a sibling before replacement so rename stays on the target filesystem.
           const { cp } = await import("node:fs/promises");

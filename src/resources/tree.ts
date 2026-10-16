@@ -7,7 +7,7 @@ import { childPath, compare, regularBytes, requireValue, safePath } from "./fs.j
 export type FileData = { readonly path: string; readonly bytes: Uint8Array; readonly executable: boolean };
 export type Snapshot = { readonly entries: readonly TreeEntry[]; readonly files: ReadonlyMap<string, FileData>; readonly treeDigest: string };
 
-export const treeDigest = (entries: readonly TreeEntry[]): string => sha256(Buffer.from(`modup-tree-v1\n${canonical(entries)}`));
+export const treeDigest = (entries: readonly TreeEntry[]): string => sha256(Buffer.from(`modeck-tree-v1\n${canonical(entries)}`));
 
 export const validateEntries = (entries: readonly TreeEntry[], maxEntries: number = LIMITS.treeEntries,
   maxBytes: number = LIMITS.treeBytes): void => {

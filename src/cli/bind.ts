@@ -34,7 +34,7 @@ export const selectAgents = async (operation: "bind" | "unbind" | "render", home
   }))).flat();
   if (!candidates.length) {
     if (operation === "render") throw modeError("E_USAGE", "No installed or bound agents found; use --agent <claude|codex|codebuddy>");
-    process.stderr.write(`No ${operation === "bind" ? "installed agents" : "modup bindings"} found in ${home}; no changes made.\n`);
+    process.stderr.write(`No ${operation === "bind" ? "installed agents" : "modeck bindings"} found in ${home}; no changes made.\n`);
     return [];
   }
   const controller = new AbortController();

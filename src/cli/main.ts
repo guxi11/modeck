@@ -21,7 +21,7 @@ import { imageJson, object, readImage, safeAbsolute } from "../integration/fs.js
 import { parseEvent, runMarker } from "../integration/hooks.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
-const help = "Usage: modup <command> [options]\n\nCommands:\n"
+const help = "Usage: modeck <command> [options]\n\nCommands:\n"
   + "  res <add|init|update>  Manage external resources\n  init                   Initialize configuration\n"
   + "  scan                   Import resources from agent homes\n  migrate                Migrate existing configuration\n"
   + "  sync                   Synchronize resources\n  resolve                Resolve context\n"
@@ -30,13 +30,13 @@ const help = "Usage: modup <command> [options]\n\nCommands:\n"
   + "  config                 Manage registered configurations\n  run                    Run an agent with context\n\n"
   + "Options:\n  -h, --help              Show help\n  -v, --version           Show version\n";
 const commandHelp: Readonly<Record<string, string>> = {
-  init: "Usage: modup init [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
-  scan: "Usage: modup scan [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
-  migrate: "Usage: modup migrate [--config <dir>] [--mode <name>] [--list | --answers <file>] [-h|--help]\n",
-  register: "Usage: modup register [--config <dir>] [--target-home <dir>] [-h|--help]\n",
-  unregister: "Usage: modup unregister [--config <dir>] [--target-home <dir>] [-h|--help]\n",
-  config: "Usage: modup config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--dry-run] [--expect <digest>] [-h|--help]\n",
-  resource: "Usage: modup res <add|init|update> [--config <dir>] [--url <url> --path <source-path> --target <dir> --ref <ref>] [-h|--help]\n",
+  init: "Usage: modeck init [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
+  scan: "Usage: modeck scan [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
+  migrate: "Usage: modeck migrate [--config <dir>] [--mode <name>] [--list | --answers <file>] [-h|--help]\n",
+  register: "Usage: modeck register [--config <dir>] [--target-home <dir>] [-h|--help]\n",
+  unregister: "Usage: modeck unregister [--config <dir>] [--target-home <dir>] [-h|--help]\n",
+  config: "Usage: modeck config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--dry-run] [--expect <digest>] [-h|--help]\n",
+  resource: "Usage: modeck res <add|init|update> [--config <dir>] [--url <url> --path <source-path> --target <dir> --ref <ref>] [-h|--help]\n",
 };
 const values: Readonly<Record<string, readonly string[]>> = {
   resource: ["config", "url", "path", "target", "ref"],
@@ -137,7 +137,7 @@ export const main = async (argv: string[]): Promise<number> => {
         ? (await Promise.all((["claude", "codex", "codebuddy"] as const).map(agent => loadRecord(homedir(), agent))))
           .find(candidate => candidate && (candidate.configRoot === configRoot || roots.includes(candidate.configRoot)))
         : record;
-      return { configRoot, stateRoot: await pathFor(String(opts.state ?? process.env.MODUP_STATE ?? fallback?.stateRoot ?? join(homedir(), ".local/share/modup/v1"))) };
+      return { configRoot, stateRoot: await pathFor(String(opts.state ?? process.env.MODECK_STATE ?? fallback?.stateRoot ?? join(homedir(), ".local/share/modeck/v1"))) };
     };
     const format = String(opts.format ?? "text");
     if (!["text", "json"].includes(format)) throw modeError("E_USAGE", "Unknown output format");
@@ -167,7 +167,7 @@ export const main = async (argv: string[]): Promise<number> => {
     if (command === "sync") {
       const records = await Promise.all((["claude", "codex", "codebuddy"] as const).map(agent => loadRecord(homedir(), agent)));
       const roots = await configRoots(configRoot);
-      const states = opts.state !== undefined || process.env.MODUP_STATE !== undefined ? [stateRoot]
+      const states = opts.state !== undefined || process.env.MODECK_STATE !== undefined ? [stateRoot]
         : [...new Set(records.flatMap(record => record && (record.configRoot === configRoot || roots.includes(record.configRoot)) ? [record.stateRoot] : []))];
       const requests = roots.flatMap(root => (states.length ? states : [stateRoot]).map(stateRoot => ({ root, stateRoot })));
       const results = await requests.reduce(async (pending, { root, stateRoot }) => {
@@ -205,7 +205,7 @@ export const main = async (argv: string[]): Promise<number> => {
   } catch (caught) {
     const error = caught instanceof Error && "code" in caught && String(caught.code).startsWith("E_") ? caught as ModeError
       : modeError("E_IO", "Operation failed", { cause: String(caught) });
-    process.stderr.write(`modup: ${error.message} [${error.code}]\n`);
+    process.stderr.write(`modeck: ${error.message} [${error.code}]\n`);
     return exitFor(error, command === "hook");
   }
 };

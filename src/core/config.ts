@@ -15,7 +15,7 @@ export const configIdentity = (root: string, config: Config, sources?: readonly 
     sources: sources.map(source => ({ path: relative(root, source.path).split("\\").join("/"), digest: source.digest })) } : config)));
 
 export const validateConfig = async (context: ConfigContext): Promise<void> => {
-  const sources = context.configSources ?? [{ path: join(context.configRoot, "modup.yaml"), digest: context.rawConfigDigest }];
+  const sources = context.configSources ?? [{ path: join(context.configRoot, "modeck.yaml"), digest: context.rawConfigDigest }];
   await Promise.all(sources.map(async source => {
     const { bytes } = await regularBytes(source.path, LIMITS.fileBytes);
     if (sha256(bytes) !== source.digest) throw modeError("E_CONFIG", "Configuration or imported plugin changed after loading", { path: source.path });
@@ -30,10 +30,10 @@ export const loadConfig = async ({ configRoot, facts }: LoadConfigRequest): Prom
     const root = await safePath(configRoot);
     if (!(await lstat(root)).isDirectory()) throw modeError("E_PATH", "Config root must be a directory", { path: root });
     const configPath = await findConfigPath(root);
-    if (!configPath) throw modeError("E_CONFIG", "Configuration file is missing; specify --config <dir> containing modup.yaml or modup.yml, or run modup init in that directory", { path: configPath });
+    if (!configPath) throw modeError("E_CONFIG", "Configuration file is missing; specify --config <dir> containing modeck.yaml or modeck.yml, or run modeck init in that directory", { path: configPath });
     const { bytes } = await regularBytes(configPath, LIMITS.jsonBytes);
     const loaded = await readConfigFile(configPath);
-    const autoPath = join(root, "modep-auto.mjs");
+    const autoPath = join(root, "modeck-auto.mjs");
     const selection = await exists(autoPath) ? await automaticModes(autoPath, facts) : undefined;
     const config = parseConfig(loaded.config);
     if (Object.hasOwn(config.modes, "auto")) throw modeError("E_CONFIG", "auto is reserved for automatic mode selection");
@@ -51,7 +51,7 @@ export const loadConfig = async ({ configRoot, facts }: LoadConfigRequest): Prom
     await validateConfig(context);
     return context;
   } catch (error) {
-    if (missing(error)) throw modeError("E_CONFIG", "Configuration directory is unavailable; restore it or specify --config <dir> containing modup.yaml or modup.yml", { path: configRoot });
+    if (missing(error)) throw modeError("E_CONFIG", "Configuration directory is unavailable; restore it or specify --config <dir> containing modeck.yaml or modeck.yml", { path: configRoot });
     if (error instanceof Error && "code" in error && String(error.code).startsWith("E_")) throw error;
     throw modeError("E_CONFIG", "Cannot load configuration", { path: configRoot, cause: String(error) });
   }

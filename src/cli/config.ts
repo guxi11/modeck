@@ -16,7 +16,7 @@ export const configRootFor = async (home: string, cwd: string, explicit?: string
   if (roots[0]) return safeAbsolute(roots[0]);
   const root = await safeAbsolute(resolve(cwd));
   if (await findConfigPath(root)) return root;
-  throw modeError("E_CONFIG", "No modup configuration found; use --config <dir>, or initialize and register a configuration directory, then run modup config");
+  throw modeError("E_CONFIG", "No modeck configuration found; use --config <dir>, or initialize and register a configuration directory, then run modeck config");
 };
 
 export const projectRootFor = async (home: string, cwd: string, explicit?: string): Promise<string> => {

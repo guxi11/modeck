@@ -76,7 +76,7 @@ const resourceImage = async (request: ReadResourcesRequest, stateRoot: string, i
   if (spec.source.type === "git" && sync !== "update") {
     const cached = await cachedGit(request, stateRoot, id, spec);
     if (cached) return { manifestResource: cached, verified: await readObject(stateRoot, cached) };
-    requireValue(sync !== null, "E_RESOURCE_MISSING", "Git resource is not cached; run modup sync", { id });
+    requireValue(sync !== null, "E_RESOURCE_MISSING", "Git resource is not cached; run modeck sync", { id });
   }
   const fetched = spec.source.type === "git" ? await gitSnapshot(request.context, stateRoot, spec)
     : { snapshot: await localSnapshot(request.context, spec), commit: null };

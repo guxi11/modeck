@@ -50,13 +50,13 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
   const root = await safePath(initial ? options.configRoot ?? cwd : await projectRootFor(home, cwd, options.configRoot));
   await checkDirectory(root);
   requireValue((await lstat(root)).isDirectory(), "E_PATH", "Configuration root must be an existing directory");
-  const homeRoot = join(home, ".modup");
+  const homeRoot = join(home, ".modeck");
   const existingConfigPath = await findConfigPath(root);
-  const configPath = existingConfigPath ?? join(root, "modup.yaml");
-  const autoPath = join(root, "modep-auto.mjs");
+  const configPath = existingConfigPath ?? join(root, "modeck.yaml");
+  const autoPath = join(root, "modeck-auto.mjs");
   const context = existingConfigPath ? await loadConfig({ configRoot: root }) : null;
   requireValue(initial || context, "E_CONFIG", "No configuration found; run init in the management repository first, or use --config");
-  requireValue(context || !await exists(autoPath), "E_PATH", "modep-auto.mjs already exists without a modup configuration");
+  requireValue(context || !await exists(autoPath), "E_PATH", "modeck-auto.mjs already exists without a modeck configuration");
   const scan = await scanHome(home, selectedAgents);
   const referenceScan = await scanCatalogReferences(home);
   const pending = (await Promise.all(scan.resources.map(async resource => await imported(resource, context, homeRoot) ? [] : [resource]))).flat();
@@ -72,7 +72,7 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
   const choices = !pending.length ? [] : await selections(discovered, options.answers, async selected => {
     const plan = await planBackups(scan, selected.map(choice => choice.id), root, true, referenceScan);
     return `Destinations (copied and verified first)\n  ${homeRoot}\n  ${root}\n\n`
-      + `Back up ${plan.entries.length} native entries\n  ${join(root, ".modup", "backups")}/<batch>\n`
+      + `Back up ${plan.entries.length} native entries\n  ${join(root, ".modeck", "backups")}/<batch>\n`
       + plan.entries.map(item => `  ${item.source}`).join("\n")
       + `\n\nRetain ${plan.skipped.length} managed/shared entries\n`
       + plan.skipped.map(item => `  ${item.path}\n    ${item.reason}`).join("\n");
@@ -174,7 +174,7 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
       }, Promise.resolve());
     }, Promise.resolve());
     if (!context) await write(autoPath, Buffer.from("export default ({ cwd, boundary, files, dependencies }) => [];\n"), 0o644);
-    const staged = join(root, `.modup-scan-${randomUUID()}${extname(configPath)}`);
+    const staged = join(root, `.modeck-scan-${randomUUID()}${extname(configPath)}`);
     await write(staged, Buffer.from(updated), original?.mode ?? 0o644);
     parseConfig((await readConfigFile(staged)).config);
     check();
@@ -189,7 +189,7 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
       cwd: root, boundary: root, files: [], dependencies: [],
       selector: { path: join(root, ".modes"), value: { auto: false, add: [] } },
     } });
-    await readResources({ context: imported, stateRoot: join(home, ".local/share/modup/v1"), parseManifest,
+    await readResources({ context: imported, stateRoot: join(home, ".local/share/modeck/v1"), parseManifest,
       resourceIds: selection.resources.map(resource => resource.id) });
     await verify();
     await validateConfig(imported);

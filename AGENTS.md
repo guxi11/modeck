@@ -1,4 +1,4 @@
-# modup
+# modeck
 
 将配置目录中的 rules、skills 和 modes 编译为 Claude Code、Codex、CodeBuddy Code CLI 的会话上下文，通过原生 SessionStart hook 接入。
 
@@ -16,7 +16,7 @@
 - Node.js >= 20，npm，TypeScript 严格模式，ESM / NodeNext；源码内相对导入使用 `.js` 扩展名。
 - 修改源码后运行 `npm run typecheck`；涉及打包或 CLI 入口时运行 `npm run build`。`dist/` 是生成产物，不直接修改。
 - 当前没有 `npm test` 脚本；未经明确要求不添加测试代码。
-- 配置入口是 `modup.mjs`，自动选择脚本默认是 `modep-auto.mjs`；保持这一现有拼写。
+- 配置入口是 `modeck.yaml` 或 `modeck.yml`，自动选择脚本默认是 `modeck-auto.mjs`。
 
 ## 修改约束
 

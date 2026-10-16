@@ -10,11 +10,11 @@ import type { ParentIdentity } from "./fs.js";
 import { hookGroup } from "./hooks.js";
 import { prepare } from "./prepare.js";
 
-const owner = "modup/v1" as const;
+const owner = "modeck/v1" as const;
 const locations = (agent: Agent) => ({
   hook: agent === "codex" ? ".codex/hooks.json" : `.${agent}/settings.json`,
-  private: `.modup/${agent}`,
-  record: `.modup/${agent}/install.json`, lock: `.modup/${agent}/install.lock`,
+  private: `.modeck/${agent}`,
+  record: `.modeck/${agent}/install.json`, lock: `.modeck/${agent}/install.lock`,
 });
 const diagnostic = (code: string, message: string, path: string | null = null): Diagnostic => ({ code, message, path });
 const conflict = (message: string, path?: string): never => { throw modeError("E_INSTALL_CONFLICT", message, path ? { path } : {}); };
@@ -103,7 +103,7 @@ export const loadRecord = async (home: string, agent: Agent): Promise<BindRecord
   const group = object(value.hookGroup);
   if (!Array.isArray(group.hooks) || group.hooks.length !== 1 || typeof object(group.hooks[0]).command !== "string") return conflict("Invalid owned hook group");
   const runtime = `${loc.private}/runtime/${value.runtimeDigest}`;
-  const cli = `${runtime}/dist/bin/modup.mjs`;
+  const cli = `${runtime}/dist/bin/modeck.mjs`;
   if (!files.some(file => file.path === cli) || files.some(file => !file.path.startsWith(`${runtime}/`))) {
     return conflict("Manifest runtime identity does not match owned files");
   }
@@ -134,8 +134,8 @@ const verifyOwned = async (home: string, agent: Agent, record: BindRecord | null
       catch (error) { if (missing(error)) return null; throw error; }
     }));
     const existing = occupied.find(path => path !== null);
-    if (existing) return conflict("Unrecorded modup destination already exists", existing);
-    if (canonical(groups).includes(join(home, loc.private, "runtime"))) return conflict("Unrecorded modup hook already exists");
+    if (existing) return conflict("Unrecorded modeck destination already exists", existing);
+    if (canonical(groups).includes(join(home, loc.private, "runtime"))) return conflict("Unrecorded modeck hook already exists");
     return;
   }
   const files = (await treeFiles(home, `${loc.private}/runtime`)).map(path => `${loc.private}/runtime/${path}`);
@@ -155,7 +155,7 @@ const basePlan = async (agent: Agent, targetHome: string, operation: BindPlan["o
   const inline = agent === "codex" ? await readImage(join(home, ".codex/config.toml"), LIMITS.jsonBytes).catch(() => null) : null;
   const warnings = agent === "codex" ? [diagnostic("CODEX_HOOK_TRUST", "Review and trust the installed definition in Codex /hooks; installation does not grant trust."),
     ...(inline && /\[\[?\s*hooks(?:\s*\.|\s*\])/.test(data(inline).toString("utf8"))
-      ? [diagnostic("CODEX_INLINE_HOOKS", "Inline Codex hooks also load; review all sources to avoid duplicated modup hooks.")] : [])]
+      ? [diagnostic("CODEX_INLINE_HOOKS", "Inline Codex hooks also load; review all sources to avoid duplicated modeck hooks.")] : [])]
     : [diagnostic("HOOK_FAILURE_NONBLOCKING", "Claude waits for SessionStart, but hook failures do not guarantee blocking the first request.")];
   try {
     await checkDirectory(home); await lockCheck(home, agent);
@@ -178,16 +178,16 @@ export const planBind = async ({ agent, targetHome, configRoot, configRoots, sta
   await prepare({ agent, configRoot, ...(configRoots !== undefined ? { configRoots } : {}), stateRoot, cwd: await realpath(process.cwd()) });
   return basePlan(agent, targetHome, "bind", async (home, before, previous) => {
     const loc = locations(agent);
-    const packagePaths = ["dist/bin/modup.mjs", "package.json", "schemas/modes.schema.json", "schemas/manifest.schema.json"].sort();
+    const packagePaths = ["dist/bin/modeck.mjs", "package.json", "schemas/modes.schema.json", "schemas/manifest.schema.json"].sort();
     const packageFiles = await Promise.all(packagePaths.map(async path => {
       const image = await readImage(join(runtimeRoot, path));
       if (!image) return conflict("Required runtime asset is missing", path);
-      return { path, image: { ...image, mode: path === "dist/bin/modup.mjs" || image.mode & 0o111 ? 0o755 : 0o644 } };
+      return { path, image: { ...image, mode: path === "dist/bin/modeck.mjs" || image.mode & 0o111 ? 0o755 : 0o644 } };
     }));
     const runtimeDigest = sha256(Buffer.from(canonical(packageFiles.map(file => ({ path: file.path, digest: digest(file.image), mode: file.image.mode })))));
     const runtime = `${loc.private}/runtime/${runtimeDigest}`;
     const owned = packageFiles.map(file => ({ path: `${runtime}/${file.path}`, image: file.image }));
-    const group = hookGroup(agent, homePath(home, `${runtime}/dist/bin/modup.mjs`), configRoot, stateRoot);
+    const group = hookGroup(agent, homePath(home, `${runtime}/dist/bin/modeck.mjs`), configRoot, stateRoot);
     const { root, groups } = shared(before);
     if (previous && previous.runtimeDigest === runtimeDigest && canonical(previous.hookGroup) === canonical(group)
       && canonical(previous.files.map(file => file.path).sort()) === canonical(owned.map(file => file.path).sort())) return [];

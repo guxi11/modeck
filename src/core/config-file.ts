@@ -4,11 +4,11 @@ import { LIMITS, modeError, sha256 } from "../contracts/index.js";
 import { exists, regularBytes, utf8 } from "../resources/fs.js";
 
 export const findConfigPath = async (root: string): Promise<string | undefined> => {
-  const paths = (await Promise.all(["modup.yaml", "modup.yml"].map(async name => {
+  const paths = (await Promise.all(["modeck.yaml", "modeck.yml"].map(async name => {
     const path = join(root, name);
     return await exists(path) ? [path] : [];
   }))).flat();
-  if (paths.length > 1) throw modeError("E_CONFIG", "Multiple configuration files found; keep one modup.yaml or modup.yml", { paths });
+  if (paths.length > 1) throw modeError("E_CONFIG", "Multiple configuration files found; keep one modeck.yaml or modeck.yml", { paths });
   return paths[0];
 };
 

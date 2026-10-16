@@ -29,7 +29,7 @@ export const migrate = async (request: { readonly cwd: string; readonly configRo
   requireValue(modes.length > 0, "E_USAGE", "No current mode; select a destination with --mode <name>");
   const choices = await selections(scan, request.answers, async selected => {
     const plan = await planBackups(scan, selected.map(choice => choice.id), configRoot);
-    return `Bind to modes: ${modes.join(", ")}\nBackup destination: ${join(configRoot, ".modup", "backups")}/<batch>\n${plan.entries.map(item => `Back up: ${item.source}`).join("\n")}\n${plan.skipped.map(item => `Retain: ${item.path} (${item.reason})`).join("\n")}`;
+    return `Bind to modes: ${modes.join(", ")}\nBackup destination: ${join(configRoot, ".modeck", "backups")}/<batch>\n${plan.entries.map(item => `Back up: ${item.source}`).join("\n")}\n${plan.skipped.map(item => `Retain: ${item.path} (${item.reason})`).join("\n")}`;
   });
   if (!choices.length) return { configRoot, modes, resources: [], backupDirectory: null, backups: [], retained: [] };
   const backupPlan = await planBackups(scan, choices.map(choice => choice.id), configRoot);
@@ -43,7 +43,7 @@ export const migrate = async (request: { readonly cwd: string; readonly configRo
   const updated = addSkillBindings(utf8(original), paths, modes);
   const configMode = (await lstat(configPath)).mode & 0o777;
   const created: string[] = [];
-  const staged = join(configRoot, ".modup", `migrate-${randomUUID()}${extname(configPath)}`);
+  const staged = join(configRoot, ".modeck", `migrate-${randomUUID()}${extname(configPath)}`);
   let installed = false;
   try {
     await choices.reduce(async (pending, choice) => {
@@ -71,7 +71,7 @@ export const migrate = async (request: { readonly cwd: string; readonly configRo
     await mkdir(dirname(staged), { recursive: true, mode: 0o700 });
     await writeFile(staged, updated, { flag: "wx", mode: configMode });
     // Stage beside the original so all relative imports retain their meaning.
-    const sibling = join(configRoot, `.modup-migrate-${randomUUID()}${extname(configPath)}`);
+    const sibling = join(configRoot, `.modeck-migrate-${randomUUID()}${extname(configPath)}`);
     try {
       await rename(staged, sibling);
       const { parseConfig } = await import("../core/index.js");

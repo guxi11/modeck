@@ -14,7 +14,7 @@ export type BackupPlan = { readonly entries: readonly { readonly source: string;
   readonly skipped: readonly { readonly path: string; readonly reason: string }[] };
 
 export const planBackups = async (scan: ScanResult, ids: readonly string[], configRoot: string, includeRules = false, catalogReferences?: CatalogReferenceScan): Promise<BackupPlan> => {
-  const protectedRoots = [configRoot, join(scan.home, ".modup"), ...scan.manifests.map(item => item.root)];
+  const protectedRoots = [configRoot, join(scan.home, ".modeck"), ...scan.manifests.map(item => item.root)];
   const selected = scan.resources.filter(item => (includeRules || item.kind === "skill") && ids.includes(item.id));
   const initialPlan = await selected.reduce(async (pending, resource) => {
     const current = await pending;
@@ -72,13 +72,13 @@ export const restoreBackups = async (entries: readonly Backup[]): Promise<void> 
 
 export const backupSkills = async (configRoot: string, plan: BackupPlan, checkExternal: () => void | Promise<void> = () => undefined): Promise<{ readonly directory: string | null; readonly entries: readonly Backup[] }> => {
   if (!plan.entries.length) return { directory: null, entries: [] };
-  const directory = join(configRoot, ".modup", "backups", `${Date.now()}-${randomUUID()}`);
+  const directory = join(configRoot, ".modeck", "backups", `${Date.now()}-${randomUUID()}`);
   await safePath(directory, true);
   await checkDirectory(configRoot);
-  await checkDirectory(join(configRoot, ".modup"));
-  await checkDirectory(join(configRoot, ".modup", "backups"));
+  await checkDirectory(join(configRoot, ".modeck"));
+  await checkDirectory(join(configRoot, ".modeck", "backups"));
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const ignore = join(configRoot, ".modup", ".gitignore");
+  const ignore = join(configRoot, ".modeck", ".gitignore");
   if (!await exists(ignore)) await writeFile(ignore, "*\n", { flag: "wx", mode: 0o600 });
   const moved: Backup[] = [];
   await Promise.all(plan.entries.map(entry => checkDirectory(dirname(entry.source))));
