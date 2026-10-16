@@ -18,8 +18,8 @@ import { data, imageJson, object, readImage, safeAbsolute } from "../integration
 import { parseEvent, runMarker } from "../integration/hooks.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
-const help = "modup <resource|init|scan|migrate|sync|resolve|render|hook|bind|unbind|run> [options]\n"
-  + "resource <add|init|update> [--config <dir>] [--url <url> --path <source-path> --target <dir> --ref <ref>]\n"
+const help = "modup <res|init|scan|migrate|sync|resolve|render|hook|bind|unbind|run> [options]\n"
+  + "res <add|init|update> [--config <dir>] [--url <url> --path <source-path> --target <dir> --ref <ref>]\n"
   + "init|scan [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>]\n"
   + "migrate [--config <dir>] [--mode <name>] [--list | --answers <file>]\n"
   + "bind|unbind [--agent <claude|codex|codebuddy>] [--config <dir>] [--dry-run] [--expect <digest>]\n";
@@ -107,7 +107,7 @@ const exitFor = (error: ModeError, hook: boolean): number => {
 };
 
 export const main = async (argv: string[]): Promise<number> => {
-  const command = argv[0] ?? "--help";
+  const command = argv[0] === "res" ? "resource" : argv[0] ?? "--help";
   try {
     if (command === "--help") { process.stdout.write(help); return 0; }
     if (command === "--version") { process.stdout.write(`${await packageVersion()}\n`); return 0; }
@@ -115,7 +115,7 @@ export const main = async (argv: string[]): Promise<number> => {
     if (!Object.hasOwn(values, command)) throw modeError("E_USAGE", "Unknown command", { command });
     const separator = argv.indexOf("--", 1);
     if (separator >= 0 && command !== "run") throw modeError("E_USAGE", "Only run accepts agent arguments");
-    const opts = options(command, argv.slice(command === "resource" ? 2 : 1, separator < 0 ? undefined : separator));
+    const opts = options(command, argv.slice(command === "resource" && !argv[1]?.startsWith("--") ? 2 : 1, separator < 0 ? undefined : separator));
     if (opts.help) { process.stdout.write(help); return 0; }
     if (command === "resource") {
       json(await manageResources(await pathFor(String(opts.config ?? process.cwd())), argv[1] ?? "", opts)); return 0;

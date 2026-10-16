@@ -76,6 +76,41 @@ modes:
 
 路径相对于配置目录：rule 是 Markdown 文件，skill 是包含 `SKILL.md` 的目录。`defaults` 中的 mode 始终加载，无需再通过 `extends` 继承。`extends` 用来复用其他非默认 mode 的配置。
 
+## 添加和更新外部资源
+
+用 `modup res` 管理 Git 仓库中的资源目录，需要安装 Git。在配置目录运行以下命令，添加一个外部 skill：
+
+```sh
+modup res add \
+  --url https://github.com/wondelai/skills.git \
+  --path technical-documentation \
+  --target skills/technical-documentation
+```
+
+`--path` 是仓库中的源目录，省略时取仓库根目录；`--target` 是配置目录中的目标路径。可用 `--ref` 指定分支、标签或 commit，默认跟踪 `HEAD`。
+
+命令下载指定目录，将目标加入 `.gitignore`，并在 `modup-resources.json` 中记录地址、路径、ref、commit、摘要、commit 时间 `date` 和标签 `tag`（没有标签时为 `null`）。提交这份清单和 `.gitignore`，即可在其他机器还原资源，无需 Git submodule。
+
+下载后，在 `modup.yaml` 的 `resources.skills` 中登记目标路径，并将 skill 加入需要的 mode，才会加载：
+
+```yaml
+resources:
+  skills:
+    technical-documentation: skills/technical-documentation
+modes:
+  writing:
+    skills: [technical-documentation]
+```
+
+将这些条目合并到已有的同名配置项中。之后在配置目录按清单初始化，或更新到所跟踪 ref 的版本：
+
+```sh
+modup res init
+modup res update
+```
+
+`init` 按记录的 commit 和摘要还原缺失目录；`update` 更新资源和清单。已有目录若包含本地修改，命令会拒绝覆盖。命令输出 JSON 资源清单；在其他目录运行时，用 `--config` 指定配置目录。原命令 `modup resource` 仍可使用。
+
 ## 让目录自动选择工作方式
 
 在 `modep-auto.mjs` 中定义选择逻辑。例如，让包含 `package.json` 的项目选择 `prog`，其他目录选择 `writing`：
