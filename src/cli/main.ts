@@ -3,8 +3,8 @@ import { access, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonical, LIMITS, modeError, parseJson, sha256 } from "../contracts/index.js";
-import type { Agent, ImportConfigRequest, InstallPlan, ModeError, ResourceLock, VerifiedResourceSet } from "../contracts/index.js";
+import { LIMITS, modeError, parseJson } from "../contracts/index.js";
+import type { Agent, ImportConfigRequest, InstallPlan, ModeError, VerifiedResourceSet } from "../contracts/index.js";
 import { loadConfig, parseConfig, parseLock } from "../core/index.js";
 import { importConfig, initConfig, scanHome, syncResources } from "../resources/index.js";
 import { migrate } from "./migrate.js";
@@ -17,7 +17,7 @@ const help = "modup <init|import|scan|migrate|sync|resolve|render|hook|install|u
   + "--config <dir>  --state <dir>  --agent <codex|claude>\n"
   + "init --dir <new-dir> | import --from <git-url> --dir <new-dir> [--ref HEAD]\n"
   + "scan --home <HOME> --format json | migrate --home <HOME> --config <existing-repo> [--bindings <JSON>] [--apply --expect <digest>]\n"
-  + "sync [--frozen|--update] | resolve [--cwd <dir>] | render --agent <agent> [--cwd <dir>] [--format text|json]\n"
+  + "sync [--update] | resolve [--cwd <dir>] | render --agent <agent> [--cwd <dir>] [--format text|json]\n"
   + "hook --agent <agent> (SessionStart JSON on stdin)\n"
   + "install|uninstall --agent <agent> --target-home <HOME-root> [--format text|json] [--apply [--expect <digest>]]\n"
   + "run --agent <agent> [--cwd <dir>] [--executable <path>] -- <agent arguments>\n";
@@ -88,15 +88,6 @@ const executableFor = async (agent: Agent, supplied?: string): Promise<string> =
   if (found === self) throw modeError("E_WRAPPER_CONFLICT", "Wrapper cannot launch itself");
   return found;
 };
-const validateImportedLock = (lock: ResourceLock, config: Awaited<ReturnType<typeof loadConfig>>["config"]): void => {
-  if (lock.resourceSpecDigest !== sha256(Buffer.from(canonical(config.resources)))
-    || canonical(lock.resources.map(resource => resource.id)) !== canonical(Object.keys(config.resources).sort())
-    || lock.resources.some(resource => {
-      const spec = config.resources[resource.id];
-      return !spec || spec.kind !== resource.kind || resource.sourceDigest !== sha256(Buffer.from(canonical(spec)))
-        || (spec.source.type === "git") !== (resource.commit !== null);
-    })) throw modeError("E_LOCK_MISMATCH", "Imported lock does not match configuration");
-};
 const showPlan = (plan: InstallPlan, format: string): void => {
   if (format === "json") { json(plan); return; }
   process.stdout.write(`${plan.operation} ${plan.agent} ${plan.targetHome}\nplan: ${plan.planDigest}\n`);
@@ -148,9 +139,7 @@ export const main = async (argv: string[]): Promise<number> => {
     if (command === "import") {
       const destination = await pathFor(required(opts, "dir"));
       const request: ImportConfigRequest = { destination, url: required(opts, "from"), ref: String(opts.ref ?? "HEAD"), validate: async stagingRoot => {
-        const context = await loadConfig({ configRoot: stagingRoot });
-        const image = await readImage(join(stagingRoot, "modes.lock.json"), LIMITS.lockBytes);
-        if (image) validateImportedLock(parseLock(imageJson(image)), context.config);
+        await loadConfig({ configRoot: stagingRoot });
       } };
       const imported = await importConfig(request);
       json({ schemaVersion: 1, configRoot: imported }); return 0;
@@ -166,9 +155,9 @@ export const main = async (argv: string[]): Promise<number> => {
     }
     const { configRoot, stateRoot } = await configured();
     if (command === "sync") {
-      if (opts.update && opts.frozen) throw modeError("E_USAGE", "update and frozen are mutually exclusive");
+      if (opts.frozen) throw modeError("E_USAGE", "--frozen is unsupported without a modup version lock; manage versions in Git or your package manager");
       const result: VerifiedResourceSet = await syncResources({ context: await loadConfig({ configRoot }), stateRoot,
-        mode: opts.update ? "update" : opts.frozen ? "frozen" : "reuse", parseLock });
+        mode: opts.update ? "update" : "reuse", parseLock });
       json({ schemaVersion: 1, configDigest: result.configDigest, lockDigest: result.lockDigest,
         resources: result.lock.resources.map(({ id, treeDigest, commit }) => ({ id, treeDigest, commit })) }); return 0;
     }

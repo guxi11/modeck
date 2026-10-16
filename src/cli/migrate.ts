@@ -11,6 +11,9 @@ import { snapshotLocal } from "../resources/tree.js";
 
 type Request = { readonly home: string; readonly configRoot: string; readonly bindings?: unknown; readonly apply: boolean; readonly expect?: string };
 type Desired = { readonly path: string; readonly kind: "file" | "directory"; readonly digest: string | null; readonly executable: boolean; readonly bytes?: Uint8Array };
+const metadata = ["modes.json", "modes.lock.json", "modup.bindings.json", "modup-migration.json", ".modup-sync.lock",
+  ".modup/.gitignore", ".modup/bindings.json", ".modup/migration.json", ".modup/verification.json", ".modup/legacy-lock.json"];
+const auxiliaryIgnores = ["/bindings.json", "/migration.json", "/verification.json", "/legacy-lock.json"];
 const digest = (value: unknown): string => sha256(Buffer.from(canonical(value)));
 const jsonBytes = (value: unknown, limit: number): Buffer => {
   const bytes = Buffer.from(`${JSON.stringify(JSON.parse(canonical(value)) as unknown, null, 2)}\n`);
@@ -75,9 +78,9 @@ export const migrate = async (request: Request): Promise<unknown> => {
       await pending;
       const local = item.sources.find(source => within(configRoot, source));
       const destination = local ? relative(configRoot, local).split("\\").join("/")
-        : `modup-resources/${item.kind}/${item.id}${item.kind === "rule" ? ".md" : ""}`;
+        : `.modup/resources/${item.kind}/${item.id}${item.kind === "rule" ? ".md" : ""}`;
       checkRelativePath(destination, false);
-      requireValue(!["modes.json", "modes.lock.json", "modup-migration.json", ".modup-sync.lock"].includes(destination),
+      requireValue(!metadata.some(path => path === destination || item.kind === "skill" && path.startsWith(`${destination}/`)),
         "E_PATH", "Resource overlaps migration metadata");
       const spec: ResourceSpec = { kind: item.kind, source: { type: "local", path: destination } };
       if (specs[item.id] && canonical(specs[item.id]) !== canonical(spec)) conflicts.push({ path: item.id, reason: "Existing resource descriptor differs" });
@@ -108,7 +111,17 @@ export const migrate = async (request: Request): Promise<unknown> => {
     // Preserve existing user formatting if its normalized configuration matches.
     const configBytes = previous !== null && canonical(base) === canonical(config)
       ? (await regularBytes(configPath, LIMITS.jsonBytes)).bytes : jsonBytes(config, LIMITS.jsonBytes);
-    [ { path: "modes.json", bytes: configBytes }, { path: "modup-migration.json", bytes: jsonBytes(manifest, LIMITS.lockBytes) } ]
+    const ignorePath = join(configRoot, ".modup/.gitignore");
+    const ignoreBytes = await exists(ignorePath) ? (await regularBytes(ignorePath, LIMITS.jsonBytes)).bytes : null;
+    const ignoreText = ignoreBytes === null ? "" : utf8(ignoreBytes);
+    const missingIgnores = auxiliaryIgnores.filter(pattern => !ignoreText.split(/\r?\n/).includes(pattern));
+    // Existing ignore policies are user-owned; additions are shown as a conflict instead of silently overwriting them.
+    const desiredIgnores = missingIgnores.length === 0 && ignoreBytes !== null ? ignoreBytes
+      : Buffer.from(`${ignoreText}${ignoreText && !ignoreText.endsWith("\n") ? "\n" : ""}${missingIgnores.join("\n")}\n`);
+    [ { path: "modes.json", bytes: configBytes },
+      { path: ".modup/migration.json", bytes: jsonBytes(manifest, LIMITS.lockBytes) },
+      { path: ".modup/bindings.json", bytes: jsonBytes({ defaults: config.defaults, modes: config.modes }, LIMITS.jsonBytes) },
+      { path: ".modup/.gitignore", bytes: desiredIgnores } ]
       .forEach(file => desired.push({ ...file, kind: "file", digest: sha256(file.bytes), executable: false }));
     const paths = [...new Set(desired.flatMap(item => {
       const parents = item.path.split("/").slice(0, -1);
