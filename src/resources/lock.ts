@@ -1,16 +1,15 @@
 import { lstat, open, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { canonical, LIMITS, modeError, sha256 } from "../contracts/index.js";
+import { canonical, modeError } from "../contracts/index.js";
+import { validateConfig } from "../core/config.js";
 import type { ConfigContext } from "../contracts/index.js";
-import { missing, regularBytes, requireValue, safePath, within } from "./fs.js";
+import { missing, requireValue, safePath, within } from "./fs.js";
 
 export const validateContext = async (context: ConfigContext, stateRoot: string): Promise<void> => {
   const root = await safePath(context.configRoot);
   const state = await safePath(stateRoot, true);
   requireValue(!within(root, state), "E_PATH", "State must be outside the shared config directory");
-  const { bytes } = await regularBytes(join(context.configRoot, "modes.json"), LIMITS.jsonBytes);
-  requireValue(sha256(bytes) === context.rawConfigDigest && sha256(Buffer.from(canonical(context.config))) === context.configDigest,
-    "E_LOCK_MISMATCH", "Configuration changed after it was loaded");
+  await validateConfig(context);
 };
 
 export const withConfigLock = async <T>(root: string, operation: () => Promise<T>): Promise<T> => {

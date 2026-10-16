@@ -23,7 +23,9 @@ export const resolve = ({ context, facts, lockDigest }: ResolveRequest): Resolve
   });
   const overlap = selector?.add.find(id => disabled.has(id));
   if (overlap) throw modeError("E_MODE_CONFLICT", "Mode is both added and disabled", { id: overlap });
-  const detected = selector?.auto === false ? [] : Object.entries(config.modes)
+  const detected = selector?.auto === false ? [] : context.autoModeIds !== undefined
+    ? [...context.autoModeIds].sort((a, b) => config.modes[a]!.priority - config.modes[b]!.priority || compare(a, b))
+      .map(id => reason(id, "detect")) : Object.entries(config.modes)
     .map(([id, mode]) => ({ id, mode, match: mode.detect?.any.findIndex(matches) ?? -1 }))
     .filter(candidate => candidate.match >= 0)
     .sort((a, b) => a.mode.priority - b.mode.priority || compare(a.id, b.id))

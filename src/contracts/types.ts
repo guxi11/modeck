@@ -20,7 +20,8 @@ export type TreeEntry = DeepReadonly<{ path: string; kind: "directory" }
   | { path: string; kind: "file"; digest: Sha256; bytes: number; executable: boolean }>;
 export type LockedResource = DeepReadonly<{ id: Id; kind: Kind; sourceDigest: Sha256; commit: string | null; treeDigest: Sha256; entries: TreeEntry[] }>;
 export type ResourceLock = DeepReadonly<{ schemaVersion: 1; resourceSpecDigest: Sha256; resources: LockedResource[] }>;
-export type ConfigContext = DeepReadonly<{ configRoot: string; config: Config; configDigest: Sha256; rawConfigDigest: Sha256 }>;
+export type ConfigContext = DeepReadonly<{ configRoot: string; config: Config; configDigest: Sha256; rawConfigDigest: Sha256;
+  configSources?: { path: string; digest: Sha256 }[]; autoModeIds?: Id[] }>;
 export type ProjectFacts = DeepReadonly<{ cwd: string; boundary: string; files: string[]; dependencies: string[]; selector: { path: string; value: Selector } | null }>;
 export type Reason = DeepReadonly<{ mode: Id; via: "default" | "detect" | "selector" | "parent"; from: Id | null; conditionIndex: number | null }>;
 export type Diagnostic = DeepReadonly<{ code: string; message: string; path: string | null }>;
@@ -39,7 +40,7 @@ export type ManagedFile = DeepReadonly<{ path: string; digest: Sha256; mode: num
 export type InstallRecord = DeepReadonly<{ schemaVersion: 1; owner: "modup/v1"; agent: Agent; configRoot: string; stateRoot: string; runtimeDigest: Sha256; files: ManagedFile[]; hookFile: string; hookGroup: unknown; beforeHookFile: FileImage | null; afterHookFileDigest: Sha256 }>;
 export type LockParser = DeepReadonly<(value: unknown) => ResourceLock>;
 export type ImportValidator = DeepReadonly<(stagingRoot: string) => Promise<void>>;
-export type LoadConfigRequest = DeepReadonly<{ configRoot: string }>;
+export type LoadConfigRequest = DeepReadonly<{ configRoot: string; facts?: ProjectFacts }>;
 export type CollectFactsRequest = DeepReadonly<{ cwd: string; stateRoot: string }>;
 export type ResolveRequest = DeepReadonly<{ context: ConfigContext; facts: ProjectFacts; lockDigest: Sha256 }>;
 export type CompileRequest = DeepReadonly<{ plan: ResolvedPlan; resources: VerifiedResourceSet; agent: Agent }>;

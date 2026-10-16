@@ -2,9 +2,10 @@ import { chmod, lstat, mkdir, open, rmdir, unlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { canonical, checkRelativePath, LIMITS, modeError, parseJson, sha256 } from "../contracts/index.js";
+import { canonical, checkRelativePath, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { Config, ResourceSpec } from "../contracts/index.js";
-import { parseConfig } from "../core/index.js";
+import { loadConfig, parseConfig } from "../core/index.js";
+import { validateConfig } from "../core/config.js";
 import { scanHome } from "../resources/index.js";
 import type { ScannedResource } from "../resources/index.js";
 import { compare, exists, regularBytes, requireValue, safePath, utf8, within } from "../resources/fs.js";
@@ -13,7 +14,7 @@ import { snapshotLocal } from "../resources/tree.js";
 
 type Request = { readonly home: string; readonly configRoot: string; readonly bindings?: unknown; readonly apply: boolean; readonly expect?: string };
 type Desired = { readonly path: string; readonly kind: "file" | "directory"; readonly digest: string | null; readonly executable: boolean; readonly bytes?: Uint8Array };
-const metadata = ["modes.json", "modes.lock.json", "modup.bindings.json", "modup-migration.json", ".modup-sync.lock",
+const metadata = ["modup.config.mjs", "auto.mjs", "modes.json", "modes.lock.json", "modup.bindings.json", "modup-migration.json", ".modup-sync.lock",
   ".modup/.gitignore", ".modup/bindings.json", ".modup/migration.json", ".modup/verification.json", ".modup/legacy-lock.json"];
 const auxiliaryIgnores = ["/bindings.json", "/migration.json", "/verification.json", "/legacy-lock.json"];
 const digest = (value: unknown): string => sha256(Buffer.from(canonical(value)));
@@ -22,8 +23,6 @@ const jsonBytes = (value: unknown, limit: number): Buffer => {
   requireValue(bytes.length <= limit, "E_LIMIT", "Migration JSON exceeds byte limit");
   return bytes;
 };
-const jsonFile = async (path: string, limit: number): Promise<unknown | null> =>
-  await exists(path) ? parseJson(utf8((await regularBytes(path, limit)).bytes)) : null;
 const current = async (path: string): Promise<unknown> => {
   await safePath(path, true);
   if (!await exists(path)) return null;
@@ -73,8 +72,10 @@ export const migrate = async (request: Request): Promise<unknown> => {
   await safePath(join(configRoot, ".git"));
   const build = async () => {
     const scan = await scanHome(request.home);
-    const previous = await jsonFile(join(configRoot, "modes.json"), LIMITS.jsonBytes);
-    const base = previous === null ? parseConfig({ schemaVersion: 1, modes: {}, resources: {} }) : parseConfig(previous);
+    const executable = await exists(join(configRoot, "modup.config.mjs"));
+    const configured = executable || await exists(join(configRoot, "modes.json"));
+    const context = configured ? await loadConfig({ configRoot }) : null;
+    const base = context?.config ?? parseConfig({ schemaVersion: 1, modes: {}, resources: {} });
     const bindingValue = request.bindings ?? { defaults: base.defaults, modes: base.modes };
     requireValue(bindingValue !== null && typeof bindingValue === "object" && !Array.isArray(bindingValue), "E_CONFIG", "bindings must be an object");
     const bindings = bindingValue as Record<string, unknown>;
@@ -154,10 +155,15 @@ export const migrate = async (request: Request): Promise<unknown> => {
     ignorePolicy.matches.filter(match => match.ignored).forEach(match => conflicts.push({ path: match.path,
       reason: `Copied resource is Git-ignored by ${match.source}:${match.line} (${match.pattern}); sharing would omit it` }));
     const manifest = { schemaVersion: 1, owner: "modup/migration/1", resources: tracked, omitted: [...omitted].sort(compare), excluded };
-    const configPath = join(configRoot, "modes.json");
+    const configFile = executable || !configured ? "modup.config.mjs" : "modes.json";
+    const configPath = join(configRoot, configFile);
+    if (executable && canonical(base) !== canonical(config)) conflicts.push({ path: configFile,
+      reason: "Update the trusted JavaScript configuration manually to include these resources/bindings; user code is never overwritten" });
     // Preserve existing user formatting if its normalized configuration matches.
-    const configBytes = previous !== null && canonical(base) === canonical(config)
-      ? (await regularBytes(configPath, LIMITS.jsonBytes)).bytes : jsonBytes(config, LIMITS.jsonBytes);
+    const configBytes = executable || configured && canonical(base) === canonical(config)
+      ? (await regularBytes(configPath, LIMITS.jsonBytes)).bytes : configFile === "modes.json" ? jsonBytes(config, LIMITS.jsonBytes)
+        : Buffer.from(`export default ${jsonBytes(config, LIMITS.jsonBytes).toString("utf8").trimEnd()};\n`);
+    if (context) await validateConfig(context);
     const ignorePath = join(configRoot, ".modup/.gitignore");
     const ignoreBytes = await exists(ignorePath) ? (await regularBytes(ignorePath, LIMITS.jsonBytes)).bytes : null;
     const ignoreText = ignoreBytes === null ? "" : utf8(ignoreBytes);
@@ -165,7 +171,7 @@ export const migrate = async (request: Request): Promise<unknown> => {
     // Existing ignore policies are user-owned; additions are shown as a conflict instead of silently overwriting them.
     const desiredIgnores = missingIgnores.length === 0 && ignoreBytes !== null ? ignoreBytes
       : Buffer.from(`${ignoreText}${ignoreText && !ignoreText.endsWith("\n") ? "\n" : ""}${missingIgnores.join("\n")}\n`);
-    [ { path: "modes.json", bytes: configBytes },
+    [ { path: configFile, bytes: configBytes },
       { path: ".modup/migration.json", bytes: jsonBytes(manifest, LIMITS.lockBytes) },
       { path: ".modup/bindings.json", bytes: jsonBytes({ defaults: config.defaults, modes: config.modes }, LIMITS.jsonBytes) },
       { path: ".modup/.gitignore", bytes: desiredIgnores } ]
@@ -184,7 +190,7 @@ export const migrate = async (request: Request): Promise<unknown> => {
     }));
     const publicPlan = { schemaVersion: 1, operation: "migrate", home: scan.home, configRoot, scanDigest: scan.scanDigest,
       resources: tracked, omitted: [...omitted].sort(compare), excluded, conflicts, changes: targets.filter(item => item.before === null), targets,
-      configDigest: digest(config), manifestDigest: digest(manifest), ignorePolicy };
+      configDigest: context?.configDigest ?? digest(config), manifestDigest: digest(manifest), ignorePolicy };
     return { plan: { ...publicPlan, planDigest: digest(publicPlan) }, desired };
   };
   const initial = await build();

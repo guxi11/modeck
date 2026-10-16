@@ -38,7 +38,8 @@ export const initConfig = async ({ destination, initialConfig }: InitConfigReque
     return await createConfig(destination, async staging => {
       const text = `${JSON.stringify(JSON.parse(canonical(initialConfig)) as unknown, null, 2)}\n`;
       requireValue(Buffer.byteLength(text) <= LIMITS.jsonBytes, "E_LIMIT", "Initial config exceeds JSON byte limit");
-      await writeFile(join(staging, "modes.json"), text, { flag: "wx", mode: 0o644 });
+      await writeFile(join(staging, "modup.config.mjs"), `export { default as auto } from "./auto.mjs";\n\nexport default ${text.trimEnd()};\n`, { flag: "wx", mode: 0o644 });
+      await writeFile(join(staging, "auto.mjs"), "export default ({ files, dependencies }) => [];\n", { flag: "wx", mode: 0o644 });
     });
   } catch (error) {
     if (error instanceof Error && "code" in error && String(error.code).startsWith("E_")) throw error;

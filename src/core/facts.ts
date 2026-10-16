@@ -41,7 +41,9 @@ const boundaryFor = async (cwd: string): Promise<string> => {
 };
 
 const selectorAt = async (cwd: string, boundary: string): Promise<ProjectFacts["selector"]> => {
-  const path = join(cwd, ".mode");
+  const preferred = join(cwd, ".modes");
+  const modern = await lstat(preferred).then(() => true).catch(error => { if (isMissing(error)) return false; throw error; });
+  const path = modern ? preferred : join(cwd, ".mode");
   try {
     const info = await lstat(path);
     if (!info.isFile() || info.isSymbolicLink()) throw modeError("E_SELECTOR", "Selector must be a regular file", { path });
@@ -49,7 +51,7 @@ const selectorAt = async (cwd: string, boundary: string): Promise<ProjectFacts["
     let text: string;
     try { text = utf8(bytes).replace(/^\uFEFF/u, "").trim(); }
     catch { throw modeError("E_SELECTOR", "Selector must contain valid UTF-8", { path }); }
-    if (text.startsWith("{") || text.startsWith("[")) {
+    if (!modern && (text.startsWith("{") || text.startsWith("["))) {
       try { return { path, value: parseSelector(parseJson(text)) }; }
       catch (error) {
         if (error instanceof Error && "code" in error && error.code === "E_SELECTOR") throw error;
@@ -60,7 +62,8 @@ const selectorAt = async (cwd: string, boundary: string): Promise<ProjectFacts["
     if (!ids.length || ids.some(id => !/^[a-z][a-z0-9-]{0,63}$/.test(id))) {
       throw modeError("E_SELECTOR", "Selector must list mode IDs separated by commas or newlines", { path });
     }
-    return { path, value: parseSelector({ schemaVersion: 1, auto: false, add: [...new Set(ids)] }) };
+    return { path, value: parseSelector({ schemaVersion: 1, auto: modern && ids.includes("auto"),
+      add: [...new Set(modern ? ids.filter(id => id !== "auto") : ids)] }) };
   } catch (error) {
     if (!isMissing(error)) throw error;
     return cwd === boundary ? null : selectorAt(dirname(cwd), boundary);
