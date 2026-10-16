@@ -9,7 +9,7 @@ export type Choice = { readonly id: string; readonly name: string };
 const validName = (name: string): boolean => /^[a-z][a-z0-9-]{0,63}$/.test(name);
 const cancelled = () => modeError("E_USAGE", "Selection cancelled; no resources were moved");
 
-export const choose = async <T>(message: string, choices: readonly (Separator | { readonly name: string; readonly value: T; readonly description?: string })[]): Promise<readonly T[]> => {
+export const choose = async <T>(message: string, choices: readonly (Separator | { readonly name: string; readonly value: T; readonly description?: string; readonly checked?: boolean })[]): Promise<readonly T[]> => {
   requireValue(process.stdin.isTTY && process.stderr.isTTY, "E_USAGE", "Selection requires a TTY; use --agent and --answers, or --list");
   const controller = new AbortController();
   const cancel = () => controller.abort();

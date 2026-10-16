@@ -17,6 +17,7 @@ import { snapshotLocal } from "../resources/tree.js";
 import { backupSkills, planBackups } from "./backup.js";
 import { addResourceBindings } from "./edit-config.js";
 import { choose, selections } from "./selection.js";
+import { projectRootFor } from "./config.js";
 
 export type HomeMigrationOptions = {
   readonly list: boolean; readonly answers?: string; readonly agent?: Agent; readonly configRoot?: string;
@@ -46,10 +47,7 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
     : await choose("Scan · Select agents", agents.map(agent => ({ name: agent, value: agent })));
   if (!selectedAgents.length) return { resources: [], message: "No agents selected; no changes made." };
   const records = await Promise.all(selectedAgents.map(agent => loadRecord(home, agent)));
-  const roots = [...new Set(records.flatMap(record => record ? [record.configRoot] : []))];
-  requireValue(roots.length <= 1, "E_CONFIG", "Selected agents are bound to different repositories; scan them separately");
-  requireValue(!options.configRoot || !roots[0] || options.configRoot === roots[0], "E_INSTALL_CONFLICT", "Explicit configuration differs from the selected agent binding");
-  const root = await safePath(options.configRoot ?? roots[0] ?? cwd);
+  const root = await safePath(initial ? options.configRoot ?? cwd : await projectRootFor(home, cwd, options.configRoot));
   await checkDirectory(root);
   requireValue((await lstat(root)).isDirectory(), "E_PATH", "Configuration root must be an existing directory");
   const homeRoot = join(home, ".modup");

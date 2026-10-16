@@ -4,33 +4,38 @@ import { homedir } from "node:os";
 import { delimiter, join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LIMITS, modeError, parseJson } from "../contracts/index.js";
-import type { Agent, BindPlan, ModeError, VerifiedResourceSet } from "../contracts/index.js";
+import type { Agent, ModeError, VerifiedResourceSet } from "../contracts/index.js";
 import { loadConfig, parseManifest } from "../core/index.js";
 import { syncResources } from "../resources/index.js";
 import { manageResources } from "./resource.js";
 import { initialize } from "./init.js";
 import { migrateHome } from "./scan.js";
 import { migrate } from "./migrate.js";
-import { configRootFor } from "./config.js";
+import { configRootFor, projectRootFor } from "./config.js";
+import { manageConfig } from "./manage-config.js";
+import { configRoots } from "../integration/registry.js";
+import { loadRecord } from "../integration/install.js";
 import { selectAgents } from "./bind.js";
-import { applyBindPlan, encodeHook, planBind, planUnbind, prepare, runAgent } from "../integration/index.js";
-import { data, imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
+import { encodeHook, prepare, runAgent } from "../integration/index.js";
+import { imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
 import { parseEvent, runMarker } from "../integration/hooks.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
-const help = "modup <res|init|scan|migrate|sync|resolve|render|hook|bind|unbind|run> [options]\n"
+const help = "modup <res|init|scan|migrate|sync|resolve|render|hook|register|unregister|config|run> [options]\n"
   + "res <add|init|update> [--config <dir>] [--url <url> --path <source-path> --target <dir> --ref <ref>]\n"
   + "init|scan [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>]\n"
   + "migrate [--config <dir>] [--mode <name>] [--list | --answers <file>]\n"
-  + "bind|unbind [--agent <claude|codex|codebuddy>] [--config <dir>] [--dry-run] [--expect <digest>]\n";
+  + "register|unregister [--config <dir>] [--target-home <dir>]\n"
+  + "config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--dry-run] [--expect <digest>]\n"
+  + "config answers: {configs:[registered absolute paths],agents:[claude|codex|codebuddy]}\n";
 const values: Readonly<Record<string, readonly string[]>> = {
   resource: ["config", "url", "path", "target", "ref"],
   init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"], sync: ["config", "state"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
-  hook: ["config", "state", "agent"], bind: ["config", "state", "agent", "target-home", "format", "expect"],
-  unbind: ["config", "agent", "target-home", "format", "expect"], run: ["config", "state", "cwd", "agent", "executable"],
+  hook: ["config", "state", "agent"], register: ["config", "target-home"], unregister: ["config", "target-home"],
+  config: ["answers", "target-home", "state", "expect", "format"], run: ["config", "state", "cwd", "agent", "executable"],
 };
-const booleans: Readonly<Record<string, readonly string[]>> = { init: ["list"], scan: ["list"], migrate: ["list"], sync: ["update"], bind: ["dry-run"], unbind: ["dry-run"] };
+const booleans: Readonly<Record<string, readonly string[]>> = { init: ["list"], scan: ["list"], migrate: ["list"], sync: ["update"], config: ["list", "dry-run"] };
 const options = (command: string, argv: readonly string[]): Readonly<Record<string, string | boolean>> => {
   const parse = (index: number, result: Readonly<Record<string, string | boolean>>): Readonly<Record<string, string | boolean>> => {
     const token = argv[index];
@@ -90,15 +95,6 @@ const executableFor = async (agent: Agent, supplied?: string): Promise<string> =
   if (found === self) throw modeError("E_WRAPPER_CONFLICT", "Wrapper cannot launch itself");
   return found;
 };
-const showPlan = (plan: BindPlan, format: string): void => {
-  if (format === "json") { json(plan); return; }
-  process.stdout.write(`${plan.operation} ${plan.agent} ${plan.targetHome}\nplan: ${plan.planDigest}\n`);
-  plan.changes.forEach(change => process.stdout.write(`${change.after === null ? "delete" : change.beforeDigest === null ? "create" : "update"} ${change.path}\n`));
-  plan.changes.filter(change => change.category === "shared-json").forEach(change => {
-    if (change.after) process.stdout.write(`${change.path}:\n${data(change.after).toString("utf8")}\n`);
-  });
-  [...plan.warnings, ...plan.conflicts].forEach(item => process.stdout.write(`${item.code}: ${item.message}\n`));
-};
 const exitFor = (error: ModeError, hook: boolean): number => {
   if (hook) return 1;
   if (["E_INSTALL_CONFLICT", "E_PLAN_STALE", "E_BUSY"].includes(error.code)) return 4;
@@ -120,10 +116,18 @@ export const main = async (argv: string[]): Promise<number> => {
     if (command === "resource") {
       json(await manageResources(await pathFor(String(opts.config ?? process.cwd())), argv[1] ?? "", opts)); return 0;
     }
-    const configured = async () => ({
-      configRoot: await configRootFor(homedir(), process.cwd(), typeof opts.config === "string" ? opts.config : undefined),
-      stateRoot: await pathFor(String(opts.state ?? process.env.MODUP_STATE ?? join(homedir(), ".local/share/modup/v1"))),
-    });
+    const configured = async (single = false, agent?: Agent) => {
+      const record = agent === undefined ? null : await loadRecord(homedir(), agent);
+      // Until config migrates a legacy hook, its wrapper must use the same root.
+      const explicit = typeof opts.config === "string" ? opts.config : command === "run" ? record?.configRoot : undefined;
+      const configRoot = await (single ? projectRootFor : configRootFor)(homedir(), process.cwd(), explicit);
+      const roots = command === "resolve" && !record ? await configRoots(configRoot) : [];
+      const fallback = command === "resolve" && !record
+        ? (await Promise.all((["claude", "codex", "codebuddy"] as const).map(agent => loadRecord(homedir(), agent))))
+          .find(candidate => candidate && (candidate.configRoot === configRoot || roots.includes(candidate.configRoot)))
+        : record;
+      return { configRoot, stateRoot: await pathFor(String(opts.state ?? process.env.MODUP_STATE ?? fallback?.stateRoot ?? join(homedir(), ".local/share/modup/v1"))) };
+    };
     const format = String(opts.format ?? "text");
     if (!["text", "json"].includes(format)) throw modeError("E_USAGE", "Unknown output format");
     if (command === "init" || command === "scan") {
@@ -136,39 +140,33 @@ export const main = async (argv: string[]): Promise<number> => {
     }
     if (command === "migrate") {
       if (opts.list && opts.answers) throw modeError("E_USAGE", "--list and --answers cannot be combined");
-      json(await migrate({ cwd: await realpath(process.cwd()), ...await configured(),
+      json(await migrate({ cwd: await realpath(process.cwd()), ...await configured(true),
         list: opts.list === true, ...(typeof opts.answers === "string" ? { answers: await pathFor(opts.answers) } : {}),
         ...(typeof opts.mode === "string" ? { mode: opts.mode } : {}) })); return 0;
     }
-    if (command === "bind" || command === "unbind") {
-      const expected = opts.expect;
-      if (expected !== undefined && (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected))) throw modeError("E_USAGE", "Invalid expected plan digest");
-      if (opts.agent === undefined && expected !== undefined) throw modeError("E_USAGE", "--expect requires an explicit --agent because each agent has its own plan digest");
-      const targetHome = await pathFor(String(opts["target-home"] ?? homedir()));
-      const agents = opts.agent === undefined ? await selectAgents(command, targetHome) : [agentFor(opts)];
-      if (!agents.length) { if (format === "json") json([]); return 0; }
-      const configuration = command === "bind" ? await configured() : null;
-      const plans = await agents.reduce(async (pending, agent) => {
-        const previous = await pending;
-        const request = { agent, targetHome };
-        const plan = command === "bind" ? await planBind({ ...request, ...configuration!, runtimeRoot }) : await planUnbind(request);
-        return [...previous, plan];
-      }, Promise.resolve<readonly BindPlan[]>([]));
-      const conflicts = plans.some(plan => plan.conflicts.length);
-      if (!opts["dry-run"] && !conflicts) await plans.reduce(async (pending, plan) => {
-        await pending;
-        await applyBindPlan({ plan, ...(typeof expected === "string" ? { expectDigest: expected } : {}) });
-      }, Promise.resolve());
-      if (format === "json" && opts.agent === undefined) json(plans);
-      else plans.forEach(plan => showPlan(plan, format));
-      return conflicts ? 4 : 0;
+    if (command === "register" || command === "unregister" || command === "config") {
+      const result = await manageConfig(command, await pathFor(String(opts["target-home"] ?? homedir())), process.cwd(), runtimeRoot, opts);
+      json(result);
+      return result.conflicts ? 4 : 0;
     }
-    const { configRoot, stateRoot } = await configured();
+    const selectedAgent = command === "resolve" ? "codex" : opts.agent !== undefined ? agentFor(opts)
+      : command === "render" ? (await selectAgents("render", await pathFor(homedir())))[0] : undefined;
+    if (command === "render" && !selectedAgent) return 0;
+    const { configRoot, stateRoot } = await configured(false, selectedAgent);
     if (command === "sync") {
-      const result: VerifiedResourceSet = await syncResources({ context: await loadConfig({ configRoot }), stateRoot,
-        mode: opts.update ? "update" : "reuse", parseManifest });
-      json({ schemaVersion: 1, configDigest: result.configDigest, resourceDigest: result.resourceDigest,
-        resources: result.manifest.resources.map(({ id, treeDigest, commit }) => ({ id, treeDigest, commit })) }); return 0;
+      const records = await Promise.all((["claude", "codex", "codebuddy"] as const).map(agent => loadRecord(homedir(), agent)));
+      const roots = await configRoots(configRoot);
+      const states = opts.state !== undefined || process.env.MODUP_STATE !== undefined ? [stateRoot]
+        : [...new Set(records.flatMap(record => record && (record.configRoot === configRoot || roots.includes(record.configRoot)) ? [record.stateRoot] : []))];
+      const requests = roots.flatMap(root => (states.length ? states : [stateRoot]).map(stateRoot => ({ root, stateRoot })));
+      const results = await requests.reduce(async (pending, { root, stateRoot }) => {
+        const previous = await pending;
+        const result: VerifiedResourceSet = await syncResources({ context: await loadConfig({ configRoot: root }), stateRoot,
+          mode: opts.update ? "update" : "reuse", parseManifest });
+        return [...previous, { configRoot: root, stateRoot, schemaVersion: 1, configDigest: result.configDigest, resourceDigest: result.resourceDigest,
+          resources: result.manifest.resources.map(({ id, treeDigest, commit }) => ({ id, treeDigest, commit })) }];
+      }, Promise.resolve([] as readonly unknown[]));
+      json(results.length === 1 ? results[0] : results); return 0;
     }
     if (command === "hook") {
       const agent = agentFor(opts);
@@ -186,8 +184,7 @@ export const main = async (argv: string[]): Promise<number> => {
       if (result.signal) { process.kill(process.pid, result.signal); return 1; }
       return result.exitCode ?? 1;
     }
-    const agent = command === "resolve" ? "codex" : opts.agent !== undefined ? agentFor(opts)
-      : (await selectAgents("render", await pathFor(homedir())))[0];
+    const agent = selectedAgent;
     if (!agent) return 0;
     const prepared = await prepare({ agent, configRoot, stateRoot, cwd });
     if (command === "resolve") json(prepared.plan);

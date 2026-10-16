@@ -174,11 +174,10 @@ const basePlan = async (agent: Agent, targetHome: string, operation: BindPlan["o
   }
 };
 
-export const planBind = async ({ agent, targetHome, configRoot, stateRoot, runtimeRoot }: PlanBindRequest): Promise<BindPlan> => {
-  await prepare({ agent, configRoot, stateRoot, cwd: await realpath(process.cwd()) });
+export const planBind = async ({ agent, targetHome, configRoot, configRoots, stateRoot, runtimeRoot }: PlanBindRequest): Promise<BindPlan> => {
+  await prepare({ agent, configRoot, ...(configRoots !== undefined ? { configRoots } : {}), stateRoot, cwd: await realpath(process.cwd()) });
   return basePlan(agent, targetHome, "bind", async (home, before, previous) => {
     const loc = locations(agent);
-    if (previous && (previous.configRoot !== configRoot || previous.stateRoot !== stateRoot)) return conflict("Unbind before changing the configuration binding");
     const packagePaths = ["dist/bin/modup.mjs", "package.json", "schemas/modes.schema.json", "schemas/manifest.schema.json"].sort();
     const packageFiles = await Promise.all(packagePaths.map(async path => {
       const image = await readImage(join(runtimeRoot, path));
