@@ -1,5 +1,5 @@
 import { lstat, readdir, realpath } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { canonical, checkRelativePath, LIMITS, parseJson, sha256 } from "../contracts/index.js";
 import type { Kind, TreeEntry } from "../contracts/index.js";
 import { compare, exists, regularBytes, requireValue, safePath, utf8 } from "./fs.js";
@@ -10,6 +10,7 @@ export type ScannedResource = {
   readonly id: string; readonly kind: Kind; readonly name: string; readonly description: string;
   readonly treeDigest: string; readonly sources: readonly string[]; readonly aliases: readonly string[];
   readonly entries: readonly TreeEntry[];
+  readonly origins: readonly { readonly path: string; readonly type: "global" | "evoloop" | "evoloop-orphan"; readonly sourcePath: string | null }[];
 };
 export type ScanResult = {
   readonly schemaVersion: 1; readonly home: string; readonly resources: readonly ScannedResource[];
@@ -18,9 +19,9 @@ export type ScanResult = {
   readonly manifests: readonly { readonly path: string; readonly digest: string; readonly root: string }[];
   readonly scanDigest: string;
 };
-type Candidate = Omit<ScannedResource, "id" | "sources" | "aliases"> & { readonly source: string; readonly alias: string };
-const targets = [".claude", ".codex", ".agents", ".codebuddy", ".gemini"];
-const ruleNames: Readonly<Record<string, string>> = { ".claude": "CLAUDE.md", ".codex": "AGENTS.md", ".codebuddy": "CODEBUDDY.md", ".gemini": "GEMINI.md" };
+type Candidate = Omit<ScannedResource, "id" | "sources" | "aliases" | "origins"> & { readonly source: string; readonly alias: string; readonly origin: ScannedResource["origins"][number] };
+const targets = [".claude", ".codex", ".agents", ".codebuddy", ".codebuddy-cli", ".gemini"];
+const ruleNames: Readonly<Record<string, string>> = { ".claude": "CLAUDE.md", ".codex": "AGENTS.md", ".codebuddy": "CODEBUDDY.md", ".codebuddy-cli": "CODEBUDDY.md", ".gemini": "GEMINI.md" };
 const object = (value: unknown): Record<string, unknown> => {
   requireValue(value !== null && typeof value === "object" && !Array.isArray(value), "E_CONFIG", "Expected an object");
   return value as Record<string, unknown>;
@@ -37,6 +38,7 @@ export const scanHome = async (home: string): Promise<ScanResult> => {
   const excluded: { path: string; reason: string }[] = [];
   const manifests: { path: string; digest: string; root: string }[] = [];
   const managedRules = new Set<string>();
+  const managedSkills = new Map<string, string>();
   const platformRoots = targets.flatMap(target => ["plugins", "packages"].map(name => join(root, target, name)));
   const platformSource = (source: string): boolean => platformRoots.some(path => source === path || source.startsWith(`${path}/`));
   let visited = 0;
@@ -48,9 +50,12 @@ export const scanHome = async (home: string): Promise<ScanResult> => {
     if (platformSource(source)) { excluded.push({ path: alias, reason: "Alias to platform installation/cache; excluded without traversal" }); return; }
     const snapshot = await snapshotLocal(source, kind);
     const entry = resourceEntry(snapshot, kind);
+    const expectedSource = managedSkills.get(alias) ?? null;
+    const origin = { path: alias, type: expectedSource === null ? "global" as const
+      : await exists(join(expectedSource, "SKILL.md")) ? "evoloop" as const : "evoloop-orphan" as const, sourcePath: expectedSource };
     totalBytes += snapshot.entries.reduce((sum, item) => sum + (item.kind === "file" ? item.bytes : 0), 0);
     requireValue(totalBytes <= LIMITS.allResourceBytes, "E_LIMIT", "Scan resource bytes exceeded");
-    candidates.push({ kind, source, alias, name: entry.skill?.name ?? resourceId(basename(source).replace(/\.[^.]+$/, "")),
+    candidates.push({ kind, source, alias, origin, name: entry.skill?.name ?? resourceId(basename(source).replace(/\.[^.]+$/, "")),
       description: entry.skill?.description ?? "Global instructions", treeDigest: snapshot.treeDigest, entries: snapshot.entries });
   };
   const walk = async (alias: string, kind: Kind, ancestors: readonly string[] = []): Promise<void> => {
@@ -92,6 +97,12 @@ export const scanHome = async (home: string): Promise<ScanResult> => {
     manifests.push({ path: manifestPath, digest: sha256(bytes), root: source });
     const rule = ruleNames[target];
     if (rule && Array.isArray(manifest.files) && manifest.files.includes(rule)) managedRules.add(join(directory, rule));
+    if (Array.isArray(manifest.files)) manifest.files.forEach(path => {
+      if (typeof path !== "string" || !path.startsWith("skills/") || !path.endsWith("/SKILL.md")) return;
+      checkRelativePath(path, false);
+      const skill = dirname(path);
+      managedSkills.set(join(directory, skill), join(source, skill));
+    });
     if (!manifests.slice(0, -1).some(item => item.root === source)) {
       await walk(join(source, "rules"), "rule");
       await walk(join(source, "skills"), "skill");
@@ -111,6 +122,8 @@ export const scanHome = async (home: string): Promise<ScanResult> => {
       else await add(path, "rule");
     }
     await walk(join(directory, "skills"), "skill");
+    if (target === ".codex" && await exists(join(directory, "rules"))) excluded.push({
+      path: join(directory, "rules"), reason: "Codex execution policies (*.rules), not natural-language instructions; excluded without traversal" });
     // Platform installation trees are intentionally outside the allowlist.
     await ["plugins", "packages"].reduce(async (done, name) => {
       await done;
@@ -130,6 +143,8 @@ export const scanHome = async (home: string): Promise<ScanResult> => {
     return { id: collision ? `${base}-${item.treeDigest.slice(0, 12)}` : base,
       kind: item.kind, name: item.name, description: item.description, treeDigest: item.treeDigest, entries: item.entries,
       sources: [...new Set(group.map(candidate => candidate.source))].sort(compare),
+      origins: group.map(candidate => candidate.origin).filter((item, index, items) => items.findIndex(other => other.path === item.path) === index)
+        .sort((a, b) => compare(a.path, b.path)),
       aliases: [...new Set(group.map(candidate => candidate.alias))].sort(compare) };
   }).sort((a, b) => compare(a.id, b.id));
   requireValue(new Set(resources.map(item => item.id)).size === resources.length, "E_INTEGRITY", "Resource id hash collision");

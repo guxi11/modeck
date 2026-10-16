@@ -62,7 +62,7 @@ export const migrate = async (request: Request): Promise<unknown> => {
     const resources = scan.resources.filter(item => !omitted.has(item.id));
     const specs: Record<string, ResourceSpec> = { ...base.resources };
     const desired: Desired[] = [];
-    const tracked: { id: string; kind: string; treeDigest: string; path: string; sources: readonly string[]; aliases: readonly string[] }[] = [];
+    const tracked: { id: string; kind: string; treeDigest: string; path: string; sources: readonly string[]; aliases: readonly string[]; origins: ScannedResource["origins"] }[] = [];
     await resources.reduce(async (pending, item: ScannedResource) => {
       await pending;
       const local = item.sources.find(source => within(configRoot, source));
@@ -90,7 +90,7 @@ export const migrate = async (request: Request): Promise<unknown> => {
         const target = await snapshotLocal(join(configRoot, destination), item.kind);
         if (target.treeDigest !== item.treeDigest) conflicts.push({ path: destination, reason: "Existing destination tree differs" });
       }
-      tracked.push({ id: item.id, kind: item.kind, treeDigest: item.treeDigest, path: destination, sources: item.sources, aliases: item.aliases });
+      tracked.push({ id: item.id, kind: item.kind, treeDigest: item.treeDigest, path: destination, sources: item.sources, aliases: item.aliases, origins: item.origins });
     }, Promise.resolve());
     requireValue(resources.length + Object.keys(base.resources).filter(id => !resources.some(item => item.id === id)).length <= LIMITS.resources,
       "E_LIMIT", "Migration resource count exceeded");
