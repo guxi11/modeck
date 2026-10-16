@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 504 164" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">modeck</title>
+  <desc id="desc">modeck: rules and skills, in the right mode. Three stacked cards form the brand mark.</desc>
+  <rect x="16" y="26" width="84" height="100" rx="16" fill="#72DFC2"/>
+  <rect x="28" y="36" width="84" height="100" rx="16" fill="#E8F5F0" stroke="#173B35" stroke-width="3"/>
+  <rect x="40" y="46" width="88" height="100" rx="16" fill="#142B29"/>
+  <path d="M56 114V73H66L84 95L102 73H112V114H100V93L84 112L68 93V114Z" fill="#F6FAF8"/>
+  <rect x="57" y="127" width="29" height="5" rx="2.5" fill="#72DFC2"/>
+  <rect x="154" y="36" width="336" height="104" rx="24" fill="#E8F5F0"/>
+  <text x="178" y="109" fill="#142B29" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="76" font-weight="750" letter-spacing="-3">modeck</text>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 144 144" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">modeck</title>
+  <desc id="desc">Three stacked mode cards with an M on the active card.</desc>
+  <rect x="16" y="16" width="84" height="100" rx="16" fill="#72DFC2"/>
+  <rect x="28" y="26" width="84" height="100" rx="16" fill="#E8F5F0" stroke="#173B35" stroke-width="3"/>
+  <rect x="40" y="36" width="88" height="100" rx="16" fill="#142B29"/>
+  <path d="M56 104V63H66L84 85L102 63H112V104H100V83L84 102L68 83V104Z" fill="#F6FAF8"/>
+  <rect x="57" y="117" width="29" height="5" rx="2.5" fill="#72DFC2"/>
+</svg>

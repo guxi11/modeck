@@ -1,143 +1,125 @@
-# modup
+<p align="center">
+  <img src="assets/logo.svg" width="480" alt="modeck：按工作方式组合规则和技能">
+</p>
 
-**一份配置，让 agent 随工作目录切换规则和技能。**
+# modeck
 
-在多个项目间切换时，编程、写作和运维需要不同的工作方式。modup 把你的 rules 和 skills 集中管理，按目录选择合适的组合，在会话开始时加载。支持 Claude Code、Codex 和 CodeBuddy Code CLI。
+**让 Claude Code、Codex 和 CodeBuddy 随项目切换规则和技能。**
 
-## 快速开始
+modeck 是一个 TypeScript CLI。把 rules、skills 组成命名的 mode，在原生 agent 的会话开始时加载；共享配置集中维护，业务项目只需一个可选的 `.modes` 文本文件。
 
-需要 Node.js 20+、npm、macOS 或 Linux，以及你要使用的 agent CLI。
+<p align="center">
+  <img src="https://img.shields.io/badge/agents-3-173B35?style=flat-square" alt="支持 3 种 agent">
+  <img src="https://img.shields.io/badge/Node.js-%E2%89%A520-173B35?style=flat-square" alt="Node.js 20 或更高版本">
+</p>
 
-1. 安装 [modup npm 包](https://www.npmjs.com/package/modup)：
+终端入口提供资源、配置和会话命令，运行 `modeck --help` 可查看：
 
-   ```sh
-   npm install -g modup
-   ```
+```text
+Usage: modeck <command> [options]
 
-2. 创建并进入一个文件夹，初始化配置。文件夹的名称和位置由你决定：
+Commands:
+  res <add|init|update>  Manage external resources
+  init                   Initialize configuration
+  scan                   Import resources from agent homes
+```
+
+## 从源码安装
+
+需要 Node.js 20+、npm、Git、macOS 或 Linux，以及你要使用的 agent CLI。在终端构建并链接源码：
+
+```sh
+git clone https://github.com/guxi11/modeck.git
+cd modeck
+npm ci
+npm run build
+npm link
+modeck --version
+```
+
+## 初始化并启用配置
+
+1. 创建并进入配置目录，导入你选中的规则和技能：
 
    ```sh
    mkdir agent-config
    cd agent-config
-   modup init
+   modeck init
    ```
 
-   按提示选择要扫描的 agent，以及要导入的规则和技能。modup 生成 `modup.yaml` 和 `modep-auto.mjs`；导入前会展示变更清单和备份位置，确认后执行。
+   按提示选择 agent 和资源。初始化生成 `modeck.yaml` 和 `modeck-auto.mjs`；移动原生入口前展示变更与备份位置，受管或共享入口保留。
 
-3. 在配置目录绑定 agent：
+2. 注册这个目录：
 
    ```sh
-   modup bind
+   modeck register
    ```
 
-   在 CLI 列表中勾选你使用的 agent。使用 Codex 时，还需在 `/hooks` 中审查并信任安装的 hook。
+   注册只加入目录清单。你可以分别注册多份配置。
 
-4. 进入你的业务项目目录，预览加载内容：
+3. 选择启用的配置和绑定的 agent：
 
    ```sh
-   modup render
+   modeck config
    ```
 
-   按提示选择要预览的 agent，默认使用当前目录，输出选中的 modes、规则正文和技能索引。之后在这个目录启动原生 agent，新会话就会通过 hook 加载配置。
+   modeck 安装 SessionStart hook，保留其他工具的 hook。使用 Codex 时，在 `/hooks` 中审查并信任安装的定义；绑定本身不授予信任。
 
-## 按工作方式组织配置
+4. 进入业务项目目录，预览会话上下文：
 
-mode 把一组规则和技能命名为一种工作方式。你可以在多个项目中复用同一份编程规范，也可以让写作目录只加载写作相关内容，减少无关指令干扰。修改一份共享规则，引用它的 mode 都能使用更新后的内容。
+   ```sh
+   modeck render --agent codex
+   ```
 
-例如，把工作方式分成以下几组：
+   输出规则正文和技能索引。之后在该目录启动原生 agent，会话通过 hook 加载选中的配置。
 
-| Mode | 加载内容 | 使用场景 |
-| --- | --- | --- |
-| `base` | 通用沟通习惯 | 所有项目 |
-| `prog` | 编程规范、代码审查技能 | 代码项目 |
-| `writing` | 写作风格、编辑技能 | 文章和笔记 |
+## 组合工作方式
 
-初始化会把导入的资源放在默认 `base` 中。把只用于某种工作的资源从 `base` 移到对应 mode，才能让它们按需加载。
-
-在 `modup.yaml` 中，用你实际导入的资源名称和路径组织配置：
+在 `modeck.yaml` 中，使用你实际导入的资源名称和相对路径组织 mode：
 
 ```yaml
 resources:
   rules:
     coding: rules/coding.md
-    prose: rules/prose.md
   skills:
     review: skills/review
-
 defaults: [base]
 modes:
   base: {}
   prog:
     rules: [coding]
     skills: [review]
-  writing:
-    rules: [prose]
 ```
 
-路径相对于配置目录：rule 是 Markdown 文件，skill 是包含 `SKILL.md` 的目录。`defaults` 中的 mode 始终加载，无需再通过 `extends` 继承。`extends` 用来复用其他非默认 mode 的配置。
+rule 是 Markdown 文件，skill 是包含 `SKILL.md` 的完整目录。`defaults` 始终加载，`extends` 可复用其他 mode。初始化导入的资源默认归入 `base`；将只用于编程的资源移入 `prog`，才能按需加载。
 
-## 添加和更新外部资源
+自动选择脚本 `modeck-auto.mjs` 接收目录、文件和依赖等工作区事实，默认导出函数并返回已声明的 mode 名称。初始化生成的函数返回空数组。
 
-用 `modup res` 管理 Git 仓库中的资源目录，需要安装 Git。在配置目录运行以下命令，添加一个外部 skill：
-
-```sh
-modup res add \
-  --url https://github.com/wondelai/skills.git \
-  --path technical-documentation \
-  --target skills/technical-documentation
-```
-
-`--path` 是仓库中的源目录，省略时取仓库根目录；`--target` 是配置目录中的目标路径。可用 `--ref` 指定分支、标签或 commit，默认跟踪 `HEAD`。
-
-命令下载指定目录，将目标加入 `.gitignore`，并在 `modup-resources.json` 中记录地址、路径、ref、commit、摘要、commit 时间 `date` 和标签 `tag`（没有标签时为 `null`）。提交这份清单和 `.gitignore`，即可在其他机器还原资源，无需 Git submodule。
-
-下载后，在 `modup.yaml` 的 `resources.skills` 中登记目标路径，并将 skill 加入需要的 mode，才会加载：
-
-```yaml
-resources:
-  skills:
-    technical-documentation: skills/technical-documentation
-modes:
-  writing:
-    skills: [technical-documentation]
-```
-
-将这些条目合并到已有的同名配置项中。之后在配置目录按清单初始化，或更新到所跟踪 ref 的版本：
-
-```sh
-modup res init
-modup res update
-```
-
-`init` 按记录的 commit 和摘要还原缺失目录；`update` 更新资源和清单。已有目录若包含本地修改，命令会拒绝覆盖。命令输出 JSON 资源清单；在其他目录运行时，用 `--config` 指定配置目录。原命令 `modup resource` 仍可使用。
-
-## 让目录自动选择工作方式
-
-在 `modep-auto.mjs` 中定义选择逻辑。例如，让包含 `package.json` 的项目选择 `prog`，其他目录选择 `writing`：
-
-```js
-export default ({ files }) =>
-  files.includes('package.json') ? ['prog'] : ['writing'];
-```
-
-`auto` 返回 `modup.yaml` 中已声明的 mode 名称。初始化生成的函数返回空数组，你可以按自己的目录特征修改它。
-
-需要固定某个项目的工作方式时，在该项目中创建纯文本 `.modes`，写入 mode 名称；多个名称用逗号或换行分隔：
+需要固定某个项目的工作方式时，在业务目录创建纯文本 `.modes`：
 
 ```text
 prog
 ```
 
-非空 `.modes` 替代自动选择，仍保留默认 mode 和继承关系；没有该文件或内容为空时使用自动选择。
+多个名称用逗号或换行分隔。非空 `.modes` 替代自动选择，并保留默认 mode 和继承关系；缺失或空白时使用自动选择。
 
-## 移除绑定
+## 管理外部资源
 
-要停止为 agent 加载 modup 配置，在终端运行并勾选要解绑的 agent：
+在配置目录添加一个 Git 仓库中的 skill：
 
 ```sh
-modup unbind
+modeck res add \
+  --url https://github.com/wondelai/skills.git \
+  --path technical-documentation \
+  --target resources/technical-documentation
 ```
 
-## 进一步阅读
+命令下载完整目录，在 `modeck-resources.json` 记录 commit 和摘要，并将目标加入 `.gitignore`。把目标路径登记到 `modeck.yaml` 的 `resources.skills`，再将名称加入需要的 mode，才会加载。`modeck res init` 按清单还原资源，`modeck res update` 更新资源；本地内容有修改时拒绝覆盖。
+
+## 调整或移除绑定
+
+运行 `modeck config`，取消勾选需要解绑的 agent，或调整启用的配置。移除目录注册使用 `modeck unregister --config CONFIG_DIR`，将 `CONFIG_DIR` 替换为配置目录路径；已绑定的旧式单目录配置需先通过 `modeck config` 更新绑定。
+
+源码升级后重新运行 `modeck config`，更新 hook 使用的运行时副本。
 
 [架构设计](docs/architecture.md) · [参与开发](CONTRIBUTING.md)
