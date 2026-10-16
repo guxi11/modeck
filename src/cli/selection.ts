@@ -31,16 +31,17 @@ export const choose = async <T>(message: string, choices: readonly (Separator | 
   }
 };
 
-export const selections = async (scan: ScanResult, answers?: string, preview?: (choices: readonly Choice[]) => Promise<string>): Promise<readonly Choice[]> => {
+export const selections = async (scan: ScanResult, answers?: string, preview?: (choices: readonly Choice[]) => Promise<string>, rename = true): Promise<readonly Choice[]> => {
   if (answers !== undefined) {
     const value = parseJson(utf8((await regularBytes(answers, LIMITS.jsonBytes)).bytes)) as Record<string, unknown>;
     requireValue(value && typeof value === "object" && !Array.isArray(value)
-      && Object.keys(value).length === 1 && Array.isArray(value.resources), "E_USAGE", "Answers must be {resources:[{id,name?}]}");
+      && Object.keys(value).length === 1 && Array.isArray(value.resources), "E_USAGE", rename ? "Answers must be {resources:[{id,name?}]}" : "Answers must be {resources:[{id}]}");
     const choices = (value.resources as unknown[]).map(item => {
       requireValue(item && typeof item === "object" && !Array.isArray(item), "E_USAGE", "Invalid resource answer");
       const entry = item as Record<string, unknown>;
       requireValue(Object.keys(entry).every(key => ["id", "name"].includes(key)) && typeof entry.id === "string"
         && (entry.name === undefined || typeof entry.name === "string"), "E_USAGE", "Invalid resource answer");
+      requireValue(rename || entry.name === undefined, "E_USAGE", "init does not accept resource names; use {id} only");
       return { id: entry.id as string, name: (entry.name ?? entry.id) as string };
     });
     requireValue(choices.every(choice => scan.resources.some(resource => resource.id === choice.id) && validName(choice.name))
@@ -50,7 +51,7 @@ export const selections = async (scan: ScanResult, answers?: string, preview?: (
     return choices;
   }
   const compact = (text: string): string => text.replace(/\s+/g, " ").trim();
-  const ids = await choose("1/3 · Select resources to import", (["rule", "skill"] as const).flatMap(kind => {
+  const ids = await choose(`1/${rename ? 3 : 2} · Select resources to import`, (["rule", "skill"] as const).flatMap(kind => {
     const resources = scan.resources.filter(resource => resource.kind === kind);
     return resources.length ? [new Separator(`── ${kind === "rule" ? "Rules" : "Skills"} (${resources.length}) ──`),
       ...resources.map(resource => ({ value: resource.id, name: resource.id,
@@ -68,8 +69,8 @@ export const selections = async (scan: ScanResult, answers?: string, preview?: (
     return answer.value.trim();
   };
   try {
-    process.stderr.write("\n2/3 · Resource names\nPress Enter to keep each name.\n");
-    const choices = await ids.reduce(async (pending, id) => {
+    if (rename) process.stderr.write("\n2/3 · Resource names\nPress Enter to keep each name.\n");
+    const choices = rename ? await ids.reduce(async (pending, id) => {
       const choices = await pending;
       const nameFor = async (): Promise<string> => {
         const name = await ask(`Name for ${id} [${id}]: `) || id;
@@ -78,8 +79,8 @@ export const selections = async (scan: ScanResult, answers?: string, preview?: (
         return nameFor();
       };
       return [...choices, { id, name: await nameFor() }];
-    }, Promise.resolve([] as readonly Choice[]));
-    process.stderr.write(`\n3/3 · Review ${choices.length} resources\n${choices.map(choice => `  ${choice.id}${choice.id === choice.name ? "" : ` → ${choice.name}`}`).join("\n")}\n\n`);
+    }, Promise.resolve([] as readonly Choice[])) : ids.map(id => ({ id, name: id }));
+    process.stderr.write(`\n${rename ? "3/3" : "2/2"} · Review ${choices.length} resources\n${choices.map(choice => `  ${choice.id}${choice.id === choice.name ? "" : ` → ${choice.name}`}`).join("\n")}\n\n`);
     if (preview) process.stderr.write(`${await preview(choices)}\n`);
     if (!/^(?:y|yes)$/i.test(await ask("Move selected resources after verifying all destinations? [y/N]: "))) throw cancelled();
     return choices;

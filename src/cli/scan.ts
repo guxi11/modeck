@@ -78,7 +78,7 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
       + plan.entries.map(item => `  ${item.source}`).join("\n")
       + `\n\nRetain ${plan.skipped.length} managed/shared entries\n`
       + plan.skipped.map(item => `  ${item.path}\n    ${item.reason}`).join("\n");
-  });
+  }, !initial);
   if (!choices.length && (pending.length || context)) return { configRoot: root, homeRoot, resources: [], message: "No resources selected; no changes made." };
   const backupPlan = await planBackups(scan, choices.map(choice => choice.id), root, true, referenceScan);
   const modes = context ? context.config.defaults : ["base"];
