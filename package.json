@@ -28,7 +28,8 @@
   },
   "files": [
     "dist",
-    "schemas"
+    "schemas",
+    "assets"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
