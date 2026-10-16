@@ -30,8 +30,9 @@ const { parentPort, workerData, MessageChannel } = require('node:worker_threads'
   const { port1, port2 } = new MessageChannel();
   register(workerData.loader, { parentURL: workerData.url, data: { port: port2 }, transferList: [port2] });
   const module = await import(workerData.url);
-  if (module.auto !== undefined && typeof module.auto !== 'function') throw new Error('Named auto export must be a function');
-  const autoModeIds = module.auto && workerData.facts ? await module.auto(workerData.facts) : undefined;
+  const auto = workerData.autoOnly ? module.default : module.auto;
+  if ((workerData.autoOnly || auto !== undefined) && typeof auto !== 'function') throw new Error('Auto selector must export a function');
+  const autoModeIds = auto && workerData.facts ? await auto(workerData.facts) : undefined;
   const sources = await new Promise(resolve => { port1.once('message', resolve); port1.postMessage(null); });
   // Node20's CJS loader does not route transitive require() calls through ESM load hooks.
   const { readFile } = await import('node:fs/promises');
@@ -40,18 +41,18 @@ const { parentPort, workerData, MessageChannel } = require('node:worker_threads'
   await Promise.all(Object.keys(require.cache).filter(path => !graph.has(path)).map(async path => {
     graph.set(path, { path, digest: createHash('sha256').update(await readFile(path)).digest('hex') });
   }));
-  parentPort.postMessage({ config: module.default, sources: [...graph.values()], ...(autoModeIds !== undefined ? { autoModeIds } : {}),
-    invalidAuto: Boolean(module.auto && workerData.facts && autoModeIds === undefined) });
+  parentPort.postMessage({ config: workerData.autoOnly ? null : module.default, sources: [...graph.values()], ...(autoModeIds !== undefined ? { autoModeIds } : {}),
+    invalidAuto: Boolean(auto && workerData.facts && autoModeIds === undefined) });
 })().catch(error => parentPort.postMessage({ error: String(error?.message ?? error) }));
 `;
 
 export type ExecutableConfig = { readonly config: unknown; readonly sources: readonly { readonly path: string; readonly digest: string }[];
   readonly autoModeIds?: unknown; readonly invalidAuto?: boolean; readonly error?: string };
 
-export const executableConfig = async (path: string, facts?: ProjectFacts): Promise<ExecutableConfig> =>
+export const executableConfig = async (path: string, facts?: ProjectFacts, autoOnly = false): Promise<ExecutableConfig> =>
   new Promise((resolve, reject) => {
     const thread = new Worker(worker, { eval: true, execArgv: [], stdout: true, stderr: true,
-      workerData: { url: pathToFileURL(path).href, loader: `data:text/javascript,${encodeURIComponent(loader)}`,
+      workerData: { autoOnly, url: pathToFileURL(path).href, loader: `data:text/javascript,${encodeURIComponent(loader)}`,
         ...(facts && facts.selector?.value.auto !== false ? { facts: {
           cwd: facts.cwd, boundary: facts.boundary, files: facts.files, dependencies: facts.dependencies,
         } } : {}) } });

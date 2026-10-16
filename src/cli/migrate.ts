@@ -1,9 +1,10 @@
 import { chmod, lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { LIMITS, modeError } from "../contracts/index.js";
 import { collectFacts, loadConfig, parseManifest, resolve } from "../core/index.js";
 import { validateConfig } from "../core/config.js";
+import { findConfigPath, readConfigFile } from "../core/config-file.js";
 import { exists, regularBytes, removeTemporary, requireValue, safePath, utf8, within } from "../resources/fs.js";
 import { readResources } from "../resources/index.js";
 import { scanProject } from "../resources/scan.js";
@@ -34,12 +35,13 @@ export const migrate = async (request: { readonly cwd: string; readonly configRo
   const backupPlan = await planBackups(scan, choices.map(choice => choice.id), configRoot);
   const names = choices.map(choice => choice.name);
   const paths = Object.fromEntries(names.map(name => [name, `skills/${name}`]));
-  const configPath = join(configRoot, "modup.mjs");
+  const configPath = await findConfigPath(configRoot);
+  if (!configPath) throw modeError("E_CONFIG", "Configuration disappeared during migration");
   const original = (await regularBytes(configPath, LIMITS.jsonBytes)).bytes;
-  const updated = addSkillBindings(utf8(original), paths, modes);
+  const updated = addSkillBindings(utf8(original), paths, modes, configPath);
   const configMode = (await lstat(configPath)).mode & 0o777;
   const created: string[] = [];
-  const staged = join(configRoot, ".modup", `migrate-${randomUUID()}.mjs`);
+  const staged = join(configRoot, ".modup", `migrate-${randomUUID()}${extname(configPath)}`);
   let installed = false;
   try {
     await choices.reduce(async (pending, choice) => {
@@ -67,13 +69,13 @@ export const migrate = async (request: { readonly cwd: string; readonly configRo
     await mkdir(dirname(staged), { recursive: true, mode: 0o700 });
     await writeFile(staged, updated, { flag: "wx", mode: configMode });
     // Stage beside the original so all relative imports retain their meaning.
-    const sibling = join(configRoot, `.modup-migrate-${randomUUID()}.mjs`);
+    const sibling = join(configRoot, `.modup-migrate-${randomUUID()}${extname(configPath)}`);
     try {
       await rename(staged, sibling);
-      const { executableConfig } = await import("../core/executable.js");
       const { parseConfig } = await import("../core/index.js");
-      parseConfig((await executableConfig(sibling, facts)).config);
+      parseConfig((await readConfigFile(sibling, facts)).config);
       await validateConfig(context);
+      requireValue((await findConfigPath(configRoot)) === configPath, "E_PLAN_STALE", "Configuration path changed during migration");
       await rename(sibling, configPath);
       installed = true;
     } finally { await unlink(sibling).catch(() => undefined); }

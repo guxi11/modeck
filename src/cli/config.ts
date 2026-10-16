@@ -1,8 +1,8 @@
-import { resolve, join } from "node:path";
+import { resolve } from "node:path";
 import { modeError } from "../contracts/index.js";
+import { findConfigPath } from "../core/config-file.js";
 import { loadRecord } from "../integration/install.js";
 import { safeAbsolute } from "../integration/fs.js";
-import { exists } from "../resources/fs.js";
 
 export const configRootFor = async (home: string, cwd: string, explicit?: string): Promise<string> => {
   if (explicit !== undefined) return safeAbsolute(resolve(explicit));
@@ -12,6 +12,6 @@ export const configRootFor = async (home: string, cwd: string, explicit?: string
   // A binding is the user's trusted choice; business cwd must not shadow it with executable JavaScript.
   if (roots[0]) return safeAbsolute(roots[0]);
   const root = await safeAbsolute(resolve(cwd));
-  if (await exists(join(root, "modup.mjs"))) return root;
+  if (await findConfigPath(root)) return root;
   throw modeError("E_CONFIG", "No modup configuration found; use --config <dir>, or run modup init in a configuration directory and modup bind --agent <agent> there");
 };

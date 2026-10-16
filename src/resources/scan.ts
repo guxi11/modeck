@@ -1,8 +1,8 @@
-import { lstat, readdir, realpath } from "node:fs/promises";
+import { lstat, readdir, readlink, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { canonical, checkRelativePath, LIMITS, parseJson, sha256 } from "../contracts/index.js";
-import type { Kind, TreeEntry } from "../contracts/index.js";
-import { compare, exists, regularBytes, requireValue, safePath, utf8 } from "./fs.js";
+import type { Agent, Kind, TreeEntry } from "../contracts/index.js";
+import { compare, exists, missing, regularBytes, requireValue, safePath, utf8 } from "./fs.js";
 import { resourceEntry } from "./skill.js";
 import { snapshotLocal } from "./tree.js";
 
@@ -23,6 +23,63 @@ type Candidate = Omit<ScannedResource, "id" | "sources" | "aliases" | "origins">
 const targets = [".claude", ".codex", ".agents", ".codebuddy", ".codebuddy-cli", ".gemini"];
 const markdownRuleTargets = new Set([".claude", ".codebuddy"]);
 const ruleNames: Readonly<Record<string, string>> = { ".claude": "CLAUDE.md", ".codex": "AGENTS.md", ".codebuddy": "CODEBUDDY.md", ".codebuddy-cli": "CODEBUDDY.md", ".gemini": "GEMINI.md" };
+export type CatalogReferenceScan = {
+  readonly references: readonly { readonly path: string; readonly source: string | null; readonly link: string;
+    readonly ino: number; readonly dev: number; readonly mtime: number; readonly ctime: number }[];
+  readonly referenceDigest: string;
+};
+
+// Enumerate references without reading resource contents; canonical directory visits bound aliases and cycles.
+export const scanCatalogReferences = async (home: string): Promise<CatalogReferenceScan> => {
+  const root = await safePath(home);
+  const references: CatalogReferenceScan["references"][number][] = [];
+  let visited = 0;
+  const traversed = new Set<string>();
+  const platformRoots = targets.flatMap(target => ["plugins", "packages"].map(name => join(root, target, name)));
+  const walk = async (path: string, depth: number, children?: readonly string[]): Promise<void> => {
+    requireValue(depth <= LIMITS.scanDepth && ++visited <= LIMITS.scanEntries,
+      "E_SCAN_LIMIT", "Catalog reference scan limit exceeded");
+    const info = await lstat(path).catch(error => { if (missing(error)) return null; throw error; });
+    if (!info) return;
+    if (info.isSymbolicLink()) {
+      const link = await readlink(path);
+      requireValue(link.length <= LIMITS.pathLength, "E_SCAN_LIMIT", "Catalog reference path is too long", { path });
+      const source = await realpath(path).catch(error => {
+        if (error instanceof Error && "code" in error && ["ENOENT", "ENOTDIR", "ELOOP"].includes(String(error.code))) return null;
+        throw error;
+      });
+      const after = await lstat(path);
+      requireValue(after.ino === info.ino && after.dev === info.dev && after.mtimeMs === info.mtimeMs && after.ctimeMs === info.ctimeMs,
+        "E_PLAN_STALE", "Catalog reference changed while scanning", { path });
+      references.push({ path, source, link, ino: info.ino, dev: info.dev, mtime: info.mtimeMs, ctime: info.ctimeMs });
+      if (source !== null && !platformRoots.some(root => source === root || source.startsWith(`${root}/`))) {
+        requireValue(source.length <= LIMITS.pathLength, "E_SCAN_LIMIT", "Resolved catalog reference path is too long", { path });
+        await walk(source, depth + 1, children);
+      }
+      return;
+    }
+    if (!info.isDirectory()) return;
+    await safePath(path);
+    const key = `${path}\0${children?.join(",") ?? "*"}`;
+    if (traversed.has(key) || traversed.has(`${path}\0*`)) return;
+    traversed.add(key);
+    const names = children ?? (await readdir(path)).sort(compare);
+    requireValue(visited + names.length <= LIMITS.scanEntries, "E_SCAN_LIMIT", "Catalog reference scan limit exceeded");
+    await names.reduce(async (pending, name) => {
+      await pending; checkRelativePath(name, false);
+      const child = join(path, name);
+      requireValue(child.length <= LIMITS.pathLength, "E_SCAN_LIMIT", "Catalog reference path is too long", { path: child });
+      await walk(child, depth + 1);
+    }, Promise.resolve());
+  };
+  await targets.reduce(async (pending, target) => {
+    await pending;
+    await walk(join(root, target), 0, ["skills", "rules", ...(ruleNames[target] ? [ruleNames[target]!] : [])]);
+  }, Promise.resolve());
+  const sorted = references.sort((a, b) => compare(a.path, b.path));
+  return { references: sorted, referenceDigest: sha256(Buffer.from(canonical(sorted))) };
+};
+
 const object = (value: unknown): Record<string, unknown> => {
   requireValue(value !== null && typeof value === "object" && !Array.isArray(value), "E_CONFIG", "Expected an object");
   return value as Record<string, unknown>;
@@ -32,8 +89,12 @@ const resourceId = (name: string): string => {
   return (/^[a-z]/.test(slug) ? slug : `resource-${slug}`).slice(0, 48).replace(/-+$/g, "");
 };
 
-const scanCatalog = async (home: string, project: boolean): Promise<ScanResult> => {
-  const catalogs = project ? [".claude", ".agents", ".codebuddy"] : targets;
+const scanCatalog = async (home: string, project: boolean, agents?: readonly Agent[]): Promise<ScanResult> => {
+  const agentCatalogs: Readonly<Record<Agent, readonly string[]>> = {
+    claude: [".claude"], codex: [".codex", ".agents"], codebuddy: [".codebuddy", ".codebuddy-cli"],
+  };
+  const catalogs = project ? [".claude", ".agents", ".codebuddy"]
+    : agents ? [...new Set(agents.flatMap(agent => agentCatalogs[agent]))] : targets;
   const root = await safePath(home);
   requireValue((await lstat(root)).isDirectory(), "E_PATH", "HOME must be a directory");
   const candidates: Candidate[] = [];
@@ -165,5 +226,5 @@ const scanCatalog = async (home: string, project: boolean): Promise<ScanResult> 
   return { ...result, scanDigest: sha256(Buffer.from(canonical(result))) };
 };
 
-export const scanHome = (home: string): Promise<ScanResult> => scanCatalog(home, false);
+export const scanHome = (home: string, agents?: readonly Agent[]): Promise<ScanResult> => scanCatalog(home, false, agents);
 export const scanProject = (cwd: string): Promise<ScanResult> => scanCatalog(cwd, true);
