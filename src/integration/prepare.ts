@@ -4,6 +4,7 @@ import { readResources } from "../resources/index.js";
 import { modeError } from "../contracts/index.js";
 import type { PrepareRequest, PreparedContext, VerifiedResourceSet } from "../contracts/index.js";
 import { safeAbsolute } from "./fs.js";
+import { nativeSkillNames } from "./codebuddy.js";
 
 export const prepare = async ({ configRoot, stateRoot, cwd, agent }: PrepareRequest): Promise<PreparedContext> => {
   const state = await safeAbsolute(stateRoot);
@@ -16,5 +17,6 @@ export const prepare = async ({ configRoot, stateRoot, cwd, agent }: PrepareRequ
   const resources: VerifiedResourceSet = await readResources({ context, stateRoot: state, parseLock,
     resourceIds: selection.resources.map(resource => resource.id) });
   const plan = resolve({ context, facts, lockDigest: resources.lockDigest });
-  return { plan, rendered: compile({ plan, resources, agent }) };
+  return { plan, rendered: compile({ plan, resources, agent,
+    ...(agent === "codebuddy" ? { nativeSkillNames: await nativeSkillNames(cwd) } : {}) }) };
 };
