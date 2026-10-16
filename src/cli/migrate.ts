@@ -59,8 +59,8 @@ const ignoredCopies = async (root: string, paths: readonly string[]) => {
     return { path, source: source!, line: line!, pattern: pattern!, ignored: Boolean(source) && !pattern!.startsWith("!") };
   });
   // Even a rule edit with no current matches invalidates a reviewed preview.
-  const policies = [...new Set(paths.flatMap(path => path.split("/").slice(0, -1)
-    .map((_, index, parts) => [...parts.slice(0, index), ".gitignore"].join("/"))))].sort(compare);
+  const policies = [...new Set(paths.flatMap(path => [".gitignore", ...path.split("/").slice(0, -1)
+    .map((_, index, parts) => [...parts.slice(0, index + 1), ".gitignore"].join("/"))]))].sort(compare);
   const policy = await Promise.all(policies.map(async path => ({ path,
     digest: await exists(join(root, path)) ? sha256((await regularBytes(join(root, path), LIMITS.jsonBytes)).bytes) : null })));
   return { matches, policy };
