@@ -78,7 +78,7 @@ const lockCheck = async (home: string, agent: Agent): Promise<void> => {
   return conflict("Interrupted installation requires inspection; automatic crash recovery is unsupported", path);
 };
 
-const loadRecord = async (home: string, agent: Agent): Promise<BindRecord | null> => {
+export const loadRecord = async (home: string, agent: Agent): Promise<BindRecord | null> => {
   const loc = locations(agent);
   await checkTarget(home, homePath(home, loc.record));
   const image = await readImage(homePath(home, loc.record), LIMITS.manifestBytes);

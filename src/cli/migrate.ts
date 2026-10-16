@@ -12,20 +12,6 @@ import { selections } from "./init.js";
 import { backupSkills, planBackups } from "./backup.js";
 import { addSkillBindings } from "./edit-config.js";
 
-export const boundConfigRoot = async (home: string): Promise<string> => {
-  const roots = await ["claude", "codex", "codebuddy"].reduce(async (pending, agent) => {
-    const values = await pending;
-    const path = join(home, ".modup", agent, "install.json");
-    if (!await exists(path)) return values;
-    const record = JSON.parse(utf8((await regularBytes(path, LIMITS.manifestBytes)).bytes)) as Record<string, unknown>;
-    requireValue(record.owner === "modup/v1" && record.agent === agent && typeof record.configRoot === "string", "E_CONFIG", "Invalid modup binding", { path });
-    return [...values, await safePath(record.configRoot as string)];
-  }, Promise.resolve([] as readonly string[]));
-  const unique = [...new Set(roots)];
-  requireValue(unique.length === 1, "E_USAGE", unique.length ? "Bindings reference different repositories; specify --config" : "No bound modup repository; specify --config");
-  return unique[0]!;
-};
-
 export const migrate = async (request: { readonly cwd: string; readonly configRoot: string; readonly stateRoot: string;
   readonly list: boolean; readonly answers?: string; readonly mode?: string }): Promise<unknown> => {
   const { cwd, configRoot, stateRoot } = request;

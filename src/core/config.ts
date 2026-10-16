@@ -2,7 +2,7 @@ import { lstat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { canonical, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { Config, ConfigContext, LoadConfigRequest } from "../contracts/index.js";
-import { regularBytes } from "../resources/fs.js";
+import { exists, missing, regularBytes } from "../resources/fs.js";
 import { safePath } from "./files.js";
 import { executableConfig } from "./executable.js";
 import { parseConfig } from "./validation.js";
@@ -29,6 +29,7 @@ export const loadConfig = async ({ configRoot, facts }: LoadConfigRequest): Prom
     const root = await safePath(configRoot);
     if (!(await lstat(root)).isDirectory()) throw modeError("E_PATH", "Config root must be a directory", { path: root });
     const executable = join(root, "modup.mjs");
+    if (!await exists(executable)) throw modeError("E_CONFIG", "Configuration file is missing; specify --config <dir> containing modup.mjs, or run modup init in that directory", { path: executable });
     const { bytes } = await regularBytes(executable, LIMITS.jsonBytes);
     const loaded = await executableConfig(executable, facts);
     const config = parseConfig(loaded.config);
@@ -47,6 +48,7 @@ export const loadConfig = async ({ configRoot, facts }: LoadConfigRequest): Prom
     await validateConfig(context);
     return context;
   } catch (error) {
+    if (missing(error)) throw modeError("E_CONFIG", "Configuration directory is unavailable; restore it or specify --config <dir> containing modup.mjs", { path: configRoot });
     if (error instanceof Error && "code" in error && String(error.code).startsWith("E_")) throw error;
     throw modeError("E_CONFIG", "Cannot load configuration", { path: configRoot, cause: String(error) });
   }

@@ -8,7 +8,8 @@ import type { Agent, BindPlan, ModeError, VerifiedResourceSet } from "../contrac
 import { loadConfig, parseManifest } from "../core/index.js";
 import { syncResources } from "../resources/index.js";
 import { initialize } from "./init.js";
-import { boundConfigRoot, migrate } from "./migrate.js";
+import { migrate } from "./migrate.js";
+import { configRootFor } from "./config.js";
 import { applyBindPlan, encodeHook, planBind, planUnbind, prepare, runAgent } from "../integration/index.js";
 import { data, imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
 import { parseEvent, runMarker } from "../integration/hooks.js";
@@ -112,7 +113,7 @@ export const main = async (argv: string[]): Promise<number> => {
     const opts = options(command, argv.slice(1, separator < 0 ? undefined : separator));
     if (opts.help) { process.stdout.write(help); return 0; }
     const configured = async () => ({
-      configRoot: await pathFor(String(opts.config ?? process.cwd())),
+      configRoot: await configRootFor(homedir(), process.cwd(), typeof opts.config === "string" ? opts.config : undefined),
       stateRoot: await pathFor(String(opts.state ?? process.env.MODUP_STATE ?? join(homedir(), ".local/share/modup/v1"))),
     });
     const format = String(opts.format ?? "text");
@@ -125,9 +126,7 @@ export const main = async (argv: string[]): Promise<number> => {
     }
     if (command === "migrate") {
       if (opts.list && opts.answers) throw modeError("E_USAGE", "--list and --answers cannot be combined");
-      const configRoot = typeof opts.config === "string" ? await pathFor(opts.config) : await boundConfigRoot(homedir());
-      json(await migrate({ cwd: await realpath(process.cwd()), configRoot,
-        stateRoot: await pathFor(String(opts.state ?? process.env.MODUP_STATE ?? join(homedir(), ".local/share/modup/v1"))),
+      json(await migrate({ cwd: await realpath(process.cwd()), ...await configured(),
         list: opts.list === true, ...(typeof opts.answers === "string" ? { answers: await pathFor(opts.answers) } : {}),
         ...(typeof opts.mode === "string" ? { mode: opts.mode } : {}) })); return 0;
     }
