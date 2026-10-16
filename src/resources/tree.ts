@@ -66,12 +66,16 @@ export const snapshotLocal = async (root: string, kind: Kind): Promise<Snapshot>
         "E_LIMIT", "Resource entry limit exceeded");
       const path = relative ? `${relative}/${name}` : name;
       const full = childPath(root, path);
+      requireValue(!/^(?:\.env(?:\..*)?|(?:auth|credentials|settings|mcp)\.json|tokens?[^/]*\.json|private[-_]?key(?:[._-].*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|p12|pfx|key))$/i.test(name),
+        "E_INTEGRITY", "Sensitive configuration path is not allowed in a skill tree", { path: full });
       const stat = await lstat(full);
       requireValue(!stat.isSymbolicLink(), "E_PATH", "Symlinks are not allowed in resources", { path: full });
       if (stat.isDirectory()) return walk(path, depth + 1,
         { ...current, directories: [...current.directories, path] });
       requireValue(stat.isFile(), "E_PATH", "Only regular files and directories are allowed", { path: full });
       const file = await regularBytes(full, path === "SKILL.md" ? LIMITS.textFileBytes : LIMITS.fileBytes);
+      requireValue(!/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/.test(file.bytes.toString("utf8")),
+        "E_INTEGRITY", "Private key material is not allowed in a skill tree", { path: full });
       const bytes = current.bytes + file.bytes.length;
       requireValue(bytes <= LIMITS.treeBytes, "E_LIMIT", "Resource tree byte limit exceeded");
       return { ...current, bytes, files: [...current.files, { path, ...file }] };

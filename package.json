@@ -33,7 +33,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc && esbuild src/cli/bin.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/bin/modup.mjs --banner:js=\"import { createRequire as __modupCreateRequire } from 'node:module'; const require = __modupCreateRequire(import.meta.url);\""
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc && esbuild src/cli/bin.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/bin/modup.mjs --banner:js=\"import { createRequire as __modupCreateRequire } from 'node:module'; const require = __modupCreateRequire(import.meta.url);\""
   },
   "dependencies": {
     "ajv": "8.20.0",

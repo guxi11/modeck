@@ -1,6 +1,6 @@
 import { chmod, lstat, mkdir, open, rmdir, unlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { canonical, checkRelativePath, LIMITS, parseJson, sha256 } from "../contracts/index.js";
+import { canonical, checkRelativePath, LIMITS, modeError, parseJson, sha256 } from "../contracts/index.js";
 import type { Config, ResourceSpec } from "../contracts/index.js";
 import { parseConfig } from "../core/index.js";
 import { scanHome } from "../resources/index.js";
@@ -136,6 +136,7 @@ export const migrate = async (request: Request): Promise<unknown> => {
     const fresh = await build();
     requireValue(fresh.plan.planDigest === request.expect, "E_PLAN_STALE", "Migration sources or destinations changed");
     const created: { path: string; ino: number; dev: number; directory: boolean }[] = [];
+    const completed = new Map<string, unknown>();
     try {
       await fresh.desired.reduce(async (pending, item) => {
         await pending;
@@ -156,7 +157,9 @@ export const migrate = async (request: Request): Promise<unknown> => {
             const stat = await handle.stat();
             created.push({ path, ino: stat.ino, dev: stat.dev, directory: false });
             await handle.writeFile(item.bytes!);
+            completed.set(path, { kind: "file", digest: item.digest, executable: false });
             await handle.chmod(item.executable ? 0o755 : item.path.endsWith(".json") ? 0o600 : 0o644);
+            completed.set(path, desiredImage(item));
             await handle.sync();
           } finally { await handle.close(); }
         }
@@ -172,15 +175,23 @@ export const migrate = async (request: Request): Promise<unknown> => {
       return { ...fresh.plan, applied: true };
     } catch (error) {
       // Only remove objects created by this transaction, never adopted files.
+      const retained: string[] = [];
       await [...created].reverse().reduce(async (pending, item) => {
         await pending;
-        await safePath(dirname(item.path));
-        const stat = await lstat(item.path).catch(() => null);
-        if (stat && stat.ino === item.ino && stat.dev === item.dev) {
+        try {
+          await safePath(dirname(item.path));
+          if (!await exists(item.path)) return;
+          const stat = await lstat(item.path);
+          const expected = completed.get(item.path);
+          if (stat.ino !== item.ino || stat.dev !== item.dev || expected !== undefined
+            && canonical(await current(item.path)) !== canonical(expected)) { retained.push(item.path); return; }
           if (item.directory) await rmdir(item.path);
           else await unlink(item.path);
-        }
+        } catch { retained.push(item.path); }
       }, Promise.resolve());
+      if (retained.length) throw modeError("E_IO", "Migration failed; rollback preserved changed or unremovable paths", {
+        unrolledBackPaths: retained.sort(compare), cause: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   });
