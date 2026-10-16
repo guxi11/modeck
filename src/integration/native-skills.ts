@@ -39,7 +39,8 @@ export const nativeSkillNames = async (cwd: string, agent: Agent = "codebuddy", 
   const configHome = process.env[agent === "codex" ? "CODEX_HOME" : agent === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEBUDDY_CONFIG_DIR"];
   const user = resolve(project, configHome || join(homedir(), `.${agent}`));
   const roots = [...new Set([
-    ...projectDirectories(project, root).map(path => join(path, directory, "skills")),
+    // CodeBuddy loads project skills only from cwd, unlike Claude and Codex.
+    ...(agent === "codebuddy" ? [project] : projectDirectories(project, root)).map(path => join(path, directory, "skills")),
     ...(agent === "codex" ? [join(homedir(), ".agents/skills"), join(user, "skills"), "/etc/codex/skills"] : [join(user, "skills")]),
   ])];
   type Scan = { readonly names: readonly string[]; readonly entries: number };
