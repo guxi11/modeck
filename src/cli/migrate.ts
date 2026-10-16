@@ -59,6 +59,14 @@ export const migrate = async (request: Request): Promise<unknown> => {
     const conflicts: { path: string; reason: string }[] = selected.filter(item => item.chosen.length !== 1)
       .map(item => ({ path: item.name, reason: `Select exactly one conflicting resource in bindings: ${item.ids.join(", ")}` }));
     const omitted = new Set(selected.flatMap(item => item.ids.filter(id => !item.chosen.includes(id))));
+    const excluded = scan.resources.filter(item => omitted.has(item.id)).map(item => ({
+      id: item.id, kind: item.kind, name: item.name, treeDigest: item.treeDigest,
+      sources: item.sources, aliases: item.aliases, origins: item.origins,
+      selectedIds: selected.find(conflict => conflict.ids.includes(item.id))!.chosen,
+      reason: selected.some(conflict => conflict.ids.includes(item.id) && conflict.chosen.length === 1)
+        ? "Conflicting variant excluded by explicit bindings; originals retained"
+        : "Unresolved name conflict; explicit bindings selection required",
+    }));
     const resources = scan.resources.filter(item => !omitted.has(item.id));
     const specs: Record<string, ResourceSpec> = { ...base.resources };
     const desired: Desired[] = [];
@@ -95,7 +103,7 @@ export const migrate = async (request: Request): Promise<unknown> => {
     requireValue(resources.length + Object.keys(base.resources).filter(id => !resources.some(item => item.id === id)).length <= LIMITS.resources,
       "E_LIMIT", "Migration resource count exceeded");
     const config: Config = parseConfig({ schemaVersion: 1, defaults: bindings.defaults ?? [], modes: bindings.modes ?? {}, resources: specs });
-    const manifest = { schemaVersion: 1, owner: "modup/migration/1", resources: tracked, omitted: [...omitted].sort(compare) };
+    const manifest = { schemaVersion: 1, owner: "modup/migration/1", resources: tracked, omitted: [...omitted].sort(compare), excluded };
     const configPath = join(configRoot, "modes.json");
     // Preserve existing user formatting if its normalized configuration matches.
     const configBytes = previous !== null && canonical(base) === canonical(config)
@@ -115,7 +123,7 @@ export const migrate = async (request: Request): Promise<unknown> => {
       return { path: item.path, before, after: desiredImage(item) };
     }));
     const publicPlan = { schemaVersion: 1, operation: "migrate", home: scan.home, configRoot, scanDigest: scan.scanDigest,
-      resources: tracked, omitted: [...omitted].sort(compare), conflicts, changes: targets.filter(item => item.before === null), targets,
+      resources: tracked, omitted: [...omitted].sort(compare), excluded, conflicts, changes: targets.filter(item => item.before === null), targets,
       configDigest: digest(config), manifestDigest: digest(manifest) };
     return { plan: { ...publicPlan, planDigest: digest(publicPlan) }, desired };
   };
