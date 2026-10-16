@@ -8,21 +8,23 @@ import type { Agent, BindPlan, ModeError, VerifiedResourceSet } from "../contrac
 import { loadConfig, parseManifest } from "../core/index.js";
 import { syncResources } from "../resources/index.js";
 import { initialize } from "./init.js";
+import { boundConfigRoot, migrate } from "./migrate.js";
 import { applyBindPlan, encodeHook, planBind, planUnbind, prepare, runAgent } from "../integration/index.js";
 import { data, imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
 import { parseEvent, runMarker } from "../integration/hooks.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
-const help = "modup <init|sync|resolve|render|hook|bind|unbind|run> [options]\n"
+const help = "modup <init|migrate|sync|resolve|render|hook|bind|unbind|run> [options]\n"
   + "init [--home <dir>] [--list | --answers <file>]\n"
+  + "migrate [--config <dir>] [--mode <name>] [--list | --answers <file>]\n"
   + "bind|unbind --agent <claude|codex|codebuddy> [--config <dir>] [--dry-run] [--expect <digest>]\n";
 const values: Readonly<Record<string, readonly string[]>> = {
-  init: ["home", "answers"], sync: ["config", "state"],
+  init: ["home", "answers"], migrate: ["config", "state", "answers", "mode"], sync: ["config", "state"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
   hook: ["config", "state", "agent"], bind: ["config", "state", "agent", "target-home", "format", "expect"],
   unbind: ["config", "agent", "target-home", "format", "expect"], run: ["config", "state", "cwd", "agent", "executable"],
 };
-const booleans: Readonly<Record<string, readonly string[]>> = { init: ["list"], sync: ["update"], bind: ["dry-run"], unbind: ["dry-run"] };
+const booleans: Readonly<Record<string, readonly string[]>> = { init: ["list"], migrate: ["list"], sync: ["update"], bind: ["dry-run"], unbind: ["dry-run"] };
 const options = (command: string, argv: readonly string[]): Readonly<Record<string, string | boolean>> => {
   const parse = (index: number, result: Readonly<Record<string, string | boolean>>): Readonly<Record<string, string | boolean>> => {
     const token = argv[index];
@@ -120,6 +122,14 @@ export const main = async (argv: string[]): Promise<number> => {
       json(await initialize(await pathFor(process.cwd()), await pathFor(String(opts.home ?? homedir())), {
         list: opts.list === true, ...(typeof opts.answers === "string" ? { answers: await pathFor(opts.answers) } : {}),
       })); return 0;
+    }
+    if (command === "migrate") {
+      if (opts.list && opts.answers) throw modeError("E_USAGE", "--list and --answers cannot be combined");
+      const configRoot = typeof opts.config === "string" ? await pathFor(opts.config) : await boundConfigRoot(homedir());
+      json(await migrate({ cwd: await realpath(process.cwd()), configRoot,
+        stateRoot: await pathFor(String(opts.state ?? process.env.MODUP_STATE ?? join(homedir(), ".local/share/modup/v1"))),
+        list: opts.list === true, ...(typeof opts.answers === "string" ? { answers: await pathFor(opts.answers) } : {}),
+        ...(typeof opts.mode === "string" ? { mode: opts.mode } : {}) })); return 0;
     }
     if (command === "bind" || command === "unbind") {
       const expected = opts.expect;

@@ -2,18 +2,20 @@ import { chmod, lstat, mkdir, open, rmdir, unlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { createInterface } from "node:readline";
 import { modeError, LIMITS, parseJson, sha256 } from "../contracts/index.js";
-import { parseConfig } from "../core/index.js";
+import { loadConfig, parseConfig } from "../core/index.js";
 import { checkDirectory } from "../integration/fs.js";
 import { scanHome } from "../resources/scan.js";
 import type { ScanResult, ScannedResource } from "../resources/scan.js";
 import { exists, regularBytes, requireValue, safePath, utf8 } from "../resources/fs.js";
 import { snapshotLocal } from "../resources/tree.js";
 
-type Choice = { readonly id: string; readonly name: string };
+import { backupSkills, planBackups } from "./backup.js";
+
+export type Choice = { readonly id: string; readonly name: string };
 const validName = (name: string): boolean => /^[a-z][a-z0-9-]{0,63}$/.test(name);
 const cancelled = () => modeError("E_USAGE", "Initialization cancelled; no configuration was created");
 
-const selections = async (scan: ScanResult, answers?: string): Promise<readonly Choice[]> => {
+export const selections = async (scan: ScanResult, answers?: string, preview?: (choices: readonly Choice[]) => Promise<string>): Promise<readonly Choice[]> => {
   if (answers !== undefined) {
     const value = parseJson(utf8((await regularBytes(answers, LIMITS.jsonBytes)).bytes)) as Record<string, unknown>;
     requireValue(value && typeof value === "object" && !Array.isArray(value)
@@ -56,7 +58,7 @@ const selections = async (scan: ScanResult, answers?: string): Promise<readonly 
       return choose();
     };
     const selected = await choose();
-    return await selected.reduce(async (pending, resource) => {
+    const choices = await selected.reduce(async (pending, resource) => {
       const choices = await pending;
       const nameFor = async (): Promise<string> => {
         const name = await ask(`Name for ${resource.id} [${resource.id}]: `) || resource.id;
@@ -66,6 +68,9 @@ const selections = async (scan: ScanResult, answers?: string): Promise<readonly 
       };
       return [...choices, { id: resource.id, name: await nameFor() }];
     }, Promise.resolve([] as readonly Choice[]));
+    if (preview) process.stdout.write(`${await preview(choices)}\n`);
+    if (!/^(?:y|yes)$/i.test(await ask("Import and back up selected native skills? [y/N]: "))) throw cancelled();
+    return choices;
   } finally { terminal.close(); }
 };
 
@@ -81,7 +86,16 @@ export const initialize = async (root: string, home: string, options: { readonly
   const configPath = join(root, "modup.mjs");
   const autoPath = join(root, "modep-auto.mjs");
   requireValue(!await exists(configPath) && !await exists(autoPath), "E_PATH", "modup.mjs or modep-auto.mjs already exists");
-  const choices = await selections(scan, options.answers);
+  const choices = await selections(scan, options.answers, async selected => {
+    const plan = await planBackups(scan, selected.map(choice => choice.id), root);
+    return `Import into: ${root}\nBackup destination: ${join(root, ".modup", "backups")}/<batch>\n${plan.entries.map(item => `Back up: ${item.source}`).join("\n")}\n${plan.skipped.map(item => `Retain: ${item.path} (${item.reason})`).join("\n")}`;
+  });
+  const backupPlan = await planBackups(scan, choices.map(choice => choice.id), root);
+  const skillNames = choices.flatMap(choice => {
+    const resource = scan.resources.find(item => item.id === choice.id)!;
+    return resource.kind === "skill" ? [resource.name] : [];
+  });
+  requireValue(new Set(skillNames).size === skillNames.length, "E_INTEGRITY", "Selected skills have duplicate metadata names; rename their SKILL.md name before importing");
   const directories: { path: string; ino: number; dev: number; mode: number; finalMode: number }[] = [];
   const files: { path: string; ino: number; dev: number; digest: string; mode: number }[] = [];
   let interrupted = false;
@@ -147,7 +161,9 @@ export const initialize = async (root: string, home: string, options: { readonly
       await chmod(item.path, item.finalMode); item.mode = item.finalMode;
     }, Promise.resolve());
     check();
-    return { configRoot: root, resources: choices.map(choice => choice.name) };
+    await loadConfig({ configRoot: root });
+    const backups = await backupSkills(root, backupPlan);
+    return { configRoot: root, resources: choices.map(choice => choice.name), backupDirectory: backups.directory, backups: backups.entries, retained: backupPlan.skipped };
   } catch (error) {
     await directories.reduce(async (pending, item) => {
       await pending;
