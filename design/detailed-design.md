@@ -4,7 +4,7 @@
 
 ## 1. 收敛后的闭环与 Module
 
-Node.js >=20，TypeScript strict，ESM，首版支持 macOS/Linux。Windows 在写入前报 `E_PLATFORM`，不生成不能执行的 shell hook。包名暂为 `@guxi11/modup`，bin 为 `modup`；无 ai-rulez 依赖。只提供 Claude Code、Codex 两个真实 Adapter。
+Node.js >=20，TypeScript strict，ESM，首版支持 macOS/Linux。Windows 在写入前报 `E_PLATFORM`，不生成不能执行的 shell hook。包名为 `modup`，bin 为 `modup`；无 ai-rulez 依赖。只提供 Claude Code、Codex 两个真实 Adapter。
 
 闭环是 `init/import → 编辑 modes.json → sync → resolve/render → install 或 run → uninstall`。init 创建有 Git 元数据的新配置目录；import 导入指定 Git revision 到新目录；两者都不隐式安装、联网同步资源或修改本机指针。配置仓库由用户正常 Git 提交/分享，下载内容及机器状态不进入仓库。
 
