@@ -1,5 +1,7 @@
 import { chmod, lstat, mkdir, open, rmdir, unlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { canonical, checkRelativePath, LIMITS, modeError, parseJson, sha256 } from "../contracts/index.js";
 import type { Config, ResourceSpec } from "../contracts/index.js";
 import { parseConfig } from "../core/index.js";
@@ -33,6 +35,36 @@ const current = async (path: string): Promise<unknown> => {
 };
 const desiredImage = (item: Desired): unknown => item.kind === "directory" ? { kind: "directory" }
   : { kind: "file", digest: item.digest, executable: item.executable };
+
+const execute = promisify(execFile);
+const ignoredCopies = async (root: string, paths: readonly string[]) => {
+  if (paths.length === 0) return { matches: [], policy: [] };
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+  // Honor the user's ignore configuration, but never invoke a filesystem monitor or hook.
+  const operation = execute("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+    "check-ignore", "--stdin", "-z", "--verbose", "--non-matching"], {
+    cwd: root, env, encoding: "buffer", timeout: LIMITS.probeTimeoutMs, maxBuffer: LIMITS.treeBytes,
+  });
+  operation.child.stdin?.end(Buffer.from(`${paths.join("\0")}\0`));
+  const output = await operation.then(result => result.stdout).catch((error: unknown) => {
+    if (error !== null && typeof error === "object" && "code" in error && error.code === 1 && "stdout" in error
+      && Buffer.isBuffer(error.stdout)) return error.stdout;
+    throw modeError("E_IO", "Cannot check migration resource Git ignore policy");
+  });
+  const fields = utf8(output).split("\0").slice(0, -1);
+  requireValue(fields.length === paths.length * 4, "E_IO", "Incomplete Git ignore policy result");
+  const matches = paths.map((path, index) => {
+    const [source, line, pattern, actual] = fields.slice(index * 4, index * 4 + 4);
+    requireValue(path === actual, "E_IO", "Unexpected Git ignore policy path");
+    return { path, source: source!, line: line!, pattern: pattern!, ignored: Boolean(source) && !pattern!.startsWith("!") };
+  });
+  // Even a rule edit with no current matches invalidates a reviewed preview.
+  const policies = [...new Set(paths.flatMap(path => path.split("/").slice(0, -1)
+    .map((_, index, parts) => [...parts.slice(0, index), ".gitignore"].join("/"))))].sort(compare);
+  const policy = await Promise.all(policies.map(async path => ({ path,
+    digest: await exists(join(root, path)) ? sha256((await regularBytes(join(root, path), LIMITS.jsonBytes)).bytes) : null })));
+  return { matches, policy };
+};
 
 export const migrate = async (request: Request): Promise<unknown> => {
   const configRoot = await safePath(request.configRoot);
@@ -73,6 +105,7 @@ export const migrate = async (request: Request): Promise<unknown> => {
     const resources = scan.resources.filter(item => !omitted.has(item.id));
     const specs: Record<string, ResourceSpec> = { ...base.resources };
     const desired: Desired[] = [];
+    const copies = new Set<string>();
     const tracked: { id: string; kind: string; treeDigest: string; path: string; sources: readonly string[]; aliases: readonly string[]; origins: ScannedResource["origins"] }[] = [];
     await resources.reduce(async (pending, item: ScannedResource) => {
       await pending;
@@ -87,6 +120,9 @@ export const migrate = async (request: Request): Promise<unknown> => {
       else specs[item.id] = spec;
       const snapshot = await snapshotLocal(local ?? item.sources[0]!, item.kind);
       requireValue(snapshot.treeDigest === item.treeDigest, "E_PLAN_STALE", "Source changed while planning");
+      if (!local || destination.startsWith(".modup/resources/")) {
+        [...snapshot.files.keys()].forEach(path => copies.add(item.kind === "rule" ? destination : `${destination}/${path}`));
+      }
       if (!local) {
         if (item.kind === "skill") {
           desired.push({ path: destination, kind: "directory", digest: null, executable: false });
@@ -106,6 +142,17 @@ export const migrate = async (request: Request): Promise<unknown> => {
     requireValue(resources.length + Object.keys(base.resources).filter(id => !resources.some(item => item.id === id)).length <= LIMITS.resources,
       "E_LIMIT", "Migration resource count exceeded");
     const config: Config = parseConfig({ schemaVersion: 1, defaults: bindings.defaults ?? [], modes: bindings.modes ?? {}, resources: specs });
+    // Recheck previously copied resources even when the current scan no longer discovers their originals.
+    await Object.values(config.resources).reduce(async (pending, spec) => {
+      await pending;
+      if (spec.source.type !== "local" || !spec.source.path.startsWith(".modup/resources/")
+        || !await exists(join(configRoot, spec.source.path))) return;
+      const snapshot = await snapshotLocal(join(configRoot, spec.source.path), spec.kind);
+      [...snapshot.files.keys()].forEach(path => copies.add(spec.kind === "rule" ? spec.source.path : `${spec.source.path}/${path}`));
+    }, Promise.resolve());
+    const ignorePolicy = await ignoredCopies(configRoot, [...copies].sort(compare));
+    ignorePolicy.matches.filter(match => match.ignored).forEach(match => conflicts.push({ path: match.path,
+      reason: `Copied resource is Git-ignored by ${match.source}:${match.line} (${match.pattern}); sharing would omit it` }));
     const manifest = { schemaVersion: 1, owner: "modup/migration/1", resources: tracked, omitted: [...omitted].sort(compare), excluded };
     const configPath = join(configRoot, "modes.json");
     // Preserve existing user formatting if its normalized configuration matches.
@@ -137,7 +184,7 @@ export const migrate = async (request: Request): Promise<unknown> => {
     }));
     const publicPlan = { schemaVersion: 1, operation: "migrate", home: scan.home, configRoot, scanDigest: scan.scanDigest,
       resources: tracked, omitted: [...omitted].sort(compare), excluded, conflicts, changes: targets.filter(item => item.before === null), targets,
-      configDigest: digest(config), manifestDigest: digest(manifest) };
+      configDigest: digest(config), manifestDigest: digest(manifest), ignorePolicy };
     return { plan: { ...publicPlan, planDigest: digest(publicPlan) }, desired };
   };
   const initial = await build();
@@ -178,8 +225,12 @@ export const migrate = async (request: Request): Promise<unknown> => {
         }
       }, Promise.resolve());
       const after = await build();
+      const expectedPolicy = fresh.plan.ignorePolicy.policy.map(policy => ({ ...policy,
+        digest: fresh.desired.find(item => item.path === policy.path && item.kind === "file")?.digest ?? policy.digest }));
       requireValue(after.plan.scanDigest === fresh.plan.scanDigest && after.plan.conflicts.length === 0 && after.plan.changes.length === 0,
         "E_PLAN_STALE", "Migration verification failed");
+      requireValue(canonical(after.plan.ignorePolicy.policy) === canonical(expectedPolicy),
+        "E_PLAN_STALE", "Git ignore policy changed during migration");
       await created.filter(item => item.directory).reduce(async (pending, item) => {
         await pending;
         await safePath(item.path);
