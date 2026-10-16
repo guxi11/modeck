@@ -5,7 +5,7 @@ export type DeepReadonly<T> = T extends (...args: never[]) => unknown ? T
 
 export type Id = DeepReadonly<string>;
 export type Sha256 = DeepReadonly<string>;
-export type Agent = DeepReadonly<"codex" | "claude">;
+export type Agent = DeepReadonly<"codex" | "claude" | "codebuddy">;
 export type Kind = DeepReadonly<"rule" | "skill">;
 export type Source = DeepReadonly<{ type: "local"; path: string }
   | { type: "git"; url: string; ref: string; path: string }>;
@@ -43,7 +43,7 @@ export type ImportValidator = DeepReadonly<(stagingRoot: string) => Promise<void
 export type LoadConfigRequest = DeepReadonly<{ configRoot: string; facts?: ProjectFacts }>;
 export type CollectFactsRequest = DeepReadonly<{ cwd: string; stateRoot: string }>;
 export type ResolveRequest = DeepReadonly<{ context: ConfigContext; facts: ProjectFacts; lockDigest: Sha256 }>;
-export type CompileRequest = DeepReadonly<{ plan: ResolvedPlan; resources: VerifiedResourceSet; agent: Agent }>;
+export type CompileRequest = DeepReadonly<{ plan: ResolvedPlan; resources: VerifiedResourceSet; agent: Agent; nativeSkillNames?: string[] }>;
 export type InitConfigRequest = DeepReadonly<{ destination: string; initialConfig: Config }>;
 export type ImportConfigRequest = DeepReadonly<{ url: string; ref: string; destination: string; validate: ImportValidator }>;
 export type SyncMode = DeepReadonly<"reuse" | "update" | "frozen">;

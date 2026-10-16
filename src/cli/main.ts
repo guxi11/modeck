@@ -14,7 +14,7 @@ import { parseEvent, runMarker } from "../integration/hooks.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
 const help = "modup <init|import|scan|migrate|sync|resolve|render|hook|install|uninstall|run> [options]\n"
-  + "--config <dir>  --state <dir>  --agent <codex|claude>\n"
+  + "--config <dir>  --state <dir>  --agent <codex|claude|codebuddy>\n"
   + "init --dir <new-dir> | import --from <git-url> --dir <new-dir> [--ref HEAD]\n"
   + "scan --home <HOME> --format json | migrate --home <HOME> --config <existing-repo> [--bindings <JSON>] [--apply --expect <digest>]\n"
   + "sync [--update] | resolve [--cwd <dir>] | render --agent <agent> [--cwd <dir>] [--format text|json]\n"
@@ -53,7 +53,7 @@ const required = (opts: Readonly<Record<string, string | boolean>>, name: string
 };
 const agentFor = (opts: Readonly<Record<string, string | boolean>>): Agent => {
   const value = required(opts, "agent");
-  if (value !== "codex" && value !== "claude") throw modeError("E_USAGE", "Unknown agent");
+  if (value !== "codex" && value !== "claude" && value !== "codebuddy") throw modeError("E_USAGE", "Unknown agent");
   return value;
 };
 const pathFor = async (value: string): Promise<string> => safeAbsolute(absolute(value));
@@ -162,9 +162,10 @@ export const main = async (argv: string[]): Promise<number> => {
         resources: result.lock.resources.map(({ id, treeDigest, commit }) => ({ id, treeDigest, commit })) }); return 0;
     }
     if (command === "hook") {
-      const event = parseEvent(await input());
+      const agent = agentFor(opts);
+      const event = parseEvent(await input(), agent);
       const normalized = { ...event, cwd: await realpath(event.cwd) };
-      const { rendered } = await prepare({ agent: agentFor(opts), configRoot, stateRoot, cwd: normalized.cwd });
+      const { rendered } = await prepare({ agent, configRoot, stateRoot, cwd: normalized.cwd });
       const reply = encodeHook({ event: normalized, rendered, marker: runMarker(), configRoot, stateRoot });
       if (reply) json(reply); return 0;
     }

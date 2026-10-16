@@ -13,11 +13,13 @@ export const encodeHook = ({ event, rendered, marker, configRoot, stateRoot }: E
   }
   return { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: rendered.text } };
 };
-export const parseEvent = (value: unknown): HookEvent => {
+export const parseEvent = (value: unknown, agent?: Agent): HookEvent => {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw modeError("E_HOOK_INPUT", "Invalid SessionStart event");
   }
-  const event = object(value);
+  const raw = object(value);
+  // CodeBuddy 2.168 omits cwd; its hook process runs in the project directory.
+  const event = agent === "codebuddy" && raw.cwd === undefined ? { ...raw, cwd: process.cwd() } : raw;
   if (event.hook_event_name !== "SessionStart" || typeof event.cwd !== "string" || !isAbsolute(event.cwd)
     || typeof event.session_id !== "string" || !event.session_id || event.session_id.length > LIMITS.sessionIdChars
     || /\p{Cc}/u.test(event.session_id) || typeof event.source !== "string"
@@ -31,7 +33,7 @@ export const runMarker = (): RunMarker | null => {
   if (raw === undefined) return null;
   try {
     const marker = object(parseJson(raw));
-    if (marker.version !== 1 || typeof marker.agent !== "string" || !["codex", "claude"].includes(marker.agent)
+    if (marker.version !== 1 || typeof marker.agent !== "string" || !["codex", "claude", "codebuddy"].includes(marker.agent)
       || !["cwd", "configRoot", "stateRoot"].every(key => {
         const path = marker[key];
         return typeof path === "string" && path.startsWith("/");

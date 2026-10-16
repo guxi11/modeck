@@ -12,6 +12,9 @@ import { prepare } from "./prepare.js";
 const flags = {
   codex: { "-m": 1, "--model": 1, "-s": 1, "--sandbox": 1, "-a": 1, "--ask-for-approval": 1,
     "--search": 0, "--no-alt-screen": 0, "--no-daemon": 0, "-c": 1, "--config": 1, "-C": 1, "--cd": 1 },
+  codebuddy: { "-p": 0, "--print": 0, "--model": 1, "--effort": 1, "--permission-mode": 1,
+    "--output-format": 1, "--input-format": 1, "--max-turns": 1, "--verbose": 0,
+    "--no-session-persistence": 0, "--append-system-prompt": 1 },
   claude: { "-p": 0, "--print": 0, "--model": 1, "--effort": 1, "--permission-mode": 1,
     "--output-format": 1, "--input-format": 1, "--max-budget-usd": 1, "--verbose": 0,
     "--no-session-persistence": 0, "--append-system-prompt": 1, "--append-system-prompt-file": 1 },
@@ -22,6 +25,8 @@ const commands: Readonly<Record<Agent, readonly string[]>> = {
   codex: ["agents", "review", "login", "logout", "mcp", "plugin", "app-server", "remote-control", "app", "completion", "update",
     "doctor", "sandbox", "debug", "apply", "a", "resume", "queue", "archive", "delete", "migrate-rollouts", "unarchive", "fork",
     "cloud", "exec-server", "features", "help"],
+  codebuddy: ["config", "mcp", "sandbox", "plugin", "project", "doctor", "update", "install", "cleanup",
+    "daemon", "ps", "logs", "attach", "kill", "stop", "rm", "respawn", "agents", "auto-mode", "help"],
   claude: ["agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs", "mcp", "plugin", "plugins",
     "purge", "respawn", "rm", "setup-token", "stop", "kill", "ultrareview", "update", "upgrade", "help"],
 };

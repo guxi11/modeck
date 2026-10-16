@@ -12,8 +12,8 @@ import { prepare } from "./prepare.js";
 
 const owner = "modup/v1" as const;
 const locations = (agent: Agent) => ({
-  hook: agent === "codex" ? ".codex/hooks.json" : ".claude/settings.json",
-  legacySkill: agent === "codex" ? ".agents/skills/modup" : ".claude/skills/modup",
+  hook: agent === "codex" ? ".codex/hooks.json" : `.${agent}/settings.json`,
+  legacySkill: agent === "codex" ? ".agents/skills/modup" : `.${agent}/skills/modup`,
   private: `.modup/${agent}`,
   record: `.modup/${agent}/install.json`, lock: `.modup/${agent}/install.lock`,
 });

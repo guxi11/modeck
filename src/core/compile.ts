@@ -10,10 +10,10 @@ const content = (bytes: Readonly<Uint8Array>): string => {
 };
 const withoutFinalLf = (text: string): string => text.replace(/\n+$/, "");
 
-export const compile = ({ plan, resources, agent }: CompileRequest): RenderedContext => {
+export const compile = ({ plan, resources, agent, nativeSkillNames = [] }: CompileRequest): RenderedContext => {
   requireValue(plan.configDigest === resources.configDigest && plan.lockDigest === resources.lockDigest,
     "E_INTEGRITY", "Plan and verified resources have different identities");
-  requireValue(agent === "codex" || agent === "claude", "E_CONFIG", "Unsupported agent");
+  requireValue(agent === "codex" || agent === "claude" || agent === "codebuddy", "E_CONFIG", "Unsupported agent");
   const available = new Map(resources.resources.map(resource => [resource.id, resource]));
   const locked = new Map(resources.lock.resources.map(resource => [resource.id, resource]));
   requireValue(available.size === resources.resources.length, "E_INTEGRITY", "Duplicate verified resource id");
@@ -28,13 +28,15 @@ export const compile = ({ plan, resources, agent }: CompileRequest): RenderedCon
     requireValue(binding.kind !== "skill" || resource.skill !== null, "E_INTEGRITY", "Skill metadata is missing", { id: binding.id });
     return { binding, resource };
   });
-  const identity = bound.map(({ binding, resource }) => ({ id: binding.id, kind: binding.kind,
+  const native = new Set(nativeSkillNames);
+  const selected = bound.filter(({ binding, resource }) => binding.kind !== "skill" || !native.has(resource.skill!.name));
+  const identity = selected.map(({ binding, resource }) => ({ id: binding.id, kind: binding.kind,
     treeDigest: resource.treeDigest, preload: binding.preload }));
   const selectionDigest = sha256(Buffer.from(canonical({ protocol: PROTOCOL, agent, modeIds: plan.modeIds, resources: identity })));
   const header = [`# ${PROTOCOL}`, `agent: ${agent}`, `selection: ${selectionDigest}`, `modes: ${canonical(plan.modeIds)}`].join("\n");
-  const rules = bound.filter(({ binding }) => binding.kind === "rule")
+  const rules = selected.filter(({ binding }) => binding.kind === "rule")
     .map(({ binding, resource }) => `## rule ${binding.id}\n\n${content(resource.entryBytes)}`);
-  const skills = bound.filter(({ binding }) => binding.kind === "skill");
+  const skills = selected.filter(({ binding }) => binding.kind === "skill");
   const index = skills.map(({ binding, resource }) => canonical({ id: binding.id,
     name: resource.skill!.name, description: resource.skill!.description, root: resource.root,
     entry: resource.entry, preload: binding.preload })).join("\n");
