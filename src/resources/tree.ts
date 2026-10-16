@@ -66,7 +66,7 @@ export const snapshotLocal = async (root: string, kind: Kind): Promise<Snapshot>
         "E_LIMIT", "Resource entry limit exceeded");
       const path = relative ? `${relative}/${name}` : name;
       const full = childPath(root, path);
-      requireValue(!/^(?:\.env(?:\..*)?|(?:auth|credentials|settings|mcp)\.json|tokens?[^/]*\.json|private[-_]?key(?:[._-].*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|p12|pfx|key))$/i.test(name),
+      requireValue(!/^(?:\.env(?:\..*)?|\.?(?:secrets?|auth|credentials|settings|mcp)(?:[._-][^/]*)?\.json|\.?tokens?[^/]*\.json|private[-_]?key(?:[._-].*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|.*\.(?:pem|p12|pfx|key))$/i.test(name),
         "E_INTEGRITY", "Sensitive configuration path is not allowed in a skill tree", { path: full });
       const stat = await lstat(full);
       requireValue(!stat.isSymbolicLink(), "E_PATH", "Symlinks are not allowed in resources", { path: full });
