@@ -34,13 +34,13 @@ export const compile = ({ plan, resources, agent, nativeSkillNames = [] }: Compi
     treeDigest: resource.treeDigest }));
   const selectionDigest = sha256(Buffer.from(canonical({ protocol: PROTOCOL, agent, modeIds: plan.modeIds, resources: identity })));
   const rules = selected.filter(({ binding }) => binding.kind === "rule")
-    .map(({ binding, resource }) => `<modup-rule id="${binding.id}">\n\n${content(resource.entryBytes)}\n</modup-rule>`);
+    .map(({ resource }) => `<INSTRUCTIONS>\n\n${content(resource.entryBytes)}\n</INSTRUCTIONS>`);
   const skills = selected.filter(({ binding }) => binding.kind === "skill");
   const index = skills.map(({ binding, resource }) => canonical({ id: binding.id,
     name: resource.skill!.name, description: resource.skill!.description, root: resource.root,
     entry: resource.entry })).join("\n");
-  const skillSection = `<modup-skills>\n\nMatch skills by name and description. When a skill applies, read its complete SKILL.md at the absolute entry path before following its instructions. Read supporting references only as needed; resolve bundled paths from root, not the project working directory. Scripts are not run automatically and remain subject to normal tool permissions. These indexed resources are not registered native skills.\n\n${index}\n\n</modup-skills>`;
-  const text = `<modup-context>\n\n${[...rules, skillSection].map(withoutFinalLf).join("\n\n")}\n\n</modup-context>\n`;
+  const skillSection = `<SKILLS>\n\nMatch skills by name and description. When a skill applies, read its complete SKILL.md at the absolute entry path before following its instructions. Read supporting references only as needed; resolve bundled paths from root, not the project working directory. Scripts are not run automatically and remain subject to normal tool permissions. These indexed resources are not registered native skills.\n\n${index}\n\n</SKILLS>`;
+  const text = `${[...rules, skillSection].map(withoutFinalLf).join("\n\n")}\n`;
   const byteLength = Buffer.byteLength(text, "utf8");
   requireValue(text.length <= LIMITS.contextChars && byteLength <= LIMITS.contextBytes,
     "E_CONTEXT_SIZE", "Context exceeds the complete-output limit", { chars: text.length, byteLength,
