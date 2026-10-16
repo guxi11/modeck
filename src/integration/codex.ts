@@ -19,7 +19,7 @@ export const codexConfig = async (executable: string, cwd: string, overrides: re
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => {
         bytes += Buffer.byteLength(chunk); buffer += chunk;
-        if (bytes > LIMITS.lockBytes) { fail(); return; }
+        if (bytes > LIMITS.manifestBytes) { fail(); return; }
         const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
         lines.filter(line => line.trim()).forEach(line => {
           try {
