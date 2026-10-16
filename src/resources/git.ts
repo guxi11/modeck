@@ -77,9 +77,14 @@ const advertisedRef = async (directory: string, source: GitSource, ref: string):
   return refs[0]!;
 };
 
-export const fetchCommit = async (directory: string, source: GitSource, ref: string): Promise<string> => {
+export const fetchCommit = async (directory: string, source: GitSource, ref: string, partial = false): Promise<string> => {
+  if (partial) {
+    await git(directory, ["config", "remote.origin.url", source.url]);
+    await git(directory, ["config", "remote.origin.promisor", "true"]);
+    await git(directory, ["config", "remote.origin.partialclonefilter", "blob:none"]);
+  }
   const target = await advertisedRef(directory, source, ref);
-  await git(directory, ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--depth=1", "--", source.url, target], source.protocol);
+  await git(directory, ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--depth=1", ...(partial ? ["--filter=blob:none"] : []), "--", partial ? "origin" : source.url, target], source.protocol);
   const commit = utf8(await git(directory, ["rev-parse", "--verify", "FETCH_HEAD^{commit}"])).trim();
   requireValue(commitPattern.test(commit), "E_GIT_COMMIT_UNAVAILABLE", "Invalid fetched Git commit");
   return commit;
@@ -99,11 +104,11 @@ const entriesFrom = (bytes: Buffer): readonly GitEntry[] => utf8(bytes).split("\
   return { path: path!, mode: mode!, oid: oid!, bytes: count };
 });
 
-const readBlobs = async (directory: string, entries: readonly GitEntry[], maxBytes: number): Promise<readonly FileData[]> => {
+const readBlobs = async (directory: string, entries: readonly GitEntry[], maxBytes: number, protocol: GitSource["protocol"] = "file"): Promise<readonly FileData[]> => {
   const files = entries.filter(entry => entry.mode !== "040000");
   if (!files.length) return [];
   requireValue(files.reduce((sum, file) => sum + file.bytes, 0) <= maxBytes, "E_LIMIT", "Git tree exceeds byte limit");
-  const output = await git(directory, ["cat-file", "--batch"], "file", maxBytes + files.length * 128,
+  const output = await git(directory, ["cat-file", "--batch"], protocol, maxBytes + files.length * 128,
     Buffer.from(files.map(file => file.oid).join("\n") + "\n"));
   // Binary framing has a local cursor; blob bytes are never decoded or executed.
   let offset = 0;
@@ -122,24 +127,35 @@ const readBlobs = async (directory: string, entries: readonly GitEntry[], maxByt
   return data;
 };
 
-export const extractTree = async (directory: string, commit: string, path: string, kind: Kind): Promise<Snapshot> => {
+export const extractTree = async (directory: string, commit: string, path: string, kind: Kind, protocol: GitSource["protocol"] = "file"): Promise<Snapshot> => {
   requireValue(commitPattern.test(commit), "E_GIT", "Invalid extraction commit");
   checkRelativePath(path, kind !== "rule");
-  const root = path === "." ? null : entriesFrom(await git(directory, ["ls-tree", "-lz", commit, "--", path]));
+  const root = path === "." ? null : entriesFrom(await git(directory, ["ls-tree", "-lz", commit, "--", path], protocol));
   requireValue(root === null || root.length === 1 && root[0]!.path === path, "E_RESOURCE_MISSING", "Git resource path does not exist", { path });
   const entry = root?.[0];
   if (kind === "rule") {
     requireValue(entry?.mode === "100644" || entry?.mode === "100755", "E_PATH", "Rule must be a Git file");
     requireValue(entry!.bytes <= LIMITS.textFileBytes, "E_LIMIT", "Rule exceeds byte limit");
-    const files = await readBlobs(directory, [{ ...entry!, path: "content.md" }], LIMITS.textFileBytes);
+    const files = await readBlobs(directory, [{ ...entry!, path: "content.md" }], LIMITS.textFileBytes, protocol);
     return fromFiles([], files);
   }
   requireValue(!entry || entry.mode === "040000", "E_PATH", "Skill source must be a Git tree");
   const tree = entry?.oid ?? `${commit}^{tree}`;
-  const entries = entriesFrom(await git(directory, ["ls-tree", "-rlzt", tree]));
+  if (protocol !== "file") {
+    // Fetch selected blobs together; ls-tree -l otherwise triggers one remote request per file.
+    const listing = utf8(await git(directory, ["ls-tree", "-rz", tree], protocol));
+    const blobs = listing.split("\0").flatMap(record => {
+      const match = /^[0-9]{6} blob ([0-9a-f]{40})\t/.exec(record);
+      return match ? [match[1]!] : [];
+    });
+    requireValue(blobs.length <= LIMITS.treeEntries, "E_LIMIT", "Git tree entry limit exceeded");
+    if (blobs.length) await git(directory, ["fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--stdin", "origin"],
+      protocol, LIMITS.manifestBytes, Buffer.from([...new Set(blobs)].join("\n") + "\n"));
+  }
+  const entries = entriesFrom(await git(directory, ["ls-tree", "-rlzt", tree], protocol));
   const maxEntries = LIMITS.treeEntries;
   const maxBytes = LIMITS.treeBytes;
   requireValue(entries.length <= maxEntries, "E_LIMIT", "Git tree entry limit exceeded");
-  const files = await readBlobs(directory, entries, maxBytes);
+  const files = await readBlobs(directory, entries, maxBytes, protocol);
   return fromFiles(entries.filter(item => item.mode === "040000").map(item => item.path), files, maxEntries, maxBytes);
 };

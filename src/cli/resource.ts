@@ -1,16 +1,18 @@
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { LIMITS, parseJson } from "../contracts/index.js";
 import { childPath, commitPattern, exists, hashPattern, regularBytes, requireValue, safePath, utf8 } from "../resources/fs.js";
-import { extractTree, fetchCommit, gitSource, initGit } from "../resources/git.js";
+import { extractTree, fetchCommit, git, gitSource, initGit } from "../resources/git.js";
 import { snapshotLocal, writeSnapshot } from "../resources/tree.js";
 
-type Entry = Readonly<{ url: string; path: string; target: string; ref: string; commit: string; digest: string }>;
+type Entry = Readonly<{ url: string; path: string; target: string; ref: string; commit: string; digest: string; date: string; tag: string | null }>;
 type Lock = Readonly<{ version: 1; resources: readonly Entry[] }>;
 const lockName = "modup-resources.lock.json";
 const validate = (root: string, entry: Entry): void => {
   requireValue(entry && [entry.url, entry.path, entry.target, entry.ref, entry.commit, entry.digest].every(value => typeof value === "string" && value.length > 0), "E_CONFIG", "Invalid external resource entry");
+  requireValue((entry.date === undefined || typeof entry.date === "string" && Number.isFinite(Date.parse(entry.date)))
+    && (entry.tag === undefined || entry.tag === null || typeof entry.tag === "string" && entry.tag.length > 0), "E_CONFIG", "Invalid external resource metadata");
   childPath(root, entry.path, true);
   childPath(root, entry.target);
   requireValue(!entry.target.split("/").some(part => part.startsWith(".")) && !/[\s*?![\]\\#]/.test(entry.target)
@@ -27,14 +29,6 @@ const readLock = async (root: string): Promise<Lock> => {
     || !(entry.target.toLowerCase() === other.target.toLowerCase() || entry.target.toLowerCase().startsWith(`${other.target.toLowerCase()}/`)))), "E_CONFIG", "External resource targets overlap");
   return lock;
 };
-const script = `#!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-const result = spawnSync('modup', ['resource', process.argv[2] ?? 'init', '--config', fileURLToPath(new URL('.', import.meta.url))], { stdio: 'inherit' });
-if (result.error) { console.error(result.error.message); process.exitCode = 1; }
-else process.exitCode = result.status ?? 1;
-`;
-
 export const manageResources = async (root: string, action: string, input: Readonly<Record<string, string | boolean>>): Promise<Lock> => {
   requireValue(["add", "init", "update"].includes(action), "E_USAGE", "Expected resource add, init or update");
   await safePath(root);
@@ -44,7 +38,7 @@ export const manageResources = async (root: string, action: string, input: Reado
     const lock = await readLock(root);
     const requested = action === "add" ? {
       url: String(input.url ?? ""), path: String(input.path ?? "."), target: String(input.target ?? ""),
-      ref: String(input.ref ?? "HEAD"), commit: "0".repeat(40), digest: "0".repeat(64),
+      ref: String(input.ref ?? "HEAD"), commit: "0".repeat(40), digest: "0".repeat(64), date: new Date(0).toISOString(), tag: null,
     } : null;
     if (requested) {
       validate(root, requested);
@@ -56,9 +50,6 @@ export const manageResources = async (root: string, action: string, input: Reado
     const ignoreFile = join(root, ".gitignore");
     await safePath(ignoreFile, true);
     const ignore = await exists(ignoreFile) ? utf8((await regularBytes(ignoreFile, LIMITS.jsonBytes)).bytes) : "";
-    const scriptFile = join(root, "update-skills.mjs");
-    await safePath(scriptFile, true);
-    requireValue(!await exists(scriptFile) || await readFile(scriptFile, "utf8") === script, "E_INSTALL_CONFLICT", "update-skills.mjs already contains unmanaged content");
     const staging = await mkdtemp(join(await realpath(tmpdir()), "modup-external-"));
     try {
       const prepared = await entries.reduce(async (pending, entry, index) => {
@@ -70,17 +61,25 @@ export const manageResources = async (root: string, action: string, input: Reado
           requireValue(entry !== requested, "E_INSTALL_CONFLICT", "External resource target already exists", { target: entry.target });
           requireValue((await snapshotLocal(target, "skill")).treeDigest === entry.digest, "E_INSTALL_CONFLICT", "External resource has local modifications", { target: entry.target });
         }
-        if ((action === "init" || action === "add" && entry !== requested) && present) return [...previous, { entry, target, staged: null }];
+        if ((action === "init" || action === "add" && entry !== requested) && present && entry.date !== undefined && entry.tag !== undefined) return [...previous, { entry, target, staged: null }];
         const repo = join(staging, `repo-${index}`);
         await mkdir(repo);
         await initGit(repo);
         const source = await gitSource(entry.url, root);
-        const commit = await fetchCommit(repo, source, action === "init" ? entry.commit : entry.ref);
-        const snapshot = await extractTree(repo, commit, entry.path, "skill");
+        const commit = await fetchCommit(repo, source, action !== "update" && entry !== requested ? entry.commit : entry.ref, source.protocol !== "file");
+        const snapshot = await extractTree(repo, commit, entry.path, "skill", source.protocol);
         requireValue(action !== "init" || snapshot.treeDigest === entry.digest, "E_INTEGRITY", "External resource digest differs from lock");
+        const date = action === "init" && entry.date !== undefined ? entry.date
+          : utf8(await git(repo, ["show", "-s", "--format=%cI", commit])).trim();
+        const tags = action === "init" && entry.tag !== undefined ? ""
+          : utf8(await git(repo, ["ls-remote", "--tags", "--", source.url], source.protocol));
+        const tag = action === "init" && entry.tag !== undefined ? entry.tag : tags.split("\n").flatMap(line => {
+          const match = /^([0-9a-f]{40})\trefs\/tags\/(.+?)(?:\^\{\})?$/.exec(line);
+          return match?.[1] === commit ? [match[2]!] : [];
+        }).sort()[0] ?? null;
         const staged = join(staging, `tree-${index}`);
         await writeSnapshot(snapshot, staged, false);
-        return [...previous, { entry: { ...entry, commit, digest: snapshot.treeDigest }, target, staged }];
+        return [...previous, { entry: { ...entry, commit, digest: snapshot.treeDigest, date, tag }, target, staged }];
       }, Promise.resolve<readonly { entry: Entry; target: string; staged: string | null }[]>([]));
       const patterns = entries.map(entry => `/${entry.target}/`);
       const extra = patterns.filter(pattern => !ignore.split(/\r?\n/).includes(pattern));
@@ -103,7 +102,6 @@ export const manageResources = async (root: string, action: string, input: Reado
       const result: Lock = { version: 1, resources: prepared.map(item => item.entry) };
       await writeFile(join(mutex, "lock"), `${JSON.stringify(result, null, 2)}\n`);
       await rename(join(mutex, "lock"), join(root, lockName));
-      if (!await exists(scriptFile)) await writeFile(scriptFile, script, { flag: "wx", mode: 0o755 });
       return result;
     } finally { await rm(staging, { recursive: true, force: true }); }
   } finally { await rm(mutex, { recursive: true, force: true }); }
