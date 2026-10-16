@@ -1,6 +1,6 @@
 import { modeError } from "../contracts/index.js";
 import type { BoundResource, Reason, ResolvedPlan, ResolveRequest } from "../contracts/index.js";
-import { compare, immutable } from "./values.js";
+import { immutable } from "./values.js";
 
 type Expansion = { readonly modes: readonly string[]; readonly reasons: readonly Reason[] };
 
@@ -12,8 +12,7 @@ export const resolve = ({ context, facts, resourceDigest }: ResolveRequest): Res
   (selector?.add ?? []).forEach(id => {
     if (!Object.hasOwn(config.modes, id)) throw modeError("E_SELECTOR", "Selector references unknown mode", { id, path: facts.selector?.path });
   });
-  const detected = selector?.auto === false ? [] : [...context.autoModeIds ?? []]
-    .sort((a, b) => config.modes[a]!.priority - config.modes[b]!.priority || compare(a, b))
+  const detected = selector?.auto === false ? [] : (context.autoModeIds ?? [])
     .map(id => reason(id, "detect"));
   const seeds = [...config.defaults.map(id => reason(id, "default")), ...detected,
     ...selector?.add.map(id => reason(id, "selector")) ?? []];

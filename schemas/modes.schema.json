@@ -135,11 +135,6 @@
         "extends": {
           "$ref": "#/$defs/ids"
         },
-        "priority": {
-          "type": "integer",
-          "minimum": -10000,
-          "maximum": 10000
-        },
         "rules": {
           "$ref": "#/$defs/ids"
         },

@@ -10,7 +10,7 @@ import type {
 } from "../contracts/index.js";
 import { compare, copyJson, immutable, requireValue } from "./values.js";
 
-type ModeInput = { readonly extends?: readonly string[]; readonly priority?: number;
+type ModeInput = { readonly extends?: readonly string[];
   readonly rules?: readonly string[]; readonly skills?: readonly string[] };
 type ConfigInput = { readonly defaults?: readonly string[]; readonly modes: Readonly<Record<string, ModeInput>>;
   readonly resources: { readonly rules?: Readonly<Record<string, string | ResourceSpec["source"]>>;
@@ -86,7 +86,7 @@ export const parseConfig = (value: unknown): Config => {
         { kind: group === "rules" ? "rule" as const : "skill" as const,
           source: typeof source === "string" ? { type: "local" as const, path: source } : source }]))),
     modes: Object.fromEntries(Object.entries(input.modes).map(([id, mode]) => [id, {
-      extends: [...mode.extends ?? []], priority: mode.priority ?? 0,
+      extends: [...mode.extends ?? []],
       rules: [...mode.rules ?? []],
       skills: [...mode.skills ?? []],
     }])),

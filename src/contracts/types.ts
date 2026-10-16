@@ -10,7 +10,7 @@ export type Kind = DeepReadonly<"rule" | "skill">;
 export type Source = DeepReadonly<{ type: "local"; path: string }
   | { type: "git"; url: string; ref: string; path: string }>;
 export type ResourceSpec = DeepReadonly<{ kind: Kind; source: Source }>;
-export type Mode = DeepReadonly<{ extends: Id[]; priority: number; rules: Id[]; skills: Id[] }>;
+export type Mode = DeepReadonly<{ extends: Id[]; rules: Id[]; skills: Id[] }>;
 export type Config = DeepReadonly<{ defaults: Id[]; modes: Record<Id, Mode>; resources: Record<Id, ResourceSpec> }>;
 export type Selector = DeepReadonly<{ auto: boolean; add: Id[] }>;
 export type TreeEntry = DeepReadonly<{ path: string; kind: "directory" }
