@@ -189,7 +189,9 @@ export const migrate = async (request: Request): Promise<unknown> => {
       return { path: item.path, before, after: desiredImage(item) };
     }));
     const publicPlan = { schemaVersion: 1, operation: "migrate", home: scan.home, configRoot, scanDigest: scan.scanDigest,
-      resources: tracked, omitted: [...omitted].sort(compare), excluded, conflicts, changes: targets.filter(item => item.before === null), targets,
+      resources: tracked, omitted: [...omitted].sort(compare), excluded,
+      conflicts: [...conflicts].sort((a, b) => compare(a.path, b.path) || compare(a.reason, b.reason)),
+      changes: targets.filter(item => item.before === null), targets,
       configDigest: context?.configDigest ?? digest(config), manifestDigest: digest(manifest), ignorePolicy };
     return { plan: { ...publicPlan, planDigest: digest(publicPlan) }, desired };
   };
