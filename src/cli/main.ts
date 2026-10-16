@@ -7,6 +7,7 @@ import { LIMITS, modeError, parseJson } from "../contracts/index.js";
 import type { Agent, BindPlan, ModeError, VerifiedResourceSet } from "../contracts/index.js";
 import { loadConfig, parseManifest } from "../core/index.js";
 import { syncResources } from "../resources/index.js";
+import { manageResources } from "./resource.js";
 import { initialize } from "./init.js";
 import { migrateHome } from "./scan.js";
 import { migrate } from "./migrate.js";
@@ -17,11 +18,13 @@ import { data, imageJson, object, readImage, safeAbsolute } from "../integration
 import { parseEvent, runMarker } from "../integration/hooks.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
-const help = "modup <init|scan|migrate|sync|resolve|render|hook|bind|unbind|run> [options]\n"
+const help = "modup <resource|init|scan|migrate|sync|resolve|render|hook|bind|unbind|run> [options]\n"
+  + "resource <add|init|update> [--config <dir>] [--url <url> --path <source-path> --target <dir> --ref <ref>]\n"
   + "init|scan [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>]\n"
   + "migrate [--config <dir>] [--mode <name>] [--list | --answers <file>]\n"
   + "bind|unbind [--agent <claude|codex|codebuddy>] [--config <dir>] [--dry-run] [--expect <digest>]\n";
 const values: Readonly<Record<string, readonly string[]>> = {
+  resource: ["config", "url", "path", "target", "ref"],
   init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"], sync: ["config", "state"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
   hook: ["config", "state", "agent"], bind: ["config", "state", "agent", "target-home", "format", "expect"],
@@ -112,8 +115,11 @@ export const main = async (argv: string[]): Promise<number> => {
     if (!Object.hasOwn(values, command)) throw modeError("E_USAGE", "Unknown command", { command });
     const separator = argv.indexOf("--", 1);
     if (separator >= 0 && command !== "run") throw modeError("E_USAGE", "Only run accepts agent arguments");
-    const opts = options(command, argv.slice(1, separator < 0 ? undefined : separator));
+    const opts = options(command, argv.slice(command === "resource" ? 2 : 1, separator < 0 ? undefined : separator));
     if (opts.help) { process.stdout.write(help); return 0; }
+    if (command === "resource") {
+      json(await manageResources(await pathFor(String(opts.config ?? process.cwd())), argv[1] ?? "", opts)); return 0;
+    }
     const configured = async () => ({
       configRoot: await configRootFor(homedir(), process.cwd(), typeof opts.config === "string" ? opts.config : undefined),
       stateRoot: await pathFor(String(opts.state ?? process.env.MODUP_STATE ?? join(homedir(), ".local/share/modup/v1"))),
