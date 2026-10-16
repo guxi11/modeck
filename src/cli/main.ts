@@ -180,7 +180,10 @@ export const main = async (argv: string[]): Promise<number> => {
       if (result.signal) { process.kill(process.pid, result.signal); return 1; }
       return result.exitCode ?? 1;
     }
-    const prepared = await prepare({ agent: command === "resolve" ? "codex" : agentFor(opts), configRoot, stateRoot, cwd });
+    const agent = command === "resolve" ? "codex" : opts.agent !== undefined ? agentFor(opts)
+      : (await selectAgents("render", await pathFor(homedir())))[0];
+    if (!agent) return 0;
+    const prepared = await prepare({ agent, configRoot, stateRoot, cwd });
     if (command === "resolve") json(prepared.plan);
     else if (format === "json") json(prepared.rendered);
     else process.stdout.write(prepared.rendered.text);
