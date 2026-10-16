@@ -18,7 +18,7 @@ npm install -g modup
 modup init
 ```
 
-modup 会扫描已有的 rules 和 skills，让你选择要纳入管理的资源、为它们命名，并生成 `modup.mjs` 和 `auto.mjs`。随后编辑 mode 声明，决定每种工作方式需要哪些资源。
+modup 会扫描已有的 rules 和 skills，让你选择要纳入管理的资源、为它们命名，将规则导入配置目录的 `rules/<name>.md`、技能导入 `skills/<name>/`，并生成 `modup.mjs` 和 `modep-auto.mjs`。随后编辑 mode 声明，决定每种工作方式需要哪些资源。
 
 在这个配置目录绑定 agent：
 
@@ -33,7 +33,7 @@ modup bind --agent claude
 `modup.mjs` 中先声明资源，再把资源名称绑定到 mode。资源路径相对于配置目录；rule 指向 Markdown 文件，skill 指向包含 `SKILL.md` 的目录。
 
 ```js
-export { default as auto } from './auto.mjs';
+export { default as auto } from './modep-auto.mjs';
 
 export default {
   resources: {
@@ -60,7 +60,7 @@ export default {
 prog
 ```
 
-把业务项目的 `.modes` 写为 `auto`，即可让 `auto.mjs` 根据目录内容自动选择 mode；显式写 `prog` 时不会运行自动检测：
+把业务项目的 `.modes` 写为 `auto`，即可让 `modep-auto.mjs` 根据目录内容自动选择 mode；显式写 `prog` 时不会运行自动检测：
 
 ```js
 export default ({ files, dependencies }) =>
@@ -75,7 +75,7 @@ export default ({ files, dependencies }) =>
 
 ```mermaid
 flowchart LR
-  Config["配置目录<br/>modup.mjs · auto.mjs<br/>rules · skills"] --> Bind["modup bind"]
+  Config["配置目录<br/>modup.mjs · modep-auto.mjs<br/>rules/*.md · skills/*/"] --> Bind["modup bind"]
   Bind --> Hook["agent 的 SessionStart hook"]
   Project["业务项目<br/>.modes / 自动识别"] --> Hook
   Hook --> Context["选择的 rules 和 skills"]
