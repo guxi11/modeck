@@ -1,10 +1,10 @@
-# modup 架构设计
+# modeck 架构设计
 
 本文面向维护者和适配器作者，解释配置如何变成会话上下文，以及资源、hook 和绑定的安全边界。**实现现状**以本文链接的源码为准；末节的演进建议不代表已支持的能力。上手步骤见 [README](../README.md)，开发环境与提交检查见 [参与开发](../CONTRIBUTING.md)。
 
 ## 设计目标与边界
 
-modup 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Claude Code、Codex 和 CodeBuddy Code CLI。业务目录提供工作区事实及可选 `.modes`，配置目录保存资源与选择逻辑，两者独立。
+modeck 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Claude Code、Codex 和 CodeBuddy Code CLI。业务目录提供工作区事实及可选 `.modes`，配置目录保存资源与选择逻辑，两者独立。
 
 工具负责选择、校验、编译和接入上下文，不替代 agent 原生指令加载、工具权限或模型服务。它不改写业务项目的 `AGENTS.md` / `CLAUDE.md`，也不提供模型缓存命中保证。
 
@@ -33,7 +33,7 @@ modup 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Clau
 
 ```mermaid
 flowchart TB
-  accTitle: Modup context preparation flow
+  accTitle: Modeck context preparation flow
   accDescr: Collect workspace facts, load trusted configuration, select modes, verify selected resources, then compile and encode session context.
   workspace["业务工作目录"] --> facts["collectFacts：边界、文件、依赖、选择器"]
   facts --> config["loadConfig：读取配置并校验"]
@@ -44,15 +44,15 @@ flowchart TB
   compile --> output["render / hook / run"]
 ```
 
-计划保留 `cwd`、边界、选择器路径和选择原因，供诊断使用；稳定正文不插入这些运行诊断。输出协议是 `modup-context/1`。
+计划保留 `cwd`、边界、选择器路径和选择原因，供诊断使用；稳定正文不插入这些运行诊断。输出协议是 `modeck-context/1`。
 
 ### 配置发现与执行
 
 [配置发现](../src/cli/config.ts)依次选择显式 `--config`、本机已有绑定记录中的配置目录、调用目录内的 YAML 配置。绑定指向多个不同配置目录时，命令要求显式 `--config`。已有绑定优先于业务目录配置，避免业务仓库自动覆盖已信任的配置入口。
 
-[配置读取](../src/core/config-file.ts)接受 `modup.yaml` 或 `modup.yml`，两者同时存在时报错。YAML 声明资源、`defaults` 和 modes；不执行 `modup.mjs`。可选的 `modep-auto.mjs` 默认导出自动选择函数，与声明配置分开加载，文件名保留现有拼写。
+[配置读取](../src/core/config-file.ts)接受 `modeck.yaml` 或 `modeck.yml`，两者同时存在时报错。YAML 声明资源、`defaults` 和 modes；不执行 `modeck.mjs`。可选的 `modeck-auto.mjs` 默认导出自动选择函数，与声明配置分开加载，文件名保留现有拼写。
 
-[自动选择执行器](../src/core/auto.ts)在独立 Worker 中加载 `modep-auto.mjs`，并记录导入文件摘要，隔离模块缓存。它支持异步函数，传入 `cwd`、`boundary`、`files` 和 `dependencies`。**Worker 不是权限沙箱**：自动选择脚本及其导入模块以本机用户权限执行；超时和摘要校验不能使不可信 JS 安全。配置加载后和资源处理前后会复核 YAML 及脚本来源文件身份。
+[自动选择执行器](../src/core/auto.ts)在独立 Worker 中加载 `modeck-auto.mjs`，并记录导入文件摘要，隔离模块缓存。它支持异步函数，传入 `cwd`、`boundary`、`files` 和 `dependencies`。**Worker 不是权限沙箱**：自动选择脚本及其导入模块以本机用户权限执行；超时和摘要校验不能使不可信 JS 安全。配置加载后和资源处理前后会复核 YAML 及脚本来源文件身份。
 
 ### 工作区与选择顺序
 
@@ -83,7 +83,7 @@ flowchart TB
 
 运行期资源层不拉取 Git；自动选择脚本自身仍有联网能力。`sync` 默认处理全部声明资源，运行期只处理所选资源。
 
-默认状态目录是 `~/.local/share/modup/v1`，可由 `--state` 或 `MODUP_STATE` 调整，且必须位于配置目录之外。状态目录包含以下内容：
+默认状态目录是 `~/.local/share/modeck/v1`，可由 `--state` 或 `MODECK_STATE` 调整，且必须位于配置目录之外。状态目录包含以下内容：
 
 | 路径 | 内容与身份 |
 | --- | --- |
@@ -103,7 +103,7 @@ flowchart TB
 
 [编译器](../src/core/compile.ts)检查计划与资源身份一致后，按协议头、规则正文、技能索引排列文本。规则正文统一 UTF-8、LF 和末尾换行；技能只提供 ID、名称、描述、绝对 `root` 和 `entry`，正文由 agent 在匹配任务后读取，配套 references/assets/scripts 从 root 定位。
 
-索引不是原生 skill 注册，不保证 agent 必然调用技能。modup 不自动执行 skill 脚本；脚本执行仍服从 agent 的工具权限。[原生技能扫描](../src/integration/native-skills.ts)按目标 agent 的扫描规则收集名称，编译时跳过同名技能索引以减少重复；去重依据是名称，不是内容比较。
+索引不是原生 skill 注册，不保证 agent 必然调用技能。modeck 不自动执行 skill 脚本；脚本执行仍服从 agent 的工具权限。[原生技能扫描](../src/integration/native-skills.ts)按目标 agent 的扫描规则收集名称，编译时跳过同名技能索引以减少重复；去重依据是名称，不是内容比较。
 
 正文同时受 9,000 字符和 32,768 字节上限约束，超过任一上限会报 `E_CONTEXT_SIZE`，不会静默截断。完整阈值见 [LIMITS](../src/contracts/constants.ts)。
 
@@ -130,23 +130,23 @@ flowchart TB
 | Codex | `.codex/hooks.json` | 安装不授予信任，需要在 `/hooks` 审阅并信任定义 |
 | CodeBuddy Code CLI | `.codebuddy/settings.json` | 使用 CLI hook 协议；加载行为还受其运行时控制 |
 
-这些是 modup 实现的写入位置，不代表所有 agent 自定义配置目录布局都可由绑定命令自动发现。成功输出 hook JSON 也不等同于真实模型已采纳上下文。
+这些是 modeck 实现的写入位置，不代表所有 agent 自定义配置目录布局都可由绑定命令自动发现。成功输出 hook JSON 也不等同于真实模型已采纳上下文。
 
 [run 包装器](../src/integration/run.ts)是另一个启动入口：Claude / CodeBuddy 使用追加 system prompt 参数；Codex 读取有效配置、合并既有 `developer_instructions`，并在启动前复核配置快照。它以 argv 数组和 `shell: false` 启动子进程，继承 stdio、传递退出码及终止信号；仅接受已知参数和受支持子命令，冲突时报错。
 
-包装器设置 `MODUP_RUN_V1` 标记，包含 agent、目录、配置、状态和正文摘要及父进程 PID。hook 发现有效且一致的标记时不重复注入；不一致、过期或嵌套包装器均报错。
+包装器设置 `MODECK_RUN_V1` 标记，包含 agent、目录、配置、状态和正文摘要及父进程 PID。hook 发现有效且一致的标记时不重复注入；不一致、过期或嵌套包装器均报错。
 
 ## 绑定计划、应用与恢复
 
 [绑定实现](../src/integration/install.ts)把计算计划和写入分开：`planBind` / `planUnbind` 返回 `BindPlan`，`applyBindPlan` 执行变更。CLI 的 `bind` / `unbind` 默认立即应用；`--dry-run` 只展示绑定文件计划，但 `bind` 准备上下文时仍可能物化本地资源缓存。
 
-每个 agent 在目标 home 的 `.modup/<agent>/` 内记录 `install.json`、安装锁和按摘要定位的 runtime 副本。运行时副本使 hook 不依赖源码目录持续存在；配置目录和 Node 可执行文件仍必须可用。重新构建或升级 modup 后，需要重新绑定才能更新已安装副本。
+每个 agent 在目标 home 的 `.modeck/<agent>/` 内记录 `install.json`、安装锁和按摘要定位的 runtime 副本。运行时副本使 hook 不依赖源码目录持续存在；配置目录和 Node 可执行文件仍必须可用。重新构建或升级 modeck 后，需要重新绑定才能更新已安装副本。
 
 应用过程保留以下约束：
 
 1. 计划记录原文件摘要、权限及计划摘要；`--expect` 可要求本次计划与预览摘要相符。
 2. 写入前检查目标所有者、权限、父目录与符号链接，拒绝覆盖 evoloop 标记的共享配置。
-3. 只合并归 modup 所有的 hook 组，保留其他设置；所有权记录缺失或已管理内容被修改时拒绝覆盖。
+3. 只合并归 modeck 所有的 hook 组，保留其他设置；所有权记录缺失或已管理内容被修改时拒绝覆盖。
 4. 通过安装锁串行化同一 agent 的安装，写入时再次核对文件身份，并逐文件原子替换。
 5. 发生可捕获异常时逆序尝试恢复已写文件；无法安全恢复时保留锁，要求人工检查。
 
@@ -154,13 +154,13 @@ flowchart TB
 
 ## 初始化、迁移与备份
 
-[init](../src/cli/init.ts)与 [scan](../src/cli/scan.ts)共用全局资源迁移流程：交互选择 agent，再扫描并选择 rules 和 skills。首次初始化默认在调用目录生成 `modup.yaml`、`modep-auto.mjs`；已绑定 agent 的后续扫描复用其配置目录，冲突时拒绝合并不同绑定。
+[init](../src/cli/init.ts)与 [scan](../src/cli/scan.ts)共用全局资源迁移流程：交互选择 agent，再扫描并选择 rules 和 skills。首次初始化默认在调用目录生成 `modeck.yaml`、`modeck-auto.mjs`；已绑定 agent 的后续扫描复用其配置目录，冲突时拒绝合并不同绑定。
 
-导入先复制并校验到 home 下的 `.modup/rules/`、`.modup/skills/` 和配置目录的对应资源路径，然后更新 YAML。首次初始化的资源绑定到默认 `base`，后续扫描加入配置的默认 modes；已导入且内容一致的资源不会重复导入。要按工作方式筛选，需要把业务资源从默认 mode 移到对应 mode。
+导入先复制并校验到 home 下的 `.modeck/rules/`、`.modeck/skills/` 和配置目录的对应资源路径，然后更新 YAML。首次初始化的资源绑定到默认 `base`，后续扫描加入配置的默认 modes；已导入且内容一致的资源不会重复导入。要按工作方式筛选，需要把业务资源从默认 mode 移到对应 mode。
 
 [migrate](../src/cli/migrate.ts)从配置目录以外的业务项目导入原生 skills，绑定到显式指定或选中的业务 mode，不展开继承；不会把仅由 `defaults` 加入的 mode 当作自动迁移目标。[配置编辑器](../src/cli/edit-config.ts)通过 YAML 文档树追加映射和数组并保留注释；迁移前要求展开 YAML aliases，避免修改一个锚点影响其他 mode。
 
-初始化、扫描和项目迁移均提供 `--list` 预览。[备份模块](../src/cli/backup.ts)在复制、配置写入及完整性校验成功后，把符合条件的原生入口移动到配置目录 `.modup/backups/<批次>/`，并先写 `restore.json` 记录恢复路径。全局导入可备份 rules 和 skills，项目迁移只处理 skills；受管内容、外部所有者及被保留入口引用的共享来源会保留。备份不是删除；没有独立 restore CLI，恢复需按记录核对并移回，不能覆盖已有入口。
+初始化、扫描和项目迁移均提供 `--list` 预览。[备份模块](../src/cli/backup.ts)在复制、配置写入及完整性校验成功后，把符合条件的原生入口移动到配置目录 `.modeck/backups/<批次>/`，并先写 `restore.json` 记录恢复路径。全局导入可备份 rules 和 skills，项目迁移只处理 skills；受管内容、外部所有者及被保留入口引用的共享来源会保留。备份不是删除；没有独立 restore CLI，恢复需按记录核对并移回，不能覆盖已有入口。
 
 ## 演进建议与验收边界
 

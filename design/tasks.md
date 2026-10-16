@@ -1,4 +1,4 @@
-# modup standard 实施任务
+# modeck standard 实施任务
 
 依赖 `architecture.md` 与 `detailed-design.md`（2026-10-16 hard设计，已由ultra修订收口）。本文是交给3名standard的任务包。实现均不新增测试代码/README；本次实施/验收只在隔离HOME/config/state调用，不修改真实HOME/agent配置，不发布npm、不加远端、不推送。产品仍允许用户显式target-home+apply安装真实HOME，不能把本次授权范围写成永久产品禁令。
 
@@ -12,7 +12,7 @@
 
 `design/**` 本轮设计owner保有，实现者不改；`dist/**`、node_modules、内容库、fixture和验收临时记录不能提交。尚无其他产品文件，不自行新增第四个共享utils目录。公共错误、版本、限额、hash/path词法工具也属于core。各owner可以在自身目录内拆小文件，不跨区重构，不新建测试代码。新增第三方依赖需求报给core owner，由它统一写package/lock；另两人不得npm install改变lock。
 
-package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/modup.mjs`；exports至少`./contracts`、`./core`、`./resources`、`./integration`对应dist JS和.d.ts；files只纳入dist、schemas及npm元数据。`typecheck`使用tsc --noEmit；`build`先tsc输出模块/声明，再esbuild把`src/cli/bin.ts`构建为Node20 ESM standalone JS bundle到dist/bin/modup.mjs（node: builtin external，其余依赖打入）；bin须有shebang，main.ts仅导出无启动副作用。包无ai-rulez；schema验证用Ajv2020，受限frontmatter用yaml，tsc/esbuild及@types/node为开发依赖。schema和package.json用相对模块URL定位，普通包/安装runtime布局一致。版本由core统一确定/锁定，不让3人各自写一套构建方式。
+package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/modeck.mjs`；exports至少`./contracts`、`./core`、`./resources`、`./integration`对应dist JS和.d.ts；files只纳入dist、schemas及npm元数据。`typecheck`使用tsc --noEmit；`build`先tsc输出模块/声明，再esbuild把`src/cli/bin.ts`构建为Node20 ESM standalone JS bundle到dist/bin/modeck.mjs（node: builtin external，其余依赖打入）；bin须有shebang，main.ts仅导出无启动副作用。包无ai-rulez；schema验证用Ajv2020，受限frontmatter用yaml，tsc/esbuild及@types/node为开发依赖。schema和package.json用相对模块URL定位，普通包/安装runtime布局一致。版本由core统一确定/锁定，不让3人各自写一套构建方式。
 
 ## 2. 执行依赖和集成节奏
 
@@ -87,7 +87,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/modup.mjs`�
 
 **I3：最小安装与卸载。**
 
-- target-home必填且表示HOME根，产品允许用户显式target-home+apply安装真实HOME；本次所有调用仅用隔离目录。Codex写`.codex/hooks.json`，Claude写`.claude/settings.json`，不安装入口skill；旧入口仅按record完整校验后清理。record/runtime/lock按`.modup/<agent>/`隔离，两agent可共存。默认preview无写；apply的expect可选，提供时匹配当前planDigest，未提供时执行本次重建并复验的计划。预览包含完整JSON合并差异，未知共享字段/其他hooks保留。
+- target-home必填且表示HOME根，产品允许用户显式target-home+apply安装真实HOME；本次所有调用仅用隔离目录。Codex写`.codex/hooks.json`，Claude写`.claude/settings.json`，不安装入口skill；旧入口仅按record完整校验后清理。record/runtime/lock按`.modeck/<agent>/`隔离，两agent可共存。默认preview无写；apply的expect可选，提供时匹配当前planDigest，未提供时执行本次重建并复验的计划。预览包含完整JSON合并差异，未知共享字段/其他hooks保留。
 - standalone JS runtime保留最小包布局（dist/bin入口、3schema、package.json），schema/版本从入口URL定位；不能只复制bundle后丢失数据。精确InstallRecord所有权；拒绝evoloop标记/symlink/无record同名文件，不能force覆盖。
 - exclusive锁+前置摘要/权限/路径复验+逐文件原子替换+record最后；原字节和权限仅为可捕获异常保存在进程内，失败逆序回滚，第三方新编辑不覆盖。保持共享文件完整权限，0600不能扩大为0644，record/lock/临时文件0600、私有目录0700。不实现持久crash journal、重放或恢复授权；残留lock/孤立文件/manifest漂移报冲突，不能声称多文件原子或crash自动恢复。卸载只动完整未改owned文件与精确自身hook组，保留他人后续编辑，缺失或篡改冲突而非全目录删除。
 - 同包重复install应空变化；无record且无本工具遗留文件的卸载为空变化，发现孤立文件仍报冲突；卸载不删state/config/CAS。包内资源路径必须在npm pack tarball安装后也成立。

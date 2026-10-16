@@ -1,4 +1,4 @@
-# 参与开发 modup
+# 参与开发 modeck
 
 本文面向修改 CLI、资源加载和 agent 适配器的贡献者。使用与配置步骤见 [README](README.md)，模块设计和数据流见 [架构设计](docs/architecture.md)。
 
@@ -9,8 +9,8 @@
 1. 克隆并进入源码仓库：
 
    ```sh
-   git clone https://github.com/guxi11/modup.git
-   cd modup
+   git clone https://github.com/guxi11/modeck.git
+   cd modeck
    ```
 
 2. 安装锁定的依赖：
@@ -29,7 +29,7 @@
 4. 核对构建产物的版本：
 
    ```sh
-   node dist/bin/modup.mjs --version
+   node dist/bin/modeck.mjs --version
    ```
 
    输出应与 `package.json` 的版本一致。`dist/` 是生成产物，不直接修改。
@@ -47,7 +47,7 @@
 | `src/cli/` | 命令入口、交互选择、初始化、扫描和迁移 |
 | `schemas/` | 配置与资源 manifest 的 JSON Schema |
 
-配置入口为 `modup.yaml` 或 `modup.yml`，同一配置目录只保留其中一个。自动选择脚本是 `modep-auto.mjs`，保留这一拼写。JSON Schema、`src/contracts/types.ts` 和校验逻辑共同维护数据契约。
+配置入口为 `modeck.yaml` 或 `modeck.yml`，同一配置目录只保留其中一个。自动选择脚本是 `modeck-auto.mjs`，保留这一拼写。JSON Schema、`src/contracts/types.ts` 和校验逻辑共同维护数据契约。
 
 `resolve` 和 `compile` 保持纯函数；将文件系统、终端和进程副作用留在边界。修改绑定流程时，沿用计划与应用的分离，保留所有权、冲突和过期计划检查。
 
