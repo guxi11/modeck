@@ -15,6 +15,32 @@ export const objectPath = (stateRoot: string, digest: string): string => {
 export const matchesManifest = (snapshot: Snapshot, manifestResource: ManifestResource): boolean =>
   snapshot.treeDigest === manifestResource.treeDigest && canonical(snapshot.entries) === canonical(manifestResource.entries);
 
+const skillRoot = async (stateRoot: string, name: string, snapshot: Snapshot, length = 8): Promise<string> => {
+  const base = await ensureDirectory(join(stateRoot, "skills"));
+  const prefix = snapshot.treeDigest.slice(0, length);
+  const target = join(base, `${name}@${prefix}`);
+  if (await exists(target)) {
+    const stored = await snapshotLocal(target, "skill");
+    if (stored.treeDigest === snapshot.treeDigest) return target;
+    // A different complete digest may legitimately share the short prefix.
+    requireValue(stored.treeDigest.startsWith(prefix) && resourceEntry(stored, "skill").skill?.name === name,
+      "E_INTEGRITY", "Short skill path contains unexpected content", { path: target });
+    requireValue(length < snapshot.treeDigest.length, "E_INTEGRITY", "Skill digest collision", { path: target });
+    return skillRoot(stateRoot, name, snapshot, length + 1);
+  }
+  const temporary = await mkdtemp(join(base, ".stage-"));
+  try {
+    await writeSnapshot(snapshot, temporary, true);
+    await safePath(base);
+    try { await rename(temporary, target); }
+    catch (error) {
+      if (!(error instanceof Error && "code" in error && ["EEXIST", "ENOTEMPTY"].includes(String(error.code)))) throw error;
+    }
+    // Recheck the winner when another process publishes the same short path.
+    return await skillRoot(stateRoot, name, snapshot, length);
+  } finally { await removeTemporary(temporary); }
+};
+
 export const readObject = async (stateRoot: string, manifestResource: ManifestResource): Promise<VerifiedResource> => {
   const object = objectPath(stateRoot, manifestResource.treeDigest);
   if (!await exists(object)) throw modeError("E_RESOURCE_MISSING", "Stored content is missing; run sync", { id: manifestResource.id, path: object });
@@ -29,12 +55,14 @@ export const readObject = async (stateRoot: string, manifestResource: ManifestRe
     validateEntries(manifestResource.entries);
     requireValue(canonical(manifest) === canonical(manifestResource.entries) && text === `${canonical(manifestResource.entries)}\n`,
       "E_INTEGRITY", "Stored tree manifest differs from the manifest", { id: manifestResource.id });
-    const root = join(object, "tree");
+    const tree = join(object, "tree");
     // Scan the entire directory even for a rule, so added siblings cannot hide.
-    const snapshot = await snapshotLocal(root, "skill");
+    const snapshot = await snapshotLocal(tree, "skill");
     requireValue(matchesManifest(snapshot, manifestResource), "E_INTEGRITY", "Stored resource content differs from the manifest", { id: manifestResource.id });
+    const metadata = resourceEntry(snapshot, manifestResource.kind);
+    const root = metadata.skill ? await skillRoot(stateRoot, metadata.skill.name, snapshot) : tree;
     return { id: manifestResource.id, kind: manifestResource.kind, treeDigest: manifestResource.treeDigest, root,
-      entry: join(root, manifestResource.kind === "rule" ? "content.md" : "SKILL.md"), ...resourceEntry(snapshot, manifestResource.kind) };
+      entry: join(root, manifestResource.kind === "rule" ? "content.md" : "SKILL.md"), ...metadata };
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "E_CONFIG") {
       throw modeError("E_INTEGRITY", "Stored tree manifest is invalid JSON", { id: manifestResource.id });
