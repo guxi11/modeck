@@ -97,10 +97,12 @@ export const parseConfig = (value: unknown): Config => {
 };
 
 export const parseSelector = (text: string): Selector => {
-  const ids = text.replace(/^\uFEFF/u, "").trim().split(/[,\r\n]+/u).map(id => id.trim()).filter(Boolean);
+  const content = text.replace(/^\uFEFF/u, "").trim();
+  if (!content) return immutable({ auto: true, add: [] });
+  const ids = content.split(/[,\r\n]+/u).map(id => id.trim()).filter(Boolean);
   requireValue(ids.length > 0 && ids.length <= LIMITS.modes && ids.every(id => /^[a-z][a-z0-9-]{0,63}$/.test(id)),
     "E_SELECTOR", "Selector must list mode IDs separated by commas or newlines");
-  return immutable({ auto: ids.includes("auto"), add: [...new Set(ids.filter(id => id !== "auto"))] });
+  return immutable({ auto: false, add: [...new Set(ids)] });
 };
 
 export const parseManifest = (value: unknown): ResourceManifest => {
