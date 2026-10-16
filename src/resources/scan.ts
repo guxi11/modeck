@@ -21,6 +21,7 @@ export type ScanResult = {
 };
 type Candidate = Omit<ScannedResource, "id" | "sources" | "aliases" | "origins"> & { readonly source: string; readonly alias: string; readonly origin: ScannedResource["origins"][number] };
 const targets = [".claude", ".codex", ".agents", ".codebuddy", ".codebuddy-cli", ".gemini"];
+const markdownRuleTargets = new Set([".claude", ".codebuddy"]);
 const ruleNames: Readonly<Record<string, string>> = { ".claude": "CLAUDE.md", ".codex": "AGENTS.md", ".codebuddy": "CODEBUDDY.md", ".codebuddy-cli": "CODEBUDDY.md", ".gemini": "GEMINI.md" };
 const object = (value: unknown): Record<string, unknown> => {
   requireValue(value !== null && typeof value === "object" && !Array.isArray(value), "E_CONFIG", "Expected an object");
@@ -121,6 +122,7 @@ export const scanHome = async (home: string): Promise<ScanResult> => {
       if (generated) excluded.push({ path, reason: "evoloop generated aggregate; source rules scanned instead" });
       else await add(path, "rule");
     }
+    if (markdownRuleTargets.has(target)) await walk(join(directory, "rules"), "rule");
     await walk(join(directory, "skills"), "skill");
     if (target === ".codex" && await exists(join(directory, "rules"))) excluded.push({
       path: join(directory, "rules"), reason: "Codex execution policies (*.rules), not natural-language instructions; excluded without traversal" });
