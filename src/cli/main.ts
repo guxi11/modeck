@@ -10,6 +10,7 @@ import { syncResources } from "../resources/index.js";
 import { initialize } from "./init.js";
 import { migrate } from "./migrate.js";
 import { configRootFor } from "./config.js";
+import { selectAgents } from "./bind.js";
 import { applyBindPlan, encodeHook, planBind, planUnbind, prepare, runAgent } from "../integration/index.js";
 import { data, imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
 import { parseEvent, runMarker } from "../integration/hooks.js";
@@ -18,7 +19,7 @@ const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
 const help = "modup <init|migrate|sync|resolve|render|hook|bind|unbind|run> [options]\n"
   + "init [--home <dir>] [--list | --answers <file>]\n"
   + "migrate [--config <dir>] [--mode <name>] [--list | --answers <file>]\n"
-  + "bind|unbind --agent <claude|codex|codebuddy> [--config <dir>] [--dry-run] [--expect <digest>]\n";
+  + "bind|unbind [--agent <claude|codex|codebuddy>] [--config <dir>] [--dry-run] [--expect <digest>]\n";
 const values: Readonly<Record<string, readonly string[]>> = {
   init: ["home", "answers"], migrate: ["config", "state", "answers", "mode"], sync: ["config", "state"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
@@ -133,10 +134,25 @@ export const main = async (argv: string[]): Promise<number> => {
     if (command === "bind" || command === "unbind") {
       const expected = opts.expect;
       if (expected !== undefined && (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected))) throw modeError("E_USAGE", "Invalid expected plan digest");
-      const request = { agent: agentFor(opts), targetHome: await pathFor(String(opts["target-home"] ?? homedir())) };
-      const plan = command === "bind" ? await planBind({ ...request, ...await configured(), runtimeRoot }) : await planUnbind(request);
-      if (!opts["dry-run"] && !plan.conflicts.length) await applyBindPlan({ plan, ...(typeof expected === "string" ? { expectDigest: expected } : {}) });
-      showPlan(plan, format); return plan.conflicts.length ? 4 : 0;
+      if (opts.agent === undefined && expected !== undefined) throw modeError("E_USAGE", "--expect requires an explicit --agent because each agent has its own plan digest");
+      const targetHome = await pathFor(String(opts["target-home"] ?? homedir()));
+      const agents = opts.agent === undefined ? await selectAgents(command, targetHome) : [agentFor(opts)];
+      if (!agents.length) { if (format === "json") json([]); return 0; }
+      const configuration = command === "bind" ? await configured() : null;
+      const plans = await agents.reduce(async (pending, agent) => {
+        const previous = await pending;
+        const request = { agent, targetHome };
+        const plan = command === "bind" ? await planBind({ ...request, ...configuration!, runtimeRoot }) : await planUnbind(request);
+        return [...previous, plan];
+      }, Promise.resolve<readonly BindPlan[]>([]));
+      const conflicts = plans.some(plan => plan.conflicts.length);
+      if (!opts["dry-run"] && !conflicts) await plans.reduce(async (pending, plan) => {
+        await pending;
+        await applyBindPlan({ plan, ...(typeof expected === "string" ? { expectDigest: expected } : {}) });
+      }, Promise.resolve());
+      if (format === "json" && opts.agent === undefined) json(plans);
+      else plans.forEach(plan => showPlan(plan, format));
+      return conflicts ? 4 : 0;
     }
     const { configRoot, stateRoot } = await configured();
     if (command === "sync") {
