@@ -1,17 +1,14 @@
-import { extname, join } from "node:path";
+import { join } from "node:path";
 import { isMap, parseDocument } from "yaml";
 import { LIMITS, modeError, sha256 } from "../contracts/index.js";
-import type { ProjectFacts } from "../contracts/index.js";
 import { exists, regularBytes, utf8 } from "../resources/fs.js";
-import { executableConfig } from "./executable.js";
-import type { ExecutableConfig } from "./executable.js";
 
 export const findConfigPath = async (root: string): Promise<string | undefined> => {
-  const paths = (await Promise.all(["modup.yaml", "modup.yml", "modup.mjs"].map(async name => {
+  const paths = (await Promise.all(["modup.yaml", "modup.yml"].map(async name => {
     const path = join(root, name);
     return await exists(path) ? [path] : [];
   }))).flat();
-  if (paths.length > 1) throw modeError("E_CONFIG", "Multiple configuration files found; keep one modup.yaml, modup.yml or modup.mjs", { paths });
+  if (paths.length > 1) throw modeError("E_CONFIG", "Multiple configuration files found; keep one modup.yaml or modup.yml", { paths });
   return paths[0];
 };
 
@@ -25,8 +22,7 @@ export const parseYamlConfig = (source: string): unknown => {
   return document.toJS({ maxAliasCount: 100 });
 };
 
-export const readConfigFile = async (path: string, facts?: ProjectFacts): Promise<ExecutableConfig> => {
-  if (extname(path) === ".mjs") return executableConfig(path, facts);
+export const readConfigFile = async (path: string): Promise<{ readonly config: unknown; readonly sources: readonly { readonly path: string; readonly digest: string }[] }> => {
   const { bytes } = await regularBytes(path, LIMITS.jsonBytes);
   return { config: parseYamlConfig(utf8(bytes)), sources: [{ path, digest: sha256(bytes) }] };
 };
