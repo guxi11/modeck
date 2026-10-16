@@ -13,7 +13,7 @@ import { prepare } from "./prepare.js";
 const owner = "modup/v1" as const;
 const locations = (agent: Agent) => ({
   hook: agent === "codex" ? ".codex/hooks.json" : ".claude/settings.json",
-  skill: agent === "codex" ? ".agents/skills/modup" : ".claude/skills/modup",
+  legacySkill: agent === "codex" ? ".agents/skills/modup" : ".claude/skills/modup",
   private: `.modup/${agent}`,
   record: `.modup/${agent}/install.json`, lock: `.modup/${agent}/install.lock`,
 });
@@ -22,7 +22,7 @@ const conflict = (message: string, path?: string): never => { throw modeError("E
 const allowedOwned = (agent: Agent, path: string): boolean => {
   checkRelativePath(path, false);
   const loc = locations(agent);
-  return path.startsWith(`${loc.skill}/`) || path.startsWith(`${loc.private}/runtime/`);
+  return path.startsWith(`${loc.legacySkill}/`) || path.startsWith(`${loc.private}/runtime/`);
 };
 const hashPlan = (plan: Omit<InstallPlan, "planDigest">): InstallPlan => ({ ...plan, planDigest: sha256(Buffer.from(canonical(plan))) });
 const checkTarget = async (home: string, path: string): Promise<void> => {
@@ -105,7 +105,7 @@ const loadRecord = async (home: string, agent: Agent): Promise<InstallRecord | n
   if (!Array.isArray(group.hooks) || group.hooks.length !== 1 || typeof object(group.hooks[0]).command !== "string") return conflict("Invalid owned hook group");
   const runtime = `${loc.private}/runtime/${value.runtimeDigest}`;
   const cli = `${runtime}/dist/bin/modup.mjs`;
-  if (!files.some(file => file.path === cli) || files.some(file => !file.path.startsWith(`${runtime}/`) && !file.path.startsWith(`${loc.skill}/`))) {
+  if (!files.some(file => file.path === cli) || files.some(file => !file.path.startsWith(`${runtime}/`) && !file.path.startsWith(`${loc.legacySkill}/`))) {
     return conflict("Manifest runtime identity does not match owned files");
   }
   const command = object(group.hooks[0]).command as string;
@@ -130,7 +130,7 @@ const loadRecord = async (home: string, agent: Agent): Promise<InstallRecord | n
 const verifyOwned = async (home: string, agent: Agent, record: InstallRecord | null, groups: readonly unknown[]): Promise<void> => {
   const loc = locations(agent);
   if (!record) {
-    const occupied = await Promise.all([loc.skill, `${loc.private}/runtime`].map(async path => {
+    const occupied = await Promise.all([`${loc.private}/runtime`].map(async path => {
       try { await lstat(homePath(home, path)); return path; }
       catch (error) { if (missing(error)) return null; throw error; }
     }));
@@ -139,7 +139,10 @@ const verifyOwned = async (home: string, agent: Agent, record: InstallRecord | n
     if (canonical(groups).includes(join(home, loc.private, "runtime"))) return conflict("Unrecorded modup hook already exists");
     return;
   }
-  const files = [...(await treeFiles(home, loc.skill)).map(path => `${loc.skill}/${path}`),
+  // Only legacy records owning this tree may inspect or remove it.
+  const legacyFiles = record.files.some(file => file.path.startsWith(`${loc.legacySkill}/`))
+    ? (await treeFiles(home, loc.legacySkill)).map(path => `${loc.legacySkill}/${path}`) : [];
+  const files = [...legacyFiles,
     ...(await treeFiles(home, `${loc.private}/runtime`)).map(path => `${loc.private}/runtime/${path}`)];
   const expected = record.files.map(file => file.path).sort();
   if (canonical(files.sort()) !== canonical(expected)) return conflict("Owned file set has changed");
@@ -181,10 +184,7 @@ export const planInstall = async ({ agent, targetHome, configRoot, stateRoot, ru
   return basePlan(agent, targetHome, "install", async (home, before, previous) => {
     const loc = locations(agent);
     if (previous && (previous.configRoot !== configRoot || previous.stateRoot !== stateRoot)) return conflict("Uninstall before changing the configuration binding");
-    const skillFiles = await treeFiles(runtimeRoot, "skills/modup");
-    if (!skillFiles.includes("SKILL.md")) return conflict("Package entry skill is missing");
-    const packagePaths = ["dist/bin/modup.mjs", "package.json", "schemas/modes.schema.json", "schemas/selector.schema.json", "schemas/lock.schema.json",
-      ...skillFiles.map(path => `skills/modup/${path}`)].sort();
+    const packagePaths = ["dist/bin/modup.mjs", "package.json", "schemas/modes.schema.json", "schemas/selector.schema.json", "schemas/lock.schema.json"].sort();
     const packageFiles = await Promise.all(packagePaths.map(async path => {
       const image = await readImage(join(runtimeRoot, path));
       if (!image) return conflict("Required runtime asset is missing", path);
@@ -192,12 +192,11 @@ export const planInstall = async ({ agent, targetHome, configRoot, stateRoot, ru
     }));
     const runtimeDigest = sha256(Buffer.from(canonical(packageFiles.map(file => ({ path: file.path, digest: digest(file.image), mode: file.image.mode })))));
     const runtime = `${loc.private}/runtime/${runtimeDigest}`;
-    const owned = [...packageFiles.map(file => ({ path: `${runtime}/${file.path}`, image: file.image })),
-      ...packageFiles.filter(file => file.path.startsWith("skills/modup/")).map(file => ({
-        path: `${loc.skill}/${file.path.slice("skills/modup/".length)}`, image: file.image }))];
+    const owned = packageFiles.map(file => ({ path: `${runtime}/${file.path}`, image: file.image }));
     const group = hookGroup(agent, homePath(home, `${runtime}/dist/bin/modup.mjs`), configRoot, stateRoot);
     const { root, groups } = shared(before);
-    if (previous && previous.runtimeDigest === runtimeDigest && canonical(previous.hookGroup) === canonical(group)) return [];
+    if (previous && previous.runtimeDigest === runtimeDigest && canonical(previous.hookGroup) === canonical(group)
+      && canonical(previous.files.map(file => file.path).sort()) === canonical(owned.map(file => file.path).sort())) return [];
     const nextGroups = previous ? groups.map(item => canonical(item) === canonical(previous.hookGroup) ? group : item) : [...groups, group];
     const nextRoot = replaceGroups(root, nextGroups);
     const hookImage = before && canonical(nextRoot) === canonical(root) ? before : jsonImage(nextRoot, before?.mode ?? 0o600);
@@ -291,6 +290,6 @@ export const applyInstallPlan = async ({ plan, expectDigest }: ApplyInstallPlanR
       await removeEmpty(home, dirname(lockPath));
     }
   }
-  if (plan.operation === "uninstall") await Promise.all(plan.changes.map(change => removeEmpty(home, dirname(homePath(home, change.path)))));
+  await Promise.all(plan.changes.filter(change => change.after === null).map(change => removeEmpty(home, dirname(homePath(home, change.path)))));
   await Promise.all([...created].reverse().map(path => removeEmpty(home, path)));
 };

@@ -28,8 +28,7 @@
   },
   "files": [
     "dist",
-    "schemas",
-    "skills"
+    "schemas"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",

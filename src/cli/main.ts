@@ -101,7 +101,7 @@ const showPlan = (plan: InstallPlan, format: string): void => {
   if (format === "json") { json(plan); return; }
   process.stdout.write(`${plan.operation} ${plan.agent} ${plan.targetHome}\nplan: ${plan.planDigest}\n`);
   plan.changes.forEach(change => process.stdout.write(`${change.after === null ? "delete" : change.beforeDigest === null ? "create" : "update"} ${change.path}\n`));
-  plan.changes.filter(change => change.category === "shared-json" || /\/skills\/modup\/SKILL.md$/.test(change.path)).forEach(change => {
+  plan.changes.filter(change => change.category === "shared-json").forEach(change => {
     if (change.after) process.stdout.write(`${change.path}:\n${data(change.after).toString("utf8")}\n`);
   });
   [...plan.warnings, ...plan.conflicts].forEach(item => process.stdout.write(`${item.code}: ${item.message}\n`));
