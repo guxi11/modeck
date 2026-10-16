@@ -1,6 +1,6 @@
 # modup 架构设计
 
-本文面向维护者和适配器作者，解释配置如何变成会话上下文，以及资源、hook 和绑定的安全边界。**实现现状**以本文链接的源码为准；末节的演进建议不代表已支持的能力。上手步骤见 [README](../README.md)。
+本文面向维护者和适配器作者，解释配置如何变成会话上下文，以及资源、hook 和绑定的安全边界。**实现现状**以本文链接的源码为准；末节的演进建议不代表已支持的能力。上手步骤见 [README](../README.md)，开发环境与提交检查见 [参与开发](../CONTRIBUTING.md)。
 
 ## 设计目标与边界
 
@@ -36,7 +36,7 @@ flowchart TB
   accTitle: Modup context preparation flow
   accDescr: Collect workspace facts, load trusted configuration, select modes, verify selected resources, then compile and encode session context.
   workspace["业务工作目录"] --> facts["collectFacts：边界、文件、依赖、选择器"]
-  facts --> config["loadConfig：执行配置并校验"]
+  facts --> config["loadConfig：读取配置并校验"]
   config --> select["resolve：选择 mode 与资源"]
   select --> resources["readResources：读取并验证所选资源"]
   resources --> plan["resolve：填入资源摘要"]
@@ -48,11 +48,11 @@ flowchart TB
 
 ### 配置发现与执行
 
-[配置发现](../src/cli/config.ts)依次选择显式 `--config`、本机已有绑定记录中的配置目录、调用目录内的 `modup.mjs`。绑定指向多个不同配置目录时，命令要求显式 `--config`。已有绑定优先于业务目录配置，避免业务仓库自动覆盖已信任的配置入口。
+[配置发现](../src/cli/config.ts)依次选择显式 `--config`、本机已有绑定记录中的配置目录、调用目录内的 YAML 配置。绑定指向多个不同配置目录时，命令要求显式 `--config`。已有绑定优先于业务目录配置，避免业务仓库自动覆盖已信任的配置入口。
 
-`modup.mjs` 默认导出资源、`defaults` 和 modes；具名 `auto` 导出是可选函数。初始化生成的 `modep-auto.mjs` 通过这个具名导出接入，文件名保留现有拼写；加载器本身不强制使用该文件名。
+[配置读取](../src/core/config-file.ts)接受 `modup.yaml` 或 `modup.yml`，两者同时存在时报错。YAML 声明资源、`defaults` 和 modes；不执行 `modup.mjs`。可选的 `modep-auto.mjs` 默认导出自动选择函数，与声明配置分开加载，文件名保留现有拼写。
 
-[配置执行器](../src/core/executable.ts)在独立 Worker 中加载模块，并记录导入文件摘要，隔离模块缓存。它支持异步 `auto`，传入 `cwd`、`boundary`、`files` 和 `dependencies`。**Worker 不是权限沙箱**：配置及其导入模块以本机用户权限执行；超时、摘要和 schema 校验不能使不可信 JS 安全。配置加载后和资源处理前后会复核来源文件身份。
+[自动选择执行器](../src/core/auto.ts)在独立 Worker 中加载 `modep-auto.mjs`，并记录导入文件摘要，隔离模块缓存。它支持异步函数，传入 `cwd`、`boundary`、`files` 和 `dependencies`。**Worker 不是权限沙箱**：自动选择脚本及其导入模块以本机用户权限执行；超时和摘要校验不能使不可信 JS 安全。配置加载后和资源处理前后会复核 YAML 及脚本来源文件身份。
 
 ### 工作区与选择顺序
 
@@ -63,7 +63,7 @@ flowchart TB
 [resolver](../src/core/resolve.ts)按以下顺序形成结果：
 
 1. 按声明顺序加入 `defaults`。
-2. 若自动选择启用，将 `auto` 返回的 mode 按 `priority` 升序、ID 排序加入。
+2. 若自动选择启用，按 `auto` 返回数组的顺序加入 mode。
 3. 按 `.modes` 中的顺序加入显式 mode。
 4. 按 `extends` 声明顺序递归展开，父 mode 在子 mode 前，稳定去重。
 5. 按 mode 和资源绑定的声明顺序收集 rules、skills，按资源 ID 去重。
@@ -81,7 +81,7 @@ flowchart TB
 | 本地 | 重新快照源文件或目录，发布内容对象 | 同样重新快照 | 同样重新快照 |
 | Git | 读取已有缓存，未缓存时报错 | 复用缓存；缺缓存时获取 | 重新解析 ref 并获取 |
 
-运行期资源层不拉取 Git；可信 JS 配置自身仍有联网能力。`sync` 默认处理全部声明资源，运行期只处理所选资源。
+运行期资源层不拉取 Git；自动选择脚本自身仍有联网能力。`sync` 默认处理全部声明资源，运行期只处理所选资源。
 
 默认状态目录是 `~/.local/share/modup/v1`，可由 `--state` 或 `MODUP_STATE` 调整，且必须位于配置目录之外。状态目录包含以下内容：
 
@@ -89,6 +89,7 @@ flowchart TB
 | --- | --- |
 | `store/sha256/<treeDigest>/tree/` | 规则标准化为 `content.md`，技能保留完整资源树 |
 | `store/sha256/<treeDigest>/manifest.json` | 按路径排序的树条目：文件摘要、字节数和可执行位 |
+| `skills/<name>@<digest前缀>/` | 验证后物化的技能短路径，作为索引的 root；前缀从八位开始，碰撞时逐位延长 |
 | `git/<descriptorDigest>.json` | Git 来源、解析后的 commit 与资源树信息；缓存键包含配置根目录、ID 和来源描述 |
 | `.work/` | Git 获取的临时目录 |
 
@@ -153,11 +154,13 @@ flowchart TB
 
 ## 初始化、迁移与备份
 
-[init](../src/cli/init.ts)扫描全局已有资源，选择后复制到配置目录，生成 `modup.mjs`、`modep-auto.mjs`。它把导入资源先挂到默认 `base` mode；要按工作方式筛选，需要将业务资源改挂到对应 mode，而不是继续全部留在 `base`。
+[init](../src/cli/init.ts)与 [scan](../src/cli/scan.ts)共用全局资源迁移流程：交互选择 agent，再扫描并选择 rules 和 skills。首次初始化默认在调用目录生成 `modup.yaml`、`modep-auto.mjs`；已绑定 agent 的后续扫描复用其配置目录，冲突时拒绝合并不同绑定。
 
-[migrate](../src/cli/migrate.ts)从配置目录以外的业务项目导入原生 skills，绑定到显式指定或选中的业务 mode，不展开继承；不会把仅由 `defaults` 加入的 mode 当作自动迁移目标。它使用 AST 修改配置并保留原有 JS，但只支持可静态识别的默认导出对象及显式 skills 数组。
+导入先复制并校验到 home 下的 `.modup/rules/`、`.modup/skills/` 和配置目录的对应资源路径，然后更新 YAML。首次初始化的资源绑定到默认 `base`，后续扫描加入配置的默认 modes；已导入且内容一致的资源不会重复导入。要按工作方式筛选，需要把业务资源从默认 mode 移到对应 mode。
 
-两条命令均提供 `--list` 预览。[备份模块](../src/cli/backup.ts)在配置成功写入后，把符合条件的已选原生技能入口移动到配置目录 `.modup/backups/<批次>/`，并先写 `restore.json` 记录恢复路径。未选技能、rules、受保护的配置真源和 evoloop 入口保留。备份不是删除；没有独立 restore CLI，恢复需按记录核对并移回，不能覆盖已有入口。
+[migrate](../src/cli/migrate.ts)从配置目录以外的业务项目导入原生 skills，绑定到显式指定或选中的业务 mode，不展开继承；不会把仅由 `defaults` 加入的 mode 当作自动迁移目标。[配置编辑器](../src/cli/edit-config.ts)通过 YAML 文档树追加映射和数组并保留注释；迁移前要求展开 YAML aliases，避免修改一个锚点影响其他 mode。
+
+初始化、扫描和项目迁移均提供 `--list` 预览。[备份模块](../src/cli/backup.ts)在复制、配置写入及完整性校验成功后，把符合条件的原生入口移动到配置目录 `.modup/backups/<批次>/`，并先写 `restore.json` 记录恢复路径。全局导入可备份 rules 和 skills，项目迁移只处理 skills；受管内容、外部所有者及被保留入口引用的共享来源会保留。备份不是删除；没有独立 restore CLI，恢复需按记录核对并移回，不能覆盖已有入口。
 
 ## 演进建议与验收边界
 
@@ -168,8 +171,8 @@ flowchart TB
 | 可分享的资源锁与严格复用模式 | 可变 Git ref 的跨机器版本漂移 | 与本机缓存分离，不把绝对 home 路径写进共享身份 |
 | 安装中断恢复协议 | 崩溃后只能检查残留锁 | 不自动覆盖已被外部修改的文件 |
 | Agent 兼容性验收矩阵 | hook 协议输出与模型实际采纳之间的差距 | 记录 CLI 版本、信任状态和实测范围 |
-| 配置执行与声明数据分层 | 可信 JS 权限范围较大 | Worker 隔离不能包装成权限沙箱 |
+| 为自动选择脚本设计受限执行接口 | 自动选择 JS 的本机权限范围较大 | YAML 与脚本已分离；Worker 隔离仍不能包装成权限沙箱 |
 
 维护时先运行 `npm run typecheck` 和 `npm run build`，再用隔离配置、状态与 home 核查 mode 选择、资源变化、hook JSON、绑定预览和对称解绑。仓库没有 `npm test` 脚本；构建通过不构成真实模型调用、跨机器复现或缓存命中的证明。
 
-`design/` 保存早期设计和验收记录，其中 `.mode`、JSON 配置、共享锁文件及首版适配范围属于历史方案。修改实现时，以源码和本说明为核对入口，不把历史提案当成命令参考。
+`design/` 保存早期设计和验收记录，其中 `.mode`、JSON / JS 配置、mode priority、共享锁文件及首版适配范围属于历史方案。修改实现时，以源码和本说明为核对入口，不把历史提案当成命令参考。
