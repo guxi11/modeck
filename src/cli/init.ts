@@ -6,7 +6,7 @@ import { parseConfig } from "../core/index.js";
 import { checkDirectory } from "../integration/fs.js";
 import { scanHome } from "../resources/scan.js";
 import type { ScanResult, ScannedResource } from "../resources/scan.js";
-import { exists, regularBytes, requireValue, safePath, utf8, within } from "../resources/fs.js";
+import { exists, regularBytes, requireValue, safePath, utf8 } from "../resources/fs.js";
 import { snapshotLocal } from "../resources/tree.js";
 
 type Choice = { readonly id: string; readonly name: string };
@@ -79,8 +79,8 @@ export const initialize = async (root: string, home: string, options: { readonly
   const scan = await scanHome(home);
   if (options.list) return scan;
   const configPath = join(root, "modup.mjs");
-  const autoPath = join(root, "auto.mjs");
-  requireValue(!await exists(configPath) && !await exists(autoPath), "E_PATH", "modup.mjs or auto.mjs already exists");
+  const autoPath = join(root, "modep-auto.mjs");
+  requireValue(!await exists(configPath) && !await exists(autoPath), "E_PATH", "modup.mjs or modep-auto.mjs already exists");
   const choices = await selections(scan, options.answers);
   const directories: { path: string; ino: number; dev: number; mode: number; finalMode: number }[] = [];
   const files: { path: string; ino: number; dev: number; digest: string; mode: number }[] = [];
@@ -114,24 +114,31 @@ export const initialize = async (root: string, home: string, options: { readonly
       const snapshot = await snapshotLocal(source, resource.kind);
       requireValue(snapshot.treeDigest === resource.treeDigest, "E_INTEGRITY", "Resource changed after discovery", { id: choice.id });
       const group = resource.kind === "rule" ? "rules" : "skills";
-      if (within(root, source)) { resources[group][choice.name] = relative(root, source); return; }
-      const destination = join(root, ".modup/resources", resource.kind, choice.name);
-      requireValue(!await exists(destination), "E_PATH", "Resource destination exists", { path: destination });
-      await directory(destination, resource.kind === "skill" ? (await lstat(source)).mode & 0o777 : 0o755);
-      await snapshot.entries.reduce(async (previous, entry) => {
-        await previous;
-        const target = join(destination, entry.path);
-        const original = resource.kind === "rule" ? source : join(source, entry.path);
-        const info = await lstat(original);
-        if (entry.kind === "directory") { await directory(target, info.mode & 0o777); return; }
-        await write(target, snapshot.files.get(entry.path)!.bytes, info.mode & 0o777);
-      }, Promise.resolve());
-      resources[group][choice.name] = relative(root, resource.kind === "rule" ? join(destination, "content.md") : destination);
+      const destination = join(root, group, resource.kind === "rule" ? `${choice.name}.md` : choice.name);
+      await safePath(dirname(destination), true);
+      await checkDirectory(dirname(destination));
+      if (await exists(destination)) {
+        const existing = await snapshotLocal(destination, resource.kind);
+        requireValue(existing.treeDigest === snapshot.treeDigest, "E_PATH", "Resource destination has different content or executable permissions", { path: destination });
+      } else if (resource.kind === "rule") {
+        await directory(dirname(destination));
+        await write(destination, snapshot.files.get("content.md")!.bytes, (await lstat(source)).mode & 0o777);
+      } else {
+        await directory(destination, (await lstat(source)).mode & 0o777);
+        await snapshot.entries.reduce(async (previous, entry) => {
+          await previous;
+          const target = join(destination, entry.path);
+          const info = await lstat(join(source, entry.path));
+          if (entry.kind === "directory") { await directory(target, info.mode & 0o777); return; }
+          await write(target, snapshot.files.get(entry.path)!.bytes, info.mode & 0o777);
+        }, Promise.resolve());
+      }
+      resources[group][choice.name] = relative(root, destination);
     }, Promise.resolve());
     const config = { resources, defaults: ["base"], modes: { base: { rules: Object.keys(resources.rules), skills: Object.keys(resources.skills) } } };
     parseConfig(config);
     await write(autoPath, Buffer.from("export default ({ cwd, boundary, files, dependencies }) => [];\n"), 0o644);
-    await write(configPath, Buffer.from(`export { default as auto } from "./auto.mjs";\n\nexport default ${JSON.stringify(config, null, 2)};\n`), 0o644);
+    await write(configPath, Buffer.from(`export { default as auto } from "./modep-auto.mjs";\n\nexport default ${JSON.stringify(config, null, 2)};\n`), 0o644);
     await [...directories].reverse().reduce(async (pending, item) => {
       await pending; check(); await safePath(item.path);
       const info = await lstat(item.path);
