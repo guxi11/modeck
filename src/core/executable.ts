@@ -7,6 +7,7 @@ import type { ProjectFacts } from "../contracts/index.js";
 const loader = `
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 const sources = new Map();
 export function initialize({ port }) {
   port.on('message', () => port.postMessage([...sources.values()]));
@@ -14,9 +15,11 @@ export function initialize({ port }) {
 }
 export async function load(url, context, next) {
   const result = await next(url, context);
-  if (url.startsWith('file:') && result.source != null) sources.set(url, {
-    path: fileURLToPath(url), digest: createHash('sha256').update(result.source).digest('hex')
-  });
+  if (url.startsWith('file:')) {
+    const path = fileURLToPath(url);
+    const bytes = result.source ?? await readFile(path);
+    sources.set(url, { path, digest: createHash('sha256').update(bytes).digest('hex') });
+  }
   return result;
 }
 `;
@@ -30,7 +33,14 @@ const { parentPort, workerData, MessageChannel } = require('node:worker_threads'
   if (module.auto !== undefined && typeof module.auto !== 'function') throw new Error('Named auto export must be a function');
   const autoModeIds = module.auto && workerData.facts ? await module.auto(workerData.facts) : undefined;
   const sources = await new Promise(resolve => { port1.once('message', resolve); port1.postMessage(null); });
-  parentPort.postMessage({ config: module.default, sources, ...(autoModeIds !== undefined ? { autoModeIds } : {}),
+  // Node20's CJS loader does not route transitive require() calls through ESM load hooks.
+  const { readFile } = await import('node:fs/promises');
+  const { createHash } = await import('node:crypto');
+  const graph = new Map(sources.map(source => [source.path, source]));
+  await Promise.all(Object.keys(require.cache).filter(path => !graph.has(path)).map(async path => {
+    graph.set(path, { path, digest: createHash('sha256').update(await readFile(path)).digest('hex') });
+  }));
+  parentPort.postMessage({ config: module.default, sources: [...graph.values()], ...(autoModeIds !== undefined ? { autoModeIds } : {}),
     invalidAuto: Boolean(module.auto && workerData.facts && autoModeIds === undefined) });
 })().catch(error => parentPort.postMessage({ error: String(error?.message ?? error) }));
 `;
