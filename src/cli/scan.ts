@@ -43,7 +43,7 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
   await safePath(home);
   await checkDirectory(home);
   const selectedAgents = options.agent ? [options.agent] : options.list ? agents
-    : await choose("Select agents to scan", agents.map(agent => ({ name: agent, value: agent })));
+    : await choose("Scan · Select agents", agents.map(agent => ({ name: agent, value: agent })));
   if (!selectedAgents.length) return { resources: [], message: "No agents selected; no changes made." };
   const records = await Promise.all(selectedAgents.map(agent => loadRecord(home, agent)));
   const roots = [...new Set(records.flatMap(record => record ? [record.configRoot] : []))];
@@ -69,10 +69,15 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
     process.stderr.write(`${message}\n`);
     return { configRoot: root, homeRoot, agents: selectedAgents, resources: [], message };
   }
+  if (!options.answers) process.stderr.write(`\nResources · ${pending.filter(item => item.kind === "rule").length} rules · ${pending.filter(item => item.kind === "skill").length} skills\n`
+    + `Configuration: ${root}\n${scan.excluded.length} excluded · ${scan.resources.length - pending.length} already imported\n\n`);
   const choices = !pending.length ? [] : await selections(discovered, options.answers, async selected => {
     const plan = await planBackups(scan, selected.map(choice => choice.id), root, true, referenceScan);
-    return `Copy and verify in: ${homeRoot}\nCopy and verify in: ${root}\nBackup destination: ${join(root, ".modup", "backups")}/<batch>\n`
-      + [...plan.entries.map(item => `Move after verification: ${item.source}`), ...plan.skipped.map(item => `Retain: ${item.path} (${item.reason})`)].join("\n");
+    return `Destinations (copied and verified first)\n  ${homeRoot}\n  ${root}\n\n`
+      + `Back up ${plan.entries.length} native entries\n  ${join(root, ".modup", "backups")}/<batch>\n`
+      + plan.entries.map(item => `  ${item.source}`).join("\n")
+      + `\n\nRetain ${plan.skipped.length} managed/shared entries\n`
+      + plan.skipped.map(item => `  ${item.path}\n    ${item.reason}`).join("\n");
   });
   if (!choices.length && (pending.length || context)) return { configRoot: root, homeRoot, resources: [], message: "No resources selected; no changes made." };
   const backupPlan = await planBackups(scan, choices.map(choice => choice.id), root, true, referenceScan);

@@ -1,4 +1,4 @@
-import checkbox from "@inquirer/checkbox";
+import checkbox, { Separator } from "@inquirer/checkbox";
 import { createInterface } from "node:readline";
 import type { Key } from "node:readline";
 import { LIMITS, modeError, parseJson } from "../contracts/index.js";
@@ -9,7 +9,7 @@ export type Choice = { readonly id: string; readonly name: string };
 const validName = (name: string): boolean => /^[a-z][a-z0-9-]{0,63}$/.test(name);
 const cancelled = () => modeError("E_USAGE", "Selection cancelled; no resources were moved");
 
-export const choose = async <T>(message: string, choices: readonly { readonly name: string; readonly value: T }[]): Promise<readonly T[]> => {
+export const choose = async <T>(message: string, choices: readonly (Separator | { readonly name: string; readonly value: T; readonly description?: string })[]): Promise<readonly T[]> => {
   requireValue(process.stdin.isTTY && process.stderr.isTTY, "E_USAGE", "Selection requires a TTY; use --agent and --answers, or --list");
   const controller = new AbortController();
   const cancel = () => controller.abort();
@@ -18,7 +18,9 @@ export const choose = async <T>(message: string, choices: readonly { readonly na
   process.stdin.on("end", cancel);
   process.on("SIGINT", cancel);
   try {
-    return await checkbox<T>({ message, choices: [...choices] }, { output: process.stderr, signal: controller.signal });
+    return await checkbox<T>({ message, choices: [...choices], pageSize: Math.max(4, Math.min(14, (process.stderr.rows ?? 24) - 9)),
+      loop: false, instructions: "\n↑↓ navigate · Space select · a all · Enter continue",
+      theme: { style: { renderSelectedChoices: (selected: readonly unknown[]) => `${selected.length} selected` } } }, { output: process.stderr, signal: controller.signal });
   } catch (error) {
     if (error instanceof Error && ["AbortPromptError", "ExitPromptError"].includes(error.name)) throw cancelled();
     throw error;
@@ -47,9 +49,13 @@ export const selections = async (scan: ScanResult, answers?: string, preview?: (
     "E_USAGE", "Answers contain unknown IDs, invalid names or duplicates");
     return choices;
   }
-  const ids = await choose("Select rules and skills to move", scan.resources.map(resource => ({
-    value: resource.id, name: `${resource.id} [${resource.kind}] ${resource.description} — ${resource.aliases.join(", ")}`,
-  })));
+  const compact = (text: string): string => text.replace(/\s+/g, " ").trim();
+  const ids = await choose("1/3 · Select resources to import", (["rule", "skill"] as const).flatMap(kind => {
+    const resources = scan.resources.filter(resource => resource.kind === kind);
+    return resources.length ? [new Separator(`── ${kind === "rule" ? "Rules" : "Skills"} (${resources.length}) ──`),
+      ...resources.map(resource => ({ value: resource.id, name: resource.id,
+        description: `${compact(resource.description).slice(0, 180)}\nSource: ${resource.aliases.join(", ")}` }))] : [];
+  }));
   if (!ids.length) return [];
   const terminal = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
   const lines = terminal[Symbol.asyncIterator]();
@@ -62,6 +68,7 @@ export const selections = async (scan: ScanResult, answers?: string, preview?: (
     return answer.value.trim();
   };
   try {
+    process.stderr.write("\n2/3 · Resource names\nPress Enter to keep each name.\n");
     const choices = await ids.reduce(async (pending, id) => {
       const choices = await pending;
       const nameFor = async (): Promise<string> => {
@@ -72,6 +79,7 @@ export const selections = async (scan: ScanResult, answers?: string, preview?: (
       };
       return [...choices, { id, name: await nameFor() }];
     }, Promise.resolve([] as readonly Choice[]));
+    process.stderr.write(`\n3/3 · Review ${choices.length} resources\n${choices.map(choice => `  ${choice.id}${choice.id === choice.name ? "" : ` → ${choice.name}`}`).join("\n")}\n\n`);
     if (preview) process.stderr.write(`${await preview(choices)}\n`);
     if (!/^(?:y|yes)$/i.test(await ask("Move selected resources after verifying all destinations? [y/N]: "))) throw cancelled();
     return choices;
