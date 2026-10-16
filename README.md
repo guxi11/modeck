@@ -68,15 +68,13 @@ defaults: [base]
 modes:
   base: {}
   prog:
-    extends: [base]
     rules: [coding]
     skills: [review]
   writing:
-    extends: [base]
     rules: [prose]
 ```
 
-路径相对于配置目录：rule 是 Markdown 文件，skill 是包含 `SKILL.md` 的目录。`defaults` 中的 mode 始终加载，`extends` 用来复用其他 mode 的配置。
+路径相对于配置目录：rule 是 Markdown 文件，skill 是包含 `SKILL.md` 的目录。`defaults` 中的 mode 始终加载，无需再通过 `extends` 继承。`extends` 用来复用其他非默认 mode 的配置。
 
 ## 让目录自动选择工作方式
 
