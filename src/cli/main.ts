@@ -22,7 +22,7 @@ import { parseEvent, runMarker } from "../integration/hooks.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
 const help = "Usage: modeck <command> [options]\n\nCommands:\n"
-  + "  res <add|init|update>  Manage external resources\n  init                   Initialize configuration\n"
+  + "  res <init|update>  Manage external resources\n  init                   Initialize configuration\n"
   + "  scan                   Import resources from agent homes\n  migrate                Migrate existing configuration\n"
   + "  sync                   Synchronize resources\n  resolve                Resolve context\n"
   + "  render                 Render context\n  hook                   Handle agent session hooks\n"
@@ -36,10 +36,10 @@ const commandHelp: Readonly<Record<string, string>> = {
   register: "Usage: modeck register [--config <dir>] [--target-home <dir>] [-h|--help]\n",
   unregister: "Usage: modeck unregister [--config <dir>] [--target-home <dir>] [-h|--help]\n",
   config: "Usage: modeck config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--dry-run] [--expect <digest>] [-h|--help]\n",
-  resource: "Usage: modeck res <add|init|update> [--config <dir>] [--url <url> --path <source-path> --target <dir> --ref <ref>] [-h|--help]\n",
+  resource: "Usage: modeck res <init|update> [--config <dir>] [-h|--help]\n",
 };
 const values: Readonly<Record<string, readonly string[]>> = {
-  resource: ["config", "url", "path", "target", "ref"],
+  resource: ["config"],
   init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"], sync: ["config", "state"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
   hook: ["config", "state", "agent"], register: ["config", "target-home"], unregister: ["config", "target-home"],
@@ -125,7 +125,7 @@ export const main = async (argv: string[]): Promise<number> => {
     const opts = options(command, argv.slice(command === "resource" && !argv[1]?.startsWith("--") ? 2 : 1, separator < 0 ? undefined : separator));
     if (opts.help) { process.stdout.write(commandHelp[command] ?? help); return 0; }
     if (command === "resource") {
-      json(await manageResources(await pathFor(String(opts.config ?? process.cwd())), argv[1] ?? "", opts)); return 0;
+      json(await manageResources(await pathFor(String(opts.config ?? process.cwd())), argv[1] ?? "")); return 0;
     }
     const configured = async (single = false, agent?: Agent) => {
       const record = agent === undefined ? null : await loadRecord(homedir(), agent);
