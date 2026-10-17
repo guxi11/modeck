@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1860" viewBox="0 0 2400 1860" role="img" aria-labelledby="comparison-title comparison-desc">
 <title id="comparison-title">modeck：从资源分散维护，到工作方式统一组织</title>
-<desc id="comparison-desc">左侧：Claude Code 和 Codex 的全局、项目技能与配置分布在各自入口，跨 agent 复用需自行协调。右侧：个人配置与团队配置各自声明 rules、skills 和 modes，经 modeck 注册、选择启用及 agent 绑定后，业务项目通过 .modes 或自动选择脚本选择工作模式，SessionStart 加载规则正文与技能索引，供 Claude Code、Codex 和 CodeBuddy 使用。个人和团队是普通配置目录的组织方式。模型与权限由原生 agent 管理，外部资源先安装，会话启动不下载。</desc>
-<metadata id="fact-sources">{"reviewDate": "2026-10-17", "modeckEvidence": ["src/cli/manage-config.ts", "src/integration/registry.ts", "src/integration/prepare.ts", "src/core/resolve.ts", "src/core/compile.ts", "src/integration/hooks.ts", "src/integration/native-skills.ts", "src/resources/repository.ts"], "nativeSources": ["https://code.claude.com/docs/en/skills", "https://code.claude.com/docs/en/settings", "https://code.claude.com/docs/en/memory", "https://learn.chatgpt.com/docs/build-skills", "https://learn.chatgpt.com/docs/config-file/config-basic", "https://developers.openai.com/codex/guides/agents-md"], "notes": ["Native cards show common local entry points, not an exhaustive list.", "Personal/team are user-organized config directories, not permission roles.", "base, prog, tbase and tdoc are illustrative user-defined mode names.", "Resource index is additional context, not native slash command registration.", "A shared enabled configuration set is used by bound agents."]}</metadata>
+<desc id="comparison-desc">左侧：Claude Code 和 Codex 的全局、项目技能与配置分布在各自入口，跨 agent 复用需自行协调。右侧：个人配置与团队配置各自声明 rules、skills 和 modes，经 modeck 注册和选择启用；agent 适配层集中管理路径、hook 与 run 能力，当前仅支持 Claude Code、Codex 和 CodeBuddy。仅绑定时由 Rulesync 36.0.2 在隔离目录转换 SessionStart hook，再由 modeck plan/apply 合并原生 hook 配置；不转换 rules/skills 格式。会话运行时仍通过 .modes 或自动选择脚本动态选择工作模式，SessionStart 加载规则正文与技能索引，技能按需读取。个人和团队是普通配置目录的组织方式。模型与权限由原生 agent 管理，外部资源先安装，会话启动不下载。</desc>
+<metadata id="fact-sources">{"reviewDate": "2026-10-17", "modeckEvidence": ["src/cli/manage-config.ts", "src/integration/registry.ts", "src/integration/prepare.ts", "src/core/resolve.ts", "src/core/compile.ts", "src/integration/hooks.ts", "src/integration/native-skills.ts", "src/resources/repository.ts", "src/contracts/agents.ts", "src/integration/formats.ts", "src/integration/install.ts", "src/integration/run.ts", "package.json"], "nativeSources": ["https://code.claude.com/docs/en/skills", "https://code.claude.com/docs/en/settings", "https://code.claude.com/docs/en/memory", "https://learn.chatgpt.com/docs/build-skills", "https://learn.chatgpt.com/docs/config-file/config-basic", "https://developers.openai.com/codex/guides/agents-md"], "notes": ["Native cards show common local entry points, not an exhaustive list.", "Personal/team are user-organized config directories, not permission roles.", "base, prog, tbase and tdoc are illustrative user-defined mode names.", "Resource index is additional context, not native slash command registration.", "A shared enabled configuration set is used by bound agents.", "Supported agents remain Claude Code, Codex and CodeBuddy only.", "The adapter centralizes native paths, hooks and run capabilities.", "Rulesync 36.0.2 converts only SessionStart hooks at bind time in an isolated directory; modeck plan/apply merges the generated hook group.", "Rulesync does not convert rule or skill formats; mode selection and context compilation remain dynamic at runtime."]}</metadata>
 <defs>
  <pattern id="paper" width="120" height="120" patternUnits="userSpaceOnUse"><circle cx="14" cy="19" r=".9" fill="#AA9270" opacity=".16"/><circle cx="83" cy="59" r=".7" fill="#AA9270" opacity=".13"/><path d="M45 94h3M102 17h2" stroke="#AA9270" stroke-width=".6" opacity=".12"/></pattern>
  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1l6 4-6 4" fill="none" stroke="#64785E" stroke-width="1.5" stroke-linejoin="round"/></marker>
@@ -129,28 +129,32 @@
 <text x="1250" y="875" font-family="PingFang SC" font-size="24" font-weight="400" text-anchor="start" letter-spacing="0" fill="#796D5A">两份独立配置，可同时启用；模式名可自定义。</text>
 <path d="M1495 889v25h530v-25" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
 <path d="M1760 914v17" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="1250" y="938" width="1020" height="145" rx="16" fill="#64785E" stroke="none" stroke-width="1.5" />
-<text x="1290" y="995" font-family="Georgia" font-size="47" font-weight="700" text-anchor="start" letter-spacing="0" fill="#FFF5DD">modeck</text>
-<text x="1540" y="993" font-family="Songti SC" font-size="33" font-weight="600" text-anchor="start" letter-spacing="0" fill="#FFF5DD">统一管理规则与技能</text>
-<text x="1290" y="1044" font-family="PingFang SC" font-size="27" font-weight="400" text-anchor="start" letter-spacing="0" fill="#F3E7CC">注册配置目录  →  选择启用配置  →  绑定 agent</text>
-<path d="M1760 1084v30" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="1250" y="1124" width="1020" height="103" rx="12" fill="#FAF7ED" stroke="#BDC7AE" stroke-width="1.5" />
-<text x="1278" y="1164" font-family="PingFang SC" font-size="29" font-weight="500" text-anchor="start" letter-spacing="0" fill="#493E32">业务项目：自动模式 / 指定模式</text>
-<text x="1278" y="1203" font-family="PingFang SC" font-size="25" font-weight="400" text-anchor="start" letter-spacing="0" fill="#796D5A">modeck-auto.mjs 自动选择 · .modes 显式指定</text>
-<path d="M1760 1229v12" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
-<rect x="1478" y="1240" width="565" height="42" rx="0" fill="#EFF0E5" stroke="none" stroke-width="1.5" />
-<text x="1760" y="1271" font-family="PingFang SC" font-size="25" font-weight="400" text-anchor="middle" letter-spacing="0" fill="#64785E">SessionStart · 规则正文 + 技能索引</text>
-<path d="M1427.5 1290h658M1760 1282v8" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
-<path d="M1427.5 1290v8" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<path d="M1753 1290v8" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<path d="M2085.5 1290v8" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
-<rect x="1250" y="1302" width="355" height="66" rx="10" fill="#DEE4D4" stroke="#BCC7AD" stroke-width="1.5" />
-<text x="1427.5" y="1345" font-family="Georgia" font-size="29" font-weight="700" text-anchor="middle" letter-spacing="0" fill="#493E32">Claude Code</text>
-<rect x="1623" y="1302" width="260" height="66" rx="10" fill="#DEE4D4" stroke="#BCC7AD" stroke-width="1.5" />
-<text x="1753.0" y="1345" font-family="Georgia" font-size="29" font-weight="700" text-anchor="middle" letter-spacing="0" fill="#493E32">Codex</text>
-<rect x="1901" y="1302" width="369" height="66" rx="10" fill="#DEE4D4" stroke="#BCC7AD" stroke-width="1.5" />
-<text x="2085.5" y="1345" font-family="Georgia" font-size="29" font-weight="700" text-anchor="middle" letter-spacing="0" fill="#493E32">CodeBuddy</text>
-<text x="1250" y="1412" font-family="PingFang SC" font-size="25" font-weight="400" text-anchor="start" letter-spacing="0" fill="#64785E">技能按需读取 · 外部资源手动安装 / 更新</text>
+<rect x="1250" y="938" width="1020" height="214" rx="16" fill="#64785E" stroke="none" stroke-width="1.5" />
+<text x="1290" y="981" font-family="Georgia" font-size="43" font-weight="700" text-anchor="start" letter-spacing="0" fill="#FFF5DD">modeck</text>
+<text x="1540" y="979" font-family="Songti SC" font-size="33" font-weight="600" text-anchor="start" letter-spacing="0" fill="#FFF5DD">统一管理规则与技能</text>
+<text x="1290" y="1021" font-family="PingFang SC" font-size="26" font-weight="400" text-anchor="start" letter-spacing="0" fill="#F3E7CC">注册配置目录  →  选择启用配置  →  绑定 agent</text>
+<path d="M1290 1040H2230" fill="none" stroke="#A4B197" stroke-width="1" />
+<text x="1290" y="1072" font-family="PingFang SC" font-size="27" font-weight="500" text-anchor="start" letter-spacing="0" fill="#FFF5DD">agent 适配层 · 统一路径 / hook / run 能力</text>
+<text x="1290" y="1106" font-family="PingFang SC" font-size="23" font-weight="400" text-anchor="start" letter-spacing="0" fill="#F3E7CC">仅绑定时：Rulesync 36.0.2 在隔离目录转换 SessionStart hook</text>
+<text x="1290" y="1135" font-family="PingFang SC" font-size="23" font-weight="400" text-anchor="start" letter-spacing="0" fill="#F3E7CC">随后由 modeck plan / apply 合并原生 hook 配置</text>
+<path d="M1760 1153v20" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="1250" y="1183" width="1020" height="78" rx="12" fill="#FAF7ED" stroke="#BDC7AE" stroke-width="1.5" />
+<text x="1278" y="1215" font-family="PingFang SC" font-size="27" font-weight="500" text-anchor="start" letter-spacing="0" fill="#493E32">会话运行 · 业务项目自动 / 指定模式</text>
+<text x="1278" y="1246" font-family="PingFang SC" font-size="23" font-weight="400" text-anchor="start" letter-spacing="0" fill="#796D5A">modeck-auto.mjs 自动选择 · .modes 显式指定</text>
+<path d="M1760 1263v7" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="1478" y="1270" width="565" height="33" rx="0" fill="#EFF0E5" stroke="none" stroke-width="1.5" />
+<text x="1760" y="1293" font-family="PingFang SC" font-size="24" font-weight="400" text-anchor="middle" letter-spacing="0" fill="#64785E">SessionStart · 规则正文 + 技能索引</text>
+<path d="M1427.5 1310h658M1760 1303v7" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M1427.5 1310v8" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M1753 1310v8" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M2085.5 1310v8" fill="none" stroke="#64785E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="1250" y="1322" width="355" height="66" rx="10" fill="#DEE4D4" stroke="#BCC7AD" stroke-width="1.5" />
+<text x="1427.5" y="1365" font-family="Georgia" font-size="29" font-weight="700" text-anchor="middle" letter-spacing="0" fill="#493E32">Claude Code</text>
+<rect x="1623" y="1322" width="260" height="66" rx="10" fill="#DEE4D4" stroke="#BCC7AD" stroke-width="1.5" />
+<text x="1753.0" y="1365" font-family="Georgia" font-size="29" font-weight="700" text-anchor="middle" letter-spacing="0" fill="#493E32">Codex</text>
+<rect x="1901" y="1322" width="369" height="66" rx="10" fill="#DEE4D4" stroke="#BCC7AD" stroke-width="1.5" />
+<text x="2085.5" y="1365" font-family="Georgia" font-size="29" font-weight="700" text-anchor="middle" letter-spacing="0" fill="#493E32">CodeBuddy</text>
+<text x="1250" y="1424" font-family="PingFang SC" font-size="24" font-weight="400" text-anchor="start" letter-spacing="0" fill="#64785E">技能按需读取 · 外部资源手动安装 / 更新</text>
 <text x="1250" y="1456" font-family="PingFang SC" font-size="24" font-weight="400" text-anchor="start" letter-spacing="0" fill="#796D5A">Codex hook 需在 /hooks 中审查并信任</text>
 <path d="M88 1551H2312" fill="none" stroke="#CDBD9F" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 <text x="95" y="1620" font-family="Georgia" font-size="32" font-weight="400" text-anchor="start" letter-spacing="0" fill="#B96E50">I</text>
@@ -164,7 +168,7 @@
 <text x="1735" y="1666" font-family="PingFang SC" font-size="26" font-weight="400" text-anchor="start" letter-spacing="0" fill="#796D5A">规则与技能，随项目选择加载</text>
 <path d="M818 1580L818 1677" fill="none" stroke="#D8CBB2" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
 <path d="M1606 1580L1606 1677" fill="none" stroke="#D8CBB2" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" />
-<text x="95" y="1724" font-family="PingFang SC" font-size="24" font-weight="400" text-anchor="start" letter-spacing="0" fill="#493E32">范围：统一 rules / skills 与模式选择；模型、权限等设置仍由原生 agent 管理。</text>
+<text x="95" y="1724" font-family="PingFang SC" font-size="24" font-weight="400" text-anchor="start" letter-spacing="0" fill="#493E32">范围：Rulesync 仅转换 SessionStart hook，不转换 rules / skills；模型与权限仍由原生 agent 管理。</text>
 <text x="95" y="1766" font-family="PingFang SC" font-size="22" font-weight="400" text-anchor="start" letter-spacing="0" fill="#796D5A">说明：个人 / 团队为配置目录用途；.modes 优先，缺失 / 空白时自动选择；保留各配置 defaults。</text>
 <text x="2302" y="1810" font-family="Menlo" font-size="19" font-weight="400" text-anchor="end" letter-spacing="1" fill="#796D5A">2026.10  /  MODECK</text>
 </svg>

@@ -7,17 +7,21 @@
 </p>
 
 <p align="center">
-  <a href="assets/comparison.png"><img src="assets/comparison-share.svg" width="100%" alt="modeck 工作方式对比：原生 CC/Codex 的全局和项目资源分别维护；个人与团队配置统一组织规则、技能、外部资源和工作模式，供多个 agent 共用。"></a>
+  <a href="assets/comparison.png"><img src="assets/comparison-share.svg" width="100%" alt="modeck 工作方式对比：原生 CC/Codex 的全局和项目资源分别维护；个人与团队配置统一组织规则、技能、外部资源和工作模式，经 agent 适配层与 Rulesync hook 转换，供 Claude Code、Codex 和 CodeBuddy 共用。"></a>
 </p>
 
 ## 安装
 
-需要 Node.js 20+ 和你要使用的 agent CLI。通过 npm 全局安装：
+需要 Node.js 22.20.0+ 和你要使用的 agent CLI。通过 npm 全局安装：
 
 ```sh
 npm install -g modeck
 modeck --version
 ```
+
+当前支持 **Claude Code、Codex CLI 和 CodeBuddy Code CLI**。modeck 通过统一的 agent 适配层处理原生路径、会话 hook 和启动参数；绑定时使用 [Rulesync](https://github.com/dyoshikawa/rulesync) 转换 hook 配置，再校验并合并，保留已有 hook。
+
+工作模式仍按项目动态选择，会话加载规则正文和按需读取的技能索引。Rulesync 当前用于 hook 格式转换，更多 agent 尚未接入。
 
 ## 初始化并启用配置
 
@@ -141,13 +145,14 @@ Commands:
   res <init|update>  Manage external resources
   init                   Initialize configuration
   scan                   Import resources from agent homes
-  migrate                Migrate existing project-scope configuration
+  migrate                Migrate existing configuration
   resolve                Resolve context
   render                 Render context
   hook                   Handle agent session hooks
   register               Register a configuration
   unregister             Unregister a configuration
   config                 Manage registered configurations
+  run                    Start one agent session with context, without hook binding
 
 Options:
   -h, --help              Show help
