@@ -1,7 +1,7 @@
 import { lstat, open, readdir, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { realpath } from "node:fs/promises";
-import { canonical, checkRelativePath, LIMITS, modeError, sha256 } from "../contracts/index.js";
+import { agentDefinitions, canonical, checkRelativePath, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { Agent, ApplyBindPlanRequest, Diagnostic, FileChange, FileImage, BindPlan, BindRecord,
   ManagedFile, PlanBindRequest, PlanUnbindRequest } from "../contracts/index.js";
 import { atomic, checkDirectory, data, digest, ensureParents, homePath, imageJson, jsonImage, missing,
@@ -9,10 +9,11 @@ import { atomic, checkDirectory, data, digest, ensureParents, homePath, imageJso
 import type { ParentIdentity } from "./fs.js";
 import { hookGroup } from "./hooks.js";
 import { prepare } from "./prepare.js";
+import { convertHookGroup } from "./formats.js";
 
 const owner = "modeck/v1" as const;
 const locations = (agent: Agent) => ({
-  hook: agent === "codex" ? ".codex/hooks.json" : `.${agent}/settings.json`,
+  hook: agentDefinitions[agent].hook.file,
   private: `.modeck/${agent}`,
   record: `.modeck/${agent}/install.json`, lock: `.modeck/${agent}/install.lock`,
 });
@@ -187,7 +188,7 @@ export const planBind = async ({ agent, targetHome, configRoot, configRoots, sta
     const runtimeDigest = sha256(Buffer.from(canonical(packageFiles.map(file => ({ path: file.path, digest: digest(file.image), mode: file.image.mode })))));
     const runtime = `${loc.private}/runtime/${runtimeDigest}`;
     const owned = packageFiles.map(file => ({ path: `${runtime}/${file.path}`, image: file.image }));
-    const group = hookGroup(agent, homePath(home, `${runtime}/dist/bin/modeck.mjs`), configRoot, stateRoot);
+    const group = await convertHookGroup(agent, hookGroup(agent, homePath(home, `${runtime}/dist/bin/modeck.mjs`), configRoot, stateRoot));
     const { root, groups } = shared(before);
     if (previous && previous.runtimeDigest === runtimeDigest && canonical(previous.hookGroup) === canonical(group)
       && canonical(previous.files.map(file => file.path).sort()) === canonical(owned.map(file => file.path).sort())) return [];

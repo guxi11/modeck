@@ -3,7 +3,7 @@ import { access, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LIMITS, modeError, parseJson } from "../contracts/index.js";
+import { agentDefinitions, agents, isAgent, LIMITS, modeError, parseJson } from "../contracts/index.js";
 import type { Agent, ModeError } from "../contracts/index.js";
 import { manageResources } from "./resource.js";
 import { initialize } from "./init.js";
@@ -83,7 +83,7 @@ const required = (opts: Readonly<Record<string, string | boolean>>, name: string
 };
 const agentFor = (opts: Readonly<Record<string, string | boolean>>): Agent => {
   const value = required(opts, "agent");
-  if (value !== "codex" && value !== "claude" && value !== "codebuddy") throw modeError("E_USAGE", "Unknown agent");
+  if (!isAgent(value)) throw modeError("E_USAGE", "Unknown agent");
   return value;
 };
 const pathFor = async (value: string): Promise<string> => safeAbsolute(absolute(value));
@@ -133,7 +133,7 @@ const input = async (): Promise<unknown> => {
   catch { throw modeError("E_HOOK_INPUT", "Hook input must be valid JSON"); }
 };
 const executableFor = async (agent: Agent, supplied?: string): Promise<string> => {
-  const candidates = supplied ? [absolute(supplied)] : (process.env.PATH ?? "").split(delimiter).map(path => join(path, agent));
+  const candidates = supplied ? [absolute(supplied)] : (process.env.PATH ?? "").split(delimiter).map(path => join(path, agentDefinitions[agent].executable));
   const found = await candidates.reduce(async (pending, candidate) => {
     const previous = await pending;
     if (previous) return previous;
@@ -156,7 +156,10 @@ export const main = async (argv: string[]): Promise<number> => {
   try {
     if (command === "--help" || command === "-h") { process.stdout.write(help); return 0; }
     if (command === "--version" || command === "-v") { process.stdout.write(`${await packageVersion()}\n`); return 0; }
-    if (Number(process.versions.node.split(".")[0]) < 20 || process.platform === "win32") throw modeError("E_PLATFORM", "Node20+ on macOS/Linux is required");
+    const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
+    if (major < 22 || major === 22 && minor < 20 || process.platform === "win32") {
+      throw modeError("E_PLATFORM", "Node22.20.0+ on macOS/Linux is required");
+    }
     if (!Object.hasOwn(values, command)) throw modeError("E_USAGE", "Unknown command", { command });
     const separator = argv.indexOf("--", 1);
     if (separator >= 0 && command !== "run") throw modeError("E_USAGE", "Only run accepts agent arguments");
@@ -172,7 +175,7 @@ export const main = async (argv: string[]): Promise<number> => {
       const configRoot = await (single ? projectRootFor : configRootFor)(homedir(), process.cwd(), explicit);
       const roots = command === "resolve" && !record ? await configRoots(configRoot) : [];
       const fallback = command === "resolve" && !record
-        ? (await Promise.all((["claude", "codex", "codebuddy"] as const).map(agent => loadRecord(homedir(), agent))))
+        ? (await Promise.all(agents.map(agent => loadRecord(homedir(), agent))))
           .find(candidate => candidate && (candidate.configRoot === configRoot || roots.includes(candidate.configRoot)))
         : record;
       return { configRoot, stateRoot: await pathFor(String(opts.state ?? process.env.MODECK_STATE ?? fallback?.stateRoot ?? join(homedir(), ".local/share/modeck/v1"))) };

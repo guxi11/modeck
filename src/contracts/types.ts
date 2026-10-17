@@ -5,7 +5,7 @@ export type DeepReadonly<T> = T extends (...args: never[]) => unknown ? T
 
 export type Id = DeepReadonly<string>;
 export type Sha256 = DeepReadonly<string>;
-export type Agent = DeepReadonly<"codex" | "claude" | "codebuddy">;
+export type Agent = DeepReadonly<import("./agents.js").AgentId>;
 export type Kind = DeepReadonly<"rule" | "skill">;
 export type Source = DeepReadonly<{ type: "local"; path: string }
   | { type: "use"; url: string; path: string }>;

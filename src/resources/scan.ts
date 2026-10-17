@@ -1,6 +1,6 @@
 import { lstat, readdir, readlink, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { canonical, checkRelativePath, LIMITS, parseJson, sha256 } from "../contracts/index.js";
+import { agentDefinitions, canonical, checkRelativePath, LIMITS, parseJson, sha256 } from "../contracts/index.js";
 import type { Agent, Kind, TreeEntry } from "../contracts/index.js";
 import { compare, exists, missing, regularBytes, requireValue, safePath, utf8 } from "./fs.js";
 import { resourceEntry } from "./skill.js";
@@ -90,11 +90,8 @@ const resourceId = (name: string): string => {
 };
 
 const scanCatalog = async (home: string, project: boolean, agents?: readonly Agent[]): Promise<ScanResult> => {
-  const agentCatalogs: Readonly<Record<Agent, readonly string[]>> = {
-    claude: [".claude"], codex: [".codex", ".agents"], codebuddy: [".codebuddy", ".codebuddy-cli"],
-  };
   const catalogs = project ? [".claude", ".agents", ".codebuddy"]
-    : agents ? [...new Set(agents.flatMap(agent => agentCatalogs[agent]))] : targets;
+    : agents ? [...new Set(agents.flatMap(agent => agentDefinitions[agent].scanDirectories))] : targets;
   const root = await safePath(home);
   requireValue((await lstat(root)).isDirectory(), "E_PATH", "HOME must be a directory");
   const candidates: Candidate[] = [];

@@ -1,7 +1,7 @@
 import { lstat, open } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import { canonical, LIMITS, modeError, sha256 } from "../contracts/index.js";
+import { agents, canonical, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { Agent, BindPlan, BindRecord, ConfigRegistry, FileImage } from "../contracts/index.js";
 import { loadConfig } from "../core/index.js";
 import { applyBindPlan, loadRecord, planBind, planUnbind } from "../integration/install.js";
@@ -10,7 +10,6 @@ import { loadRegistry, registryPath, registryRoot } from "../integration/registr
 import { prepare } from "../integration/prepare.js";
 import { choose } from "./selection.js";
 
-const agents = ["claude", "codex", "codebuddy"] as const;
 type Options = Readonly<Record<string, string | boolean>>;
 type Snapshot = { readonly registry: ConfigRegistry; readonly image: FileImage | null; readonly records: readonly (BindRecord | null)[] };
 const hash = (value: unknown): string => sha256(Buffer.from(canonical(value)));

@@ -3,20 +3,19 @@ import { access, lstat, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import type { Key } from "node:readline";
 import checkbox from "@inquirer/checkbox";
-import { modeError } from "../contracts/index.js";
+import { agentDefinitions, agents, modeError } from "../contracts/index.js";
 import type { Agent } from "../contracts/index.js";
 import { missing } from "../integration/fs.js";
 import { loadRecord } from "../integration/install.js";
 
-const agents = ["claude", "codex", "codebuddy"] as const;
 const installed = async (home: string, agent: Agent): Promise<boolean> => {
-  const directory = await lstat(join(home, `.${agent}`)).catch(error => {
+  const directory = await lstat(join(home, agentDefinitions[agent].configDirectory)).catch(error => {
     if (missing(error)) return null;
     throw error;
   });
   if (directory?.isDirectory()) return true;
   return (await Promise.all((process.env.PATH ?? "").split(delimiter).map(async path => {
-    const executable = join(path, agent);
+    const executable = join(path, agentDefinitions[agent].executable);
     try { await access(executable, constants.X_OK); return (await stat(executable)).isFile(); }
     catch (error) {
       if (missing(error) || error instanceof Error && "code" in error && ["EACCES", "ENOTDIR"].includes(String(error.code))) return false;

@@ -1,5 +1,5 @@
 import { isAbsolute, join } from "node:path";
-import { canonical, LIMITS, modeError, PROTOCOL, sha256 } from "../contracts/index.js";
+import { canonical, isAgent, LIMITS, modeError, PROTOCOL, sha256 } from "../contracts/index.js";
 import type { CompileRequest, RenderedContext } from "../contracts/index.js";
 import { immutable, requireValue } from "./values.js";
 
@@ -13,7 +13,7 @@ const withoutFinalLf = (text: string): string => text.replace(/\n+$/, "");
 export const compile = ({ plan, resources, agent, nativeSkillNames = [] }: CompileRequest): RenderedContext => {
   requireValue(plan.configDigest === resources.configDigest && plan.resourceDigest === resources.resourceDigest,
     "E_INTEGRITY", "Plan and verified resources have different identities");
-  requireValue(agent === "codex" || agent === "claude" || agent === "codebuddy", "E_CONFIG", "Unsupported agent");
+  requireValue(isAgent(agent), "E_CONFIG", "Unsupported agent");
   const available = new Map(resources.resources.map(resource => [resource.id, resource]));
   const manifests = new Map(resources.manifest.resources.map(resource => [resource.id, resource]));
   requireValue(available.size === resources.resources.length, "E_INTEGRITY", "Duplicate verified resource id");

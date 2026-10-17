@@ -2,47 +2,29 @@ import { spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LIMITS, modeError } from "../contracts/index.js";
+import { agentDefinitions, LIMITS, modeError } from "../contracts/index.js";
 import type { Agent, RunAgentRequest, RunResult } from "../contracts/index.js";
 import { codexConfig } from "./codex.js";
 import { data, imageJson, object, readImage, safeAbsolute } from "./fs.js";
 import { markerText } from "./hooks.js";
 import { prepare } from "./prepare.js";
 
-const flags = {
-  codex: { "-m": 1, "--model": 1, "-s": 1, "--sandbox": 1, "-a": 1, "--ask-for-approval": 1,
-    "--search": 0, "--no-alt-screen": 0, "--no-daemon": 0, "-c": 1, "--config": 1, "-C": 1, "--cd": 1 },
-  codebuddy: { "-p": 0, "--print": 0, "--model": 1, "--effort": 1, "--permission-mode": 1,
-    "--output-format": 1, "--input-format": 1, "--max-turns": 1, "--verbose": 0,
-    "--no-session-persistence": 0, "--append-system-prompt": 1 },
-  claude: { "-p": 0, "--print": 0, "--model": 1, "--effort": 1, "--permission-mode": 1,
-    "--output-format": 1, "--input-format": 1, "--max-budget-usd": 1, "--verbose": 0,
-    "--no-session-persistence": 0, "--append-system-prompt": 1, "--append-system-prompt-file": 1 },
-} as const;
 type Parsed = { readonly rest: readonly string[]; readonly overrides: readonly string[];
   readonly cd: string | null; readonly append: string | null; readonly appendFile: string | null };
-const commands: Readonly<Record<Agent, readonly string[]>> = {
-  codex: ["agents", "review", "login", "logout", "mcp", "plugin", "app-server", "remote-control", "app", "completion", "update",
-    "doctor", "sandbox", "debug", "apply", "a", "resume", "queue", "archive", "delete", "migrate-rollouts", "unarchive", "fork",
-    "cloud", "exec-server", "features", "help"],
-  codebuddy: ["config", "mcp", "sandbox", "plugin", "project", "doctor", "update", "install", "cleanup",
-    "daemon", "ps", "logs", "attach", "kill", "stop", "rm", "respawn", "agents", "auto-mode", "help"],
-  claude: ["agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs", "mcp", "plugin", "plugins",
-    "purge", "respawn", "rm", "setup-token", "stop", "kill", "ultrareview", "update", "upgrade", "help"],
-};
 
 const parseArguments = (agent: Agent, argv: readonly string[]): Parsed => {
-  const allowed: Readonly<Record<string, number>> = flags[agent];
+  const adapter = agentDefinitions[agent];
+  const allowed: Readonly<Record<string, number>> = adapter.run.flags;
   const execFlags: Readonly<Record<string, number>> = { "--json": 0, "--skip-git-repo-check": 0, "-o": 1, "--output-last-message": 1 };
   const walk = (index: number, state: Parsed, seen: ReadonlySet<string>, exec: boolean, prompt: string | null): Parsed => {
     const token = argv[index];
     if (token === undefined) return { ...state, rest: [...state.rest, ...(prompt === null ? [] : ["--", prompt])] };
     if (token === "--") return { ...state, rest: [...state.rest, "--", ...(prompt === null ? [] : [prompt]), ...argv.slice(index + 1)] };
     if (!token.startsWith("-") || token === "-") {
-      if (agent === "codex" && ["exec", "e"].includes(token) && !exec && prompt === null) {
+      if (adapter.run.exec && ["exec", "e"].includes(token) && !exec && prompt === null) {
         return walk(index + 1, { ...state, rest: [...state.rest, token] }, seen, true, null);
       }
-      if (prompt === null && commands[agent].includes(token)) {
+      if (prompt === null && (adapter.run.commands as readonly string[]).includes(token)) {
         throw modeError("E_WRAPPER_CONFLICT", "This agent subcommand cannot be wrapped; use an explicit -- for prompt data", { token });
       }
       if (prompt !== null) throw modeError("E_WRAPPER_CONFLICT", "Only one prompt argument is supported");
@@ -78,6 +60,7 @@ const parseArguments = (agent: Agent, argv: readonly string[]): Parsed => {
 export const runAgent = async (request: RunAgentRequest): Promise<RunResult> => {
   if (process.env.MODECK_RUN_V1 !== undefined) throw modeError("E_WRAPPER_CONFLICT", "Nested wrappers are not supported");
   const { agent } = request;
+  const adapter = agentDefinitions[agent];
   const configRoot = await safeAbsolute(request.configRoot);
   const stateRoot = await safeAbsolute(request.stateRoot);
   const parsed = parseArguments(agent, request.argv);
@@ -88,7 +71,7 @@ export const runAgent = async (request: RunAgentRequest): Promise<RunResult> => 
   const packageImage = await readImage(fileURLToPath(new URL("../../package.json", import.meta.url)), LIMITS.jsonBytes);
   const version = packageImage ? object(imageJson(packageImage)).version : null;
   if (typeof version !== "string") throw modeError("E_IO", "Package version is unavailable");
-  const baseline = agent === "codex" ? await codexConfig(executable, cwd, parsed.overrides, version) : null;
+  const baseline = adapter.run.instructionChannel === "codex-config" ? await codexConfig(executable, cwd, parsed.overrides, version) : null;
   const append = parsed.appendFile === null ? parsed.append ?? "" : await (async () => {
     const image = await readImage(resolve(cwd, parsed.appendFile!), LIMITS.wrapperInstructionBytes);
     if (!image) throw modeError("E_WRAPPER_CONFLICT", "Append prompt file does not exist");
@@ -103,7 +86,7 @@ export const runAgent = async (request: RunAgentRequest): Promise<RunResult> => 
   }
   const encoded = JSON.stringify(combined);
   if (JSON.parse(encoded) !== combined) throw modeError("E_WRAPPER_CONFLICT", "Cannot encode developer instructions");
-  const injection = agent === "codex" ? ["--no-daemon", "-C", cwd, "-c", `developer_instructions=${encoded}`]
+  const injection = adapter.run.instructionChannel === "codex-config" ? ["--no-daemon", "-C", cwd, "-c", `developer_instructions=${encoded}`]
     : ["--append-system-prompt", combined];
   const marker = markerText({ version: 1, agent, configRoot, stateRoot, cwd,
     contentDigest: prepared.rendered.contentDigest, ownerPid: process.pid });

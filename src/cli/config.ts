@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { modeError } from "../contracts/index.js";
+import { agents, modeError } from "../contracts/index.js";
 import { findConfigPath } from "../core/config-file.js";
 import { loadRecord } from "../integration/install.js";
 import { safeAbsolute } from "../integration/fs.js";
@@ -9,7 +9,7 @@ export const configRootFor = async (home: string, cwd: string, explicit?: string
   if (explicit !== undefined) return safeAbsolute(resolve(explicit));
   const registry = await safeAbsolute(registryRoot(home));
   if (await loadRegistry(registry)) return registry;
-  const records = await Promise.all((["claude", "codex", "codebuddy"] as const).map(agent => loadRecord(home, agent)));
+  const records = await Promise.all(agents.map(agent => loadRecord(home, agent)));
   const roots = [...new Set(records.flatMap(record => record ? [record.configRoot] : []))];
   if (roots.length > 1) throw modeError("E_CONFIG", "Bindings reference different repositories; specify --config <dir>");
   // A binding is the user's trusted choice; business cwd must not shadow it with executable JavaScript.

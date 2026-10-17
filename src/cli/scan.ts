@@ -2,7 +2,7 @@ import { lstat, mkdir, open, rmdir, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, extname, join } from "node:path";
 import { stringify } from "yaml";
-import { LIMITS, modeError, sha256 } from "../contracts/index.js";
+import { agents, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { Agent, ConfigContext, Kind } from "../contracts/index.js";
 import { loadConfig, parseConfig, parseManifest, resolve } from "../core/index.js";
 import { validateConfig } from "../core/config.js";
@@ -22,7 +22,6 @@ import { projectRootFor } from "./config.js";
 export type HomeMigrationOptions = {
   readonly list: boolean; readonly answers?: string; readonly agent?: Agent; readonly configRoot?: string;
 };
-const agents = ["claude", "codex", "codebuddy"] as const;
 const resourcePath = (kind: Kind, name: string): string => kind === "rule" ? `rules/${name}.md` : `skills/${name}`;
 
 const imported = async (resource: ScannedResource, context: ConfigContext | null, homeRoot: string): Promise<boolean> => {
