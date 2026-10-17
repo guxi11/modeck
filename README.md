@@ -126,7 +126,7 @@ modeck res update
 
 `res init` 增量安装：首次从仓库默认分支获取，已有且完整的资源跳过，缺失资源按根目录 `modeck-lock.json` 中的 commit 和摘要恢复。输出包含逐项状态及安装汇总；`res update` 获取最新内容并展示处理进度，本地修改会阻止覆盖。
 
-下载内容自动放入 `.modeck/resources/`，整个 `.modeck/` 加入 `.gitignore`。共享 YAML 和 `modeck-lock.json`，无需填写 `head`、`ref` 或 `target`，也无需另建资源清单。rule 的同类声明指向仓库内的单个 Markdown 文件；本地资源仍使用相对路径。移除声明不会删除本地目录。
+下载内容自动放入顶层 `vendor/skills/<id>/` 和 `vendor/rules/<id>.md`，`/vendor/` 和 `/.modeck/` 加入 `.gitignore`。已有 `.modeck/resources/` 安装会在 `res init` 校验后迁移，并保留锁定版本。共享 YAML 和 `modeck-lock.json`，无需填写 `head`、`ref` 或 `target`，也无需另建资源清单。rule 的同类声明指向仓库内的单个 Markdown 文件；本地资源仍使用相对路径。移除声明不会删除本地目录。
 
 ## 调整或移除绑定
 

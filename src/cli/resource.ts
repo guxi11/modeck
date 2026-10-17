@@ -1,4 +1,4 @@
-import { chmod, cp, mkdir, mkdtemp, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { LIMITS, parseJson, useResourcePath } from "../contracts/index.js";
 import type { Kind } from "../contracts/index.js";
@@ -10,8 +10,9 @@ import { snapshotLocal, writeSnapshot } from "../resources/tree.js";
 type Declaration = Readonly<{ id: string; kind: Kind; url: string; path: string; target: string; ref: string }>;
 type Entry = Omit<Declaration, "id" | "kind"> & Readonly<{ id?: string; kind?: Kind; commit: string; digest: string; date?: string; tag?: string | null }>;
 type Lock = Readonly<{ version: 1; resources: readonly Entry[] }>;
-type Status = "installed" | "restored" | "skipped" | "updated" | "unchanged";
-type Prepared = Readonly<{ entry: Entry; target: string; staged: string | null; status: Status; before: string | null }>;
+type Status = "installed" | "restored" | "migrated" | "skipped" | "updated" | "unchanged";
+type Prepared = Readonly<{ entry: Entry; target: string; staged: string | null; status: Status; before: string | null;
+  previousTarget: string | null; previousBefore: string | null }>;
 const resourceFile = "modeck-lock.json";
 const legacyFile = "modeck-resources.json";
 const overlaps = (left: string, right: string): boolean => {
@@ -46,7 +47,11 @@ const readLock = async (root: string): Promise<{ lock: Lock; legacy: boolean }> 
 };
 const sameSource = (left: Declaration, right: Entry): boolean =>
   left.url === right.url && left.path === right.path && left.target === right.target && left.ref === right.ref
-    && left.kind === (right.kind ?? "skill");
+    && left.kind === (right.kind ?? "skill") && (right.id === undefined || left.id === right.id);
+const previousResourcePath = (entry: Declaration): string => entry.kind === "rule"
+  ? `.modeck/resources/rules/${entry.id}.md` : `.modeck/resources/skills/${entry.id}`;
+const previousSource = (left: Declaration, right: Entry): boolean =>
+  right.target === previousResourcePath(left) && sameSource({ ...left, target: right.target }, right);
 const currentDigest = async (target: string, kind: Kind): Promise<string | null> =>
   await exists(target) ? (await snapshotLocal(target, kind)).treeDigest : null;
 
@@ -69,13 +74,19 @@ export const manageResources = async (root: string, action: string): Promise<Loc
       spec.source.type === "use" ? [{ id, kind: spec.kind, url: spec.source.url, path: spec.source.path,
         target: useResourcePath(id, spec.kind), ref: "HEAD" }] : []);
     const { lock, legacy } = await readLock(root);
-    const migrating = legacy || lock.resources.some(entry => entry.kind === undefined);
-    requireValue(!migrating || lock.resources.every(entry => declarations.some(declaration => sameSource(declaration, entry))),
+    const migrating = legacy || lock.resources.some(entry => entry.kind === undefined || entry.target.toLowerCase().startsWith(".modeck/resources/"));
+    requireValue(!migrating || lock.resources.every(entry => declarations.some(declaration => sameSource(declaration, entry) || previousSource(declaration, entry))),
       "E_CONFIG", "Migrate every legacy lock resource to a matching (use URL)/path mapping and its automatic cache path before installing");
+    const records = lock.resources.map(entry => {
+      const declaration = declarations.find(declaration => previousSource(declaration, entry));
+      return { entry: declaration ? { ...entry, target: declaration.target } : entry, previous: declaration ? entry.target : null };
+    });
+    requireValue(records.every((record, index) => records.every((other, otherIndex) => index === otherIndex
+      || !overlaps(record.entry.target, other.entry.target))), "E_CONFIG", "Migrated external resource targets overlap");
     declarations.forEach((entry, index) => {
       validate(root, { ...entry, commit: "0".repeat(40), digest: "0".repeat(64) });
       requireValue(declarations.every((other, otherIndex) => index === otherIndex || !overlaps(entry.target, other.target)), "E_CONFIG", "External resource targets overlap");
-      requireValue(lock.resources.every(other => other.target.toLowerCase() === entry.target.toLowerCase() || !overlaps(entry.target, other.target)), "E_INSTALL_CONFLICT", "External resource target overlaps a locked target");
+      requireValue(records.every(({ entry: other }) => other.target.toLowerCase() === entry.target.toLowerCase() || !overlaps(entry.target, other.target)), "E_INSTALL_CONFLICT", "External resource target overlaps a locked target");
     });
     const lockPath = join(root, resourceFile);
     await safePath(lockPath, true);
@@ -91,18 +102,30 @@ export const manageResources = async (root: string, action: string): Promise<Loc
       const prepared = await declarations.reduce(async (pending, declaration, index) => {
         const previous = await pending;
         progress(index, "checking");
-        const locked = lock.resources.find(entry => entry.target.toLowerCase() === declaration.target.toLowerCase());
+        const record = records.find(({ entry }) => entry.target.toLowerCase() === declaration.target.toLowerCase());
+        const locked = record?.entry;
         const matching = locked !== undefined && sameSource(declaration, locked);
         const target = childPath(root, declaration.target);
         await safePath(target, true);
         const before = await currentDigest(target, declaration.kind);
+        requireValue(!record?.previous || before === null, "E_INSTALL_CONFLICT", "Resource migration destination already exists", { target: declaration.target });
+        const previousTarget = record?.previous ? childPath(root, record.previous) : null;
+        const previousBefore = previousTarget ? await currentDigest(previousTarget, declaration.kind) : null;
+        requireValue(previousBefore === null || previousBefore === locked?.digest,
+          "E_INSTALL_CONFLICT", "External resource has local modifications", { target: record?.previous });
         if (before !== null) {
           requireValue(locked, "E_INSTALL_CONFLICT", "External resource target is not managed", { target: declaration.target });
           requireValue(before === locked!.digest, "E_INSTALL_CONFLICT", "External resource has local modifications", { target: declaration.target });
         }
-        if (action === "init" && matching && before !== null) {
-          progress(index, "skipped");
-          return [...previous, { entry: { ...locked!, ...declaration }, target, staged: null, status: "skipped" as const, before }];
+        if (action === "init" && matching && (before !== null || previousBefore !== null)) {
+          const staged = previousBefore !== null ? join(staging, `tree-${index}`) : null;
+          if (staged) {
+            await cp(previousTarget!, staged, { recursive: true });
+            requireValue(await currentDigest(staged, declaration.kind) === locked!.digest, "E_INTEGRITY", "External resource changed during migration");
+          }
+          const status = staged ? "migrated" as const : "skipped" as const;
+          progress(index, status);
+          return [...previous, { entry: { ...locked!, ...declaration }, target, staged, status, before, previousTarget, previousBefore }];
         }
         progress(index, "downloading");
         const repo = join(staging, `repo-${index}`);
@@ -121,7 +144,8 @@ export const manageResources = async (root: string, action: string): Promise<Loc
           return match?.[1] === commit ? [match[2]!] : [];
         }).sort()[0] ?? null;
         const entry: Entry = { ...declaration, commit, digest: snapshot.treeDigest, date, tag };
-        const status: Status = restoring ? "restored" : before === null ? "installed" : before === snapshot.treeDigest ? "unchanged" : "updated";
+        const installedBefore = previousTarget ? previousBefore : before;
+        const status: Status = restoring ? "restored" : installedBefore === null ? "installed" : installedBefore === snapshot.treeDigest ? "unchanged" : "updated";
         const staged = before === snapshot.treeDigest ? null : join(staging, `tree-${index}`);
         if (staged) {
           if (declaration.kind === "rule") {
@@ -132,11 +156,10 @@ export const manageResources = async (root: string, action: string): Promise<Loc
           } else await writeSnapshot(snapshot, staged, false);
         }
         progress(index, "prepared");
-        return [...previous, { entry, target, staged, status, before }];
+        return [...previous, { entry, target, staged, status, before, previousTarget, previousBefore }];
       }, Promise.resolve<readonly Prepared[]>([]));
       await validateConfig(context);
-      const pattern = "/.modeck/";
-      const ignoreNeeded = !ignore.split(/\r?\n/).includes(pattern);
+      const patterns = ["/.modeck/", "/vendor/"].filter(pattern => !ignore.split(/\r?\n/).includes(pattern));
       const result: Lock = { version: 1, resources: prepared.map(item => item.entry) };
       const bytes = `${JSON.stringify(result, null, 2)}\n`;
       requireValue(Buffer.byteLength(bytes) <= LIMITS.jsonBytes, "E_LIMIT", "External resource lock exceeds byte limit");
@@ -160,10 +183,22 @@ export const manageResources = async (root: string, action: string): Promise<Loc
           progress(index, item.status);
         }
         await validateConfig(context);
-        if (ignoreNeeded) {
+        for (const item of prepared) {
+          if (!item.previousTarget) continue;
+          await safePath(item.previousTarget, true);
+          requireValue(await currentDigest(item.previousTarget, item.entry.kind ?? "skill") === item.previousBefore,
+            "E_INSTALL_CONFLICT", "External resource changed during migration", { target: item.previousTarget });
+          if (item.previousBefore === null) continue;
+          const sibling = await mkdtemp(join(dirname(item.previousTarget), ".modeck-resource-"));
+          const replacement = { target: item.previousTarget, sibling, hadPrevious: false, installed: false };
+          replacements.push(replacement);
+          await rename(item.previousTarget, join(sibling, "old"));
+          replacement.hadPrevious = true;
+        }
+        if (patterns.length) {
           await safePath(ignoreFile, true);
           ignoreWritten = true;
-          await writeFile(ignoreFile, `${ignore}${ignore && !ignore.endsWith("\n") ? "\n" : ""}${pattern}\n`);
+          await writeFile(ignoreFile, `${ignore}${ignore && !ignore.endsWith("\n") ? "\n" : ""}${patterns.join("\n")}\n`);
         }
         await safePath(lockPath, true);
         await rename(join(mutex, "lock"), lockPath);
@@ -181,9 +216,14 @@ export const manageResources = async (root: string, action: string): Promise<Loc
         for (const replacement of replacements) await rm(replacement.sibling, { recursive: true, force: true });
       }
       if (legacy) await unlink(join(root, legacyFile));
+      if (records.some(record => record.previous)) {
+        for (const path of [".modeck/resources/skills", ".modeck/resources/rules", ".modeck/resources"]) {
+          await safePath(join(root, path)).then(path => rmdir(path)).catch(() => undefined);
+        }
+      }
       const results = prepared.map(({ entry, status }) => ({ target: entry.target, status, commit: entry.commit, digest: entry.digest }));
       const summary = results.reduce((counts, item) => ({ ...counts, [item.status]: counts[item.status] + 1 }),
-        { total: results.length, installed: 0, restored: 0, skipped: 0, updated: 0, unchanged: 0 });
+        { total: results.length, installed: 0, restored: 0, migrated: 0, skipped: 0, updated: 0, unchanged: 0 });
       const counts = Object.entries(summary).filter(([status, count]) => status !== "total" && count > 0)
         .map(([status, count]) => `${status}: ${count}`).join(", ");
       process.stderr.write(`modeck res ${action}: complete (${summary.total} resources${counts ? `; ${counts}` : ""})\n`);

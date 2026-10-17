@@ -58,7 +58,7 @@ export const useResourcePath = (id: string, kind: Kind): string => {
   if (!/^[a-z][a-z0-9-]{0,63}$/.test(id) || kind !== "rule" && kind !== "skill") {
     throw modeError("E_PATH", "Invalid installed resource identity", { id, kind });
   }
-  return kind === "rule" ? `.modeck/resources/rules/${id}.md` : `.modeck/resources/skills/${id}`;
+  return kind === "rule" ? `vendor/rules/${id}.md` : `vendor/skills/${id}`;
 };
 
 export const parseJson = (text: string): unknown => {

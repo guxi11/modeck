@@ -79,7 +79,7 @@ flowchart TB
 | 来源 | `render` / `hook` 等运行期读取 | `sync` | `sync --update` |
 | --- | --- | --- | --- |
 | 本地 | 重新快照源文件或目录，发布内容对象 | 同样重新快照 | 同样重新快照 |
-| `(use URL)/path` | 读取 `.modeck/resources/` 的安装内容，复核锁定来源和摘要；缺失时提示 `res init` | 验证已安装内容 | 验证已安装内容；更新使用 `res update` |
+| `(use URL)/path` | 读取 `vendor/` 的安装内容，复核锁定来源和摘要；缺失时提示 `res init` | 验证已安装内容 | 验证已安装内容；更新使用 `res update` |
 | 旧式 Git 对象 | 读取已有缓存，未缓存时报错 | 复用缓存；缺缓存时获取 | 重新解析 ref 并获取 |
 
 运行期资源层不拉取 Git；自动选择脚本自身仍有联网能力。`sync` 默认处理全部声明资源，运行期只处理所选资源。
@@ -98,9 +98,9 @@ flowchart TB
 
 [Git 获取](../src/resources/git.ts)读取 commit 的 blob，不运行仓库安装命令，不初始化 submodule，并禁用 Git hooks 和多项隐式配置。Git 树中的 symlink、gitlink 和特殊条目被拒绝。资源内容及 skill 脚本不会在获取过程中执行。
 
-`res init` 从简洁映射生成安装请求，技能放入 `.modeck/resources/skills/<id>/`，规则放入 `.modeck/resources/rules/<id>.md`。首次安装使用仓库默认分支，根目录 `modeck-lock.json` 保存解析后的 commit、摘要及生成路径；后续 init 跳过完整安装并按锁恢复缺失内容，新增声明只安装新增项。`res update` 重新获取默认分支并逐项输出进度，最后输出结构化状态和汇总。
+`res init` 从简洁映射生成安装请求，技能放入顶层 `vendor/skills/<id>/`，规则放入 `vendor/rules/<id>.md`。首次安装使用仓库默认分支，根目录 `modeck-lock.json` 保存解析后的 commit、摘要及生成路径；后续 init 跳过完整安装并按锁恢复缺失内容，新增声明只安装新增项。已有 `.modeck/resources/` 安装经来源和内容校验后迁移，保留锁定 commit 和摘要；本地修改或目标重名会阻止迁移，失败时回滚。`res update` 重新获取默认分支并逐项输出进度，最后输出逐项状态和数量汇总。
 
-整个 `.modeck/` 是本机安装及备份目录，加入配置目录 `.gitignore`；共享 YAML 和根目录 `modeck-lock.json`。运行期验证安装内容与锁记录，不联网；来源声明变化或缓存缺失时需要重新执行 `res init`，本地内容被修改时拒绝覆盖。资源安装在配置身份变化等可捕获错误下回滚目标、锁和忽略文件。没有 `--frozen` 命令；远端是否仍提供锁定 commit 影响缺失资源的恢复，内容摘要也不能证明资源作者可信。
+`vendor/` 存放下载资源，`.modeck/` 保留本机状态、安装互斥、暂存及备份；两者加入配置目录 `.gitignore`，共享 YAML 和根目录 `modeck-lock.json`。运行期验证安装内容与锁记录，不联网；来源声明变化或缓存缺失时需要重新执行 `res init`，本地内容被修改时拒绝覆盖。资源安装在配置身份变化等可捕获错误下回滚目标、锁和忽略文件。没有 `--frozen` 命令；远端是否仍提供锁定 commit 影响缺失资源的恢复，内容摘要也不能证明资源作者可信。
 
 ## 编译与按需技能
 
