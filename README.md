@@ -3,11 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>让 Claude Code、Codex 和 CodeBuddy 随项目切换规则和技能。</strong>
-</p>
-
-<p align="center">
-  modeck 是一个 TypeScript CLI。把 rules、skills 组成命名的 mode，在原生 agent 的会话开始时加载；共享配置集中维护，业务项目只需一个可选的 <code>.modes</code> 文本文件。
+  <strong>多 agent 的配置与技能分散、切换项目还要反复整理？modeck 集中管理多套规则、技能和外部资源，并按项目自动组合，在 agent 启动时自动注入上下文。</strong>
 </p>
 
 <p align="center">
