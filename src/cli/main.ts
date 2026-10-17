@@ -229,7 +229,10 @@ export const main = async (argv: string[]): Promise<number> => {
     if (!agent) return 0;
     const prepared = await prepare({ agent, configRoot, stateRoot, cwd });
     if (command === "resolve") json(prepared.plan);
-    else if (format === "json") json(prepared.rendered);
+    else if (format === "json") {
+      const { modeIds: _modeIds, ...rendered } = prepared.rendered;
+      json(rendered);
+    }
     else process.stdout.write(prepared.rendered.text);
     return 0;
   } catch (caught) {

@@ -101,9 +101,11 @@ flowchart TB
 
 ## 编译与按需技能
 
-[编译器](../src/core/compile.ts)检查计划与资源身份一致后，按协议头、规则正文、技能索引排列文本。规则正文统一 UTF-8、LF 和末尾换行；技能只提供 ID、名称、描述、绝对 `root` 和 `entry`，正文由 agent 在匹配任务后读取，配套 references/assets/scripts 从 root 定位。
+[编译器](../src/core/compile.ts)检查计划与资源身份一致后，依次输出 `<INSTRUCTIONS>` 规则正文和 `<SKILLS>` 技能索引；没有规则时省略前者。规则正文统一 UTF-8、LF 和末尾换行，不添加资源 ID 注释；技能只提供名称、描述、绝对 `root` 和 `entry`，正文由 agent 在匹配任务后读取，配套 references/assets/scripts 从 root 定位。`render --format json` 也不展示 mode ID；内部计划、资源匹配及摘要继续保留 ID 关联，`resolve` 仍提供诊断计划。
 
 索引不是原生 skill 注册，不保证 agent 必然调用技能。modeck 不自动执行 skill 脚本；脚本执行仍服从 agent 的工具权限。[原生技能扫描](../src/integration/native-skills.ts)按目标 agent 的扫描规则收集名称，编译时跳过同名技能索引以减少重复；去重依据是名称，不是内容比较。
+
+`render` 的三个 agent 共用同一正文模板，规则不会按 agent 转换。原生技能过滤因 agent 而异：Claude 扫描当前目录到工作区边界的 `.claude/skills` 及用户配置的 skills，单层读取，缺少名称时使用目录名；Codex 扫描相同目录范围的 `.agents/skills`、用户 `.agents/skills`、Codex 用户配置及 `/etc/codex/skills`，递归寻找含有效名称和描述的技能；CodeBuddy 扫描当前目录 `.codebuddy/skills` 和用户配置的 skills，递归读取并支持以冒号分隔的目录名作为回退。用户配置位置分别受 `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`CODEBUDDY_CONFIG_DIR` 影响。未指定 `--state` 或 `MODECK_STATE` 时，`render` 还会优先使用所选 agent 绑定的状态目录，不同目录会改变索引中的技能绝对路径。配置、工作目录、状态目录及原生技能过滤结果相同时正文相同，但 JSON 中的 `agent` 和包含 agent 的 `selectionDigest` 仍不同。未指定 `--agent` 时交互选择一个 agent，非交互调用必须显式指定。
 
 正文同时受 9,000 字符和 32,768 字节上限约束，超过任一上限会报 `E_CONTEXT_SIZE`，不会静默截断。完整阈值见 [LIMITS](../src/contracts/constants.ts)。
 

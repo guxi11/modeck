@@ -52,7 +52,7 @@ modeck --version
    modeck render
    ```
 
-   输出规则正文和技能索引。之后在该目录启动原生 agent，会话通过 hook 加载相同内容。
+   选择一个 agent 后输出规则正文和技能索引，不附带内部 ID。非交互调用需指定 `--agent <claude|codex|codebuddy>`。三种 agent 共用模板，按各自原生技能扫描规则发现的同名技能会从索引中省略，因此输出可能不同。之后在该目录启动所选 agent，会话通过 hook 加载相同内容。
 
 ## 组合工作模式
 
