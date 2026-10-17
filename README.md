@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>多 agent 的配置与技能分散、切换项目还要反复整理？modeck 集中管理多套规则、技能和外部资源，并按项目自动组合，在 agent 启动时自动注入上下文。</strong>
+  <strong>多 agent 的配置与技能分散、切换项目还要反复整理？modeck 集中管理多套规则、技能和外部资源，并按项目自动组合，在 agent 启动时预先注入上下文。</strong>
 </p>
 
 <p align="center">
