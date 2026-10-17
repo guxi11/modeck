@@ -2,11 +2,11 @@ import { lstat, open } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { agents, canonical, LIMITS, modeError, sha256 } from "../contracts/index.js";
-import type { Agent, BindPlan, BindRecord, ConfigRegistry, FileImage } from "../contracts/index.js";
+import type { Agent, BindPlan, BindRecord, ConfigRegistry, ConfigSourceRole, FileImage } from "../contracts/index.js";
 import { loadConfig } from "../core/index.js";
 import { applyBindPlan, loadRecord, planBind, planUnbind } from "../integration/install.js";
 import { atomic, checkDirectory, digest, ensureParents, imageJson, jsonImage, missing, object, parentIdentity, readImage, safeAbsolute, same } from "../integration/fs.js";
-import { loadRegistry, registryPath, registryRoot } from "../integration/registry.js";
+import { loadRegistry, registryPath, registryRoot, sourceFor } from "../integration/registry.js";
 import { prepare } from "../integration/prepare.js";
 import { choose } from "./selection.js";
 
@@ -25,7 +25,7 @@ const snapshot = async (home: string, root: string): Promise<Snapshot> => {
   }
   return { image, records, registry: registry ?? { schemaVersion: 1,
     projects: [...new Set(records.flatMap(record => record && record.configRoot !== root ? [record.configRoot] : []))]
-      .map(root => ({ root, enabled: true })) } };
+      .map(root => sourceFor({ root, enabled: true })) } };
 };
 
 const unchanged = async (home: string, root: string, before: Snapshot): Promise<void> => {
@@ -126,14 +126,26 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
     }
     if (command === "register") await loadConfig({ configRoot: project });
     const exists = before.registry.projects.some(entry => entry.root === project);
+    const metadata = command === "register" ? {
+      ...(opts.role !== undefined ? { role: opts.role as ConfigSourceRole } : {}),
+      ...(opts.namespace !== undefined ? { namespace: String(opts.namespace) } : {}),
+    } : {};
+    if (metadata.role !== undefined && !["personal", "team", "project"].includes(metadata.role)
+      || metadata.namespace !== undefined && !/^[a-z][a-z0-9-]{0,63}$/.test(metadata.namespace)) {
+      throw modeError("E_USAGE", "Invalid configuration source role or namespace");
+    }
     const registry: ConfigRegistry = { schemaVersion: 1, projects: command === "register"
-      ? exists ? before.registry.projects : [...before.registry.projects, { root: project, enabled: false }]
+      ? exists ? before.registry.projects.map(entry => entry.root === project ? sourceFor({ ...entry, ...metadata }) : entry)
+        : [...before.registry.projects, sourceFor({ root: project, enabled: false, ...metadata })]
       : before.registry.projects.filter(entry => entry.root !== project) };
     if (registry.projects.length > LIMITS.modes) throw modeError("E_LIMIT", "Too many registered configuration projects");
+    if (new Set(registry.projects.map(entry => entry.namespace)).size !== registry.projects.length) {
+      throw modeError("E_CONFIG", "Duplicate configuration source namespace");
+    }
     return locked(home, root, async () => {
       await unchanged(home, root, before);
       await publish(root, before.image, registry);
-      return { ...registry, changed: command === "register" ? !exists : exists };
+      return { ...registry, changed: canonical(registry) !== canonical(before.registry) };
     });
   }
   const selected = await answersFor(typeof opts.answers === "string" ? opts.answers : undefined, before);

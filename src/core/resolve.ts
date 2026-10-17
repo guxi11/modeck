@@ -19,7 +19,7 @@ export const resolve = ({ context, facts, resourceDigest }: ResolveRequest): Res
   const expand = (source: Reason, chain: readonly string[], state: Expansion): Expansion => {
     const id = source.mode;
     if (chain.includes(id)) throw modeError("E_CONFIG", "Mode inheritance cycle", { chain: [...chain, id] });
-    const mode = config.modes[id];
+    const mode = Object.hasOwn(config.modes, id) ? config.modes[id] : undefined;
     if (!mode) throw modeError("E_CONFIG", "Unknown selected mode", { id });
     const withReason = { modes: state.modes, reasons: [...state.reasons, source] };
     if (state.modes.includes(id)) return withReason;
@@ -34,12 +34,13 @@ export const resolve = ({ context, facts, resourceDigest }: ResolveRequest): Res
       ...mode.skills.map(skill => ({ id: skill, kind: "skill" as const }))];
   }).reduce<readonly BoundResource[]>((ordered, binding) => {
     const old = ordered.find(resource => resource.id === binding.id);
-    if (config.resources[binding.id]?.kind !== binding.kind || old && old.kind !== binding.kind) {
+    if (!Object.hasOwn(config.resources, binding.id) || config.resources[binding.id]?.kind !== binding.kind || old && old.kind !== binding.kind) {
       throw modeError("E_CONFIG", "Resource binding kind mismatch", { id: binding.id });
     }
     return old ? ordered : [...ordered, binding];
   }, []);
   return immutable({ schemaVersion: 1 as const, configDigest: context.configDigest, resourceDigest,
     cwd: facts.cwd, boundary: facts.boundary, selectorPath: facts.selector?.path ?? null,
-    modeIds: selected.modes, resources, reasons: selected.reasons, diagnostics: [] });
+    modeIds: selected.modes, resources, mcp: [...new Set(selected.modes.flatMap(id => config.modes[id]!.mcp))],
+    reasons: selected.reasons, diagnostics: [] });
 };

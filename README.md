@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>多 agent 的配置与技能分散、切换项目还要反复整理？modeck 集中管理多套规则、技能和外部资源，并按项目自动组合，在 agent 启动时预先注入上下文。</strong>
+  <strong>多 agent 的配置与技能分散、切换项目还要反复整理？modeck 集中管理多套规则、技能、外部资源和 MCP servers，并按项目组合，在 agent 启动前准备上下文与工具配置。</strong>
 </p>
 
 <p align="center">
@@ -21,7 +21,20 @@ modeck --version
 
 当前支持 **Claude Code、Codex CLI 和 CodeBuddy Code CLI**。modeck 通过统一的 agent 适配层处理原生路径、会话 hook 和启动参数；绑定时使用 [Rulesync](https://github.com/dyoshikawa/rulesync) 转换 hook 配置，再校验并合并，保留已有 hook。
 
-工作模式仍按项目动态选择，会话加载规则正文和按需读取的技能索引。Rulesync 当前用于 hook 格式转换，更多 agent 尚未接入。
+工作模式按项目动态选择，会话加载规则正文和按需读取的技能索引。MCP servers 使用独立的原生配置通道；Rulesync 同时参与 hook 和 MCP 格式转换，转换后由 modeck 校验并执行受管合并。上下文接入与 MCP 支持范围分别列出，不能互相推导。
+
+## MCP 支持范围
+
+| Agent / 标识 | MCP 预览 | 单次 run | 显式受管同步 |
+| --- | --- | --- | --- |
+| Claude Code / `claude` | stdio / HTTP / SSE，环境变量引用 | 支持 | 用户 / 项目 |
+| Codex / `codex` | stdio / Streamable HTTP；不支持显式 SSE | 支持 | 仅用户；项目作用域拒绝 |
+| CodeBuddy / `codebuddy` | stdio / HTTP / SSE；引用名须全大写 | 支持，受启动参数限制 | 用户 / 项目，沿用已有优先入口 |
+| Cursor / `cursor` | limited：stdio / HTTP 原生转换与字段校验 | 不支持 | 不支持 |
+| VS Code Copilot / `copilot` | limited：stdio / HTTP 原生转换与字段校验 | 不支持 | 不支持 |
+| OpenCode / `opencode` | limited：stdio / HTTP 原生转换与字段校验 | 不支持 | 不支持 |
+
+额外三家只通过 `mcp render` 输出原生定义，不支持显式 SSE，不表示已安装、已加载或已连接；`copilot` 指 VS Code 配置，不是 Copilot CLI。Rulesync 36.0.2 没有 Gemini / Windsurf target，本轮不支持。其他 target 和未知字段均拒绝，不以转换器未报错推断支持。上下文规则、技能及 hook 仍只接入原三家。
 
 ## 初始化并启用配置
 
@@ -95,6 +108,42 @@ prog,doc,web
 
 多个名称用逗号或换行分隔。非空 `.modes` 中的多个 mode 会组合加载，并保留默认 mode 和继承关系；缺失或空白时使用自动选择。
 
+## 按模式管理 MCP
+
+在配置顶层声明 `mcp.servers`，通过 mode 的 `mcp` 列表选择。MCP 不属于规则或技能，不会作为提示词伪装成工具加载；只管理 MCP 的配置可以省略 `resources`。
+
+```yaml
+mcp:
+  servers:
+    repo-tools:
+      transport: stdio
+      command: npx
+      args: [-y, '@your-org/repo-mcp']
+      env:
+        REPO_TOKEN: { env: REPO_TOKEN }
+    team-api:
+      transport: http
+      url: https://mcp.example.com/mcp
+      headers:
+        Authorization: { env: TEAM_MCP_AUTH }
+defaults: [base]
+modes:
+  base: {}
+  prog:
+    mcp: [repo-tools]
+  review:
+    extends: [prog]
+    mcp: [team-api]
+```
+
+将示例命令与地址替换为实际服务。凭据通过环境变量提供，YAML 仅保存变量名；`TEAM_MCP_AUTH` 提供完整的 Authorization 值。引用默认必需，缺失时启动或同步失败；`required: false` 显式声明可选引用，未设置时省略该字段。CodeBuddy 引用名称必须全大写。`env` 和 `headers` 不接受明文值，URL 不接受内嵌凭据、查询参数或片段，不把凭据写进命令参数。OAuth 仍由原生 agent 登录及保存。Claude 可能过滤自身或云服务的受保护凭据变量，MCP 应使用专用变量；变量存在不代表原生认证成功。
+
+多个启用的配置按注册顺序组合。相同 server 名称且规范化定义相同会去重；定义不同时报冲突，诊断显示双方的 role:namespace 来源。确实需要替换时，在后加入的完整 server 定义上声明 `override: true`；不会把旧定义的环境变量或凭据拼接到新 endpoint。该声明只解决 modeck 配置来源间的冲突，不授权覆盖用户未受管的原生条目。个人、团队和项目配置角色描述来源，不能替代企业策略。
+
+当前统一契约只接受 stdio 的 command / args / env 引用，以及 http / sse 的 URL / headers 引用；不支持的 transport、cwd、超时或工具策略字段会报错，不能静默丢弃。Codex 不支持显式 SSE，stdio 的环境变量名必须与引用名相同。
+
+上下文 hook 不注册 MCP；更换 mode 后需要重新启动，或显式更新原生配置。生成或同步配置不代表 server 已连接、工具已可见、OAuth 已登录或调用已获批准。modeck 不安装或执行 server 来检查配置，也不修改企业受管策略。
+
 ## 管理外部资源
 
 外部规则和技能都直接声明在 `modeck.yaml` 中，格式为 `资源名称: (use Git仓库地址)/仓库内路径`。rule 指向单个 Markdown 文件，skill 指向包含 `SKILL.md` 的目录。
@@ -152,7 +201,8 @@ Commands:
   register               Register a configuration
   unregister             Unregister a configuration
   config                 Manage registered configurations
-  run                    Start one agent session with context, without hook binding
+  mcp <render|plan|apply|status>  Manage selected MCP servers
+  run                    Start one agent session with context and selected MCP servers
 
 Options:
   -h, --help              Show help
@@ -177,10 +227,10 @@ modeck scan --agent claude --config CONFIG_DIR
 
 ### 管理多份配置
 
-注册目录后，通过 `config` 统一选择启用的配置和绑定的 agent。新注册的目录默认未启用；所有绑定的 agent 共用选中的配置集合，按注册顺序组合加载。
+注册个人、团队和项目配置后，通过 `config` 统一选择启用的来源和绑定的 agent。新注册的目录默认未启用；所有绑定的 agent 共用选中的配置集合，按注册顺序组合加载。`--role` 标注来源，`--namespace` 为来源指定稳定名称；角色不改变优先级或授予强制策略。跨机器共享时显式使用相同 namespace，MCP 的原生 server 名称直接取声明名称，不使用机器绝对路径生成。
 
 ```sh
-modeck register --config CONFIG_DIR
+modeck register --config CONFIG_DIR --role personal --namespace personal
 modeck config --list
 modeck config --dry-run
 modeck config
@@ -215,9 +265,24 @@ modeck resolve --config CONFIG_DIR --cwd PROJECT_DIR
 
 省略 `--config` 时优先使用注册配置集合；尚未注册时回退到已有绑定，再尝试当前目录的配置。`resolve` 会准备并校验上下文，也会执行配置中的自动选择脚本；缺失外部资源需先运行 `res init`。
 
+### 预览与同步 MCP
+
+`mcp render` 输出所选 server 的原生定义，保留环境变量引用。`mcp plan` 展示逐项 add / update / remove / keep / conflict、ownerAgent、摘要及目标路径，不包含原生文件的完整内容。`mcp apply` 必须带上当前计划的 `planDigest`；原生条目、策略文件或所选配置变化会使应用失败。`mcp status` 报告配置是否匹配、需要更新或存在冲突；企业策略、连接、工具可见性和审批状态单独报告为未知。
+
+```sh
+modeck mcp render --agent claude --config CONFIG_DIR --cwd PROJECT_DIR
+modeck mcp plan --agent claude --config CONFIG_DIR --cwd PROJECT_DIR
+modeck mcp apply --agent claude --config CONFIG_DIR --cwd PROJECT_DIR --expect DIGEST
+modeck mcp status --agent claude --config CONFIG_DIR --cwd PROJECT_DIR
+```
+
+将 `DIGEST` 替换为前一步计划输出的摘要。同步默认使用项目作用域；Codex 默认使用用户作用域。`--scope user` 显式同步到用户配置，`--target-home` 可指定目标 home。同步只修改 modeck 拥有的逐个 server：保留其他设置和未受管条目，不接管已有同名条目；外部修改过的受管条目会阻止覆盖或删除。更换受管 server 的 URL、command 或 args 时使用新名称；先撤销旧选择并同步移除，再自行撤销原生凭据。身份历史摘要会阻止通过移除后重加或更换作用域复用旧名称，避免沿用旧 OAuth 凭据。
+
+CodeBuddy 同一作用域只读取优先存在的一个文件，modeck 沿用已有入口，避免创建高优先级文件遮蔽旧配置。CodeBuddy 原生 JSONC 支持注释与尾逗号；同步逐项编辑受管 server，保留无关设置和注释，重复或不安全的键会拒绝。企业受管文件、无法安全解释的策略或配置入口会阻止同步；云端或 MDM 策略仍由 agent 执行。默认保留其他原生 MCP 来源，不使用 strict 选项排除用户配置。
+
 ### 直接启动会话
 
-`run` 为单次 agent 启动选择 mode、校验资源并注入规则和技能索引，不创建 hook 绑定，也不修改 agent 配置。适合试用一份配置，或在临时环境、CI 中执行一次任务。已经绑定 hook 的日常会话直接启动原生 agent 即可。
+`run` 为单次 agent 启动选择 mode、校验资源、注入规则和技能索引，并在进程启动前准备所选 MCP 的会话配置；不创建 hook 绑定，不持久修改 agent 配置。适合试用一份配置，或在临时环境、CI 中执行一次任务。只需要规则与技能时，已经绑定 hook 的日常会话可以直接启动原生 agent；MCP 需由 `run` 在启动前准备，或先显式同步到原生配置。
 
 `--agent` 必填；`--config` 指定配置目录，省略时使用已注册或已绑定配置，再回退到当前目录。`--cwd` 指定 agent 工作目录，并决定项目事实和 `.modes` 的选择，默认使用当前目录。`--` 后传递受支持的 agent 会话参数或提示词：
 
@@ -227,9 +292,9 @@ modeck run --agent claude -- "检查当前项目的代码结构"
 modeck run --agent codebuddy -- "检查当前项目的代码结构"
 ```
 
-需要先安装对应 CLI，并为声明的外部资源执行 `res init`。`run` 默认从 `PATH` 查找 CLI，`--executable` 可指定可执行文件，`--state` 可指定配置目录之外的资源缓存。完整参数见 `modeck run --help`。它继承终端输入输出，并传递 agent 的退出码和终止信号。
+需要先安装对应 CLI，并为声明的外部资源执行 `res init`。`run` 默认从 `PATH` 查找 CLI，`--executable` 可指定可执行文件，`--state` 可指定配置目录之外的资源缓存。完整参数见 `modeck run --help`。它继承终端输入输出，并传递 agent 的退出码和终止信号。CodeBuddy 非 print 的持久 stream-json 会话不能注入临时 MCP 配置，modeck 会在启动前拒绝该组合。
 
-上下文在启动时确定，切换 mode 或工作目录后应重新启动。已有 hook 只有在配置、目录和上下文一致时才跳过重复注入，不一致会报错。`run` 只接受实现支持的会话参数，不能任意转发所有原生子命令；账号登录等操作直接运行原生 CLI。`hook` 是绑定后的 SessionStart 内部入口，日常无需手动调用。
+上下文在启动时确定，切换 mode 或工作目录后应重新启动。若原生配置仍保留本次未选择的 modeck server，先用相应 agent 的 `mcp plan/apply` 显式移除，再运行新会话；未受管原生 server 继续保留。已有 hook 只有在配置、目录和上下文一致时才跳过重复注入，不一致会报错。`run` 只接受实现支持的会话参数，不能任意转发所有原生子命令；账号登录等操作直接运行原生 CLI。`hook` 是绑定后的 SessionStart 内部入口，日常无需手动调用。
 
 ## 调整或移除绑定
 

@@ -4,11 +4,11 @@
 
 ## 设计目标与边界
 
-modeck 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Claude Code、Codex 和 CodeBuddy Code CLI。业务目录提供工作区事实及可选 `.modes`，配置目录保存资源与选择逻辑，两者独立。
+modeck 把个人、团队和项目配置中的 rules、skills 与独立的 MCP 声明按 mode 组合。上下文接入 Claude Code、Codex 和 CodeBuddy Code CLI，MCP 通过各自原生配置通道接入。业务目录提供工作区事实及可选 `.modes`，配置目录保存资源与选择逻辑，两者独立。
 
 工具负责选择、校验、编译和接入上下文，不替代 agent 原生指令加载、工具权限或模型服务。它不改写业务项目的 `AGENTS.md` / `CLAUDE.md`，也不提供模型缓存命中保证。
 
-本实现使用 Node.js 20+、TypeScript 严格模式和 ESM。CLI 支持 macOS / Linux；Git 工作区边界探测和 Git 资源获取依赖本机 Git。协议与共享类型见 [contracts](../src/contracts/types.ts)。
+本实现使用 Node.js 22.20.0+、TypeScript 严格模式和 ESM。CLI 支持 macOS / Linux；Git 工作区边界探测和 Git 资源获取依赖本机 Git。协议与共享类型见 [contracts](../src/contracts/types.ts)。
 
 ## 模块边界
 
@@ -48,7 +48,9 @@ flowchart TB
 
 ### 配置发现与执行
 
-[配置发现](../src/cli/config.ts)依次选择显式 `--config`、本机已有绑定记录中的配置目录、调用目录内的 YAML 配置。绑定指向多个不同配置目录时，命令要求显式 `--config`。已有绑定优先于业务目录配置，避免业务仓库自动覆盖已信任的配置入口。
+[配置发现](../src/cli/config.ts)依次选择显式 `--config`、注册配置集合、本机已有绑定记录中的配置目录、调用目录内的 YAML 配置。没有注册集合且绑定指向多个不同配置目录时，命令要求显式 `--config`。已有注册或绑定优先于业务目录配置，避免业务仓库自动覆盖已信任的配置入口。
+
+注册来源以 `enabled` 显式激活，记录 personal / team / project 角色及 namespace；角色不决定优先级，注册顺序决定组合顺序。模式继承只在各来源内部展开，业务 `.modes` 的同名选择作用于声明该模式的所有来源。显式 namespace 用于稳定的来源诊断；省略时的自动名称只适合本机。MCP server 的原生名称取声明 ID，不依赖来源绝对路径。
 
 [配置读取](../src/core/config-file.ts)接受 `modeck.yaml` 或 `modeck.yml`，两者同时存在时报错。YAML 声明资源、`defaults` 和 modes；不执行 `modeck.mjs`。可选的 `modeck-auto.mjs` 默认导出自动选择函数，与声明配置分开加载，文件名保留现有拼写。
 
@@ -119,6 +121,34 @@ flowchart TB
 | `contentDigest` | 实际输出文本的 UTF-8 字节 |
 
 同一安装、相同输入及原生技能名称集合可得到稳定文本。技能索引包含绝对存储路径，因此不能保证跨机器字节相同；agent 自身指令、工具定义和模型服务也不在这些摘要的控制范围内。
+
+## MCP 是独立配置通道
+
+MCP server 声明与 rules、skills 分开。mode 选择决定本次需要的 server 集合；server 定义不编译进提示词，SessionStart 的 `additionalContext` 也不承担 MCP 注册。上下文 hook 已绑定，不代表原生 agent 已加载对应 MCP。
+
+`prepareMcp` 复用来源加载和模式解析，供 MCP 命令使用；不读取规则或技能正文，也不借用其他 agent 的上下文适配器。MCP-only 的 Cursor、VS Code Copilot、OpenCode 只开放经过字段及引用校验的 stdio / HTTP 转换预览；没有同步、run 或 hook 接入，显式 SSE 拒绝。
+
+组合配置时，同名且定义相同的 server 去重；定义不同必须明确解决冲突，不能按加载顺序静默覆盖，也不能把两个 server 的环境变量、凭据或 URL 拼接。覆盖以完整 server 为单位；组合计划保留带来源 namespace 的模式及选择原因；MCP 冲突诊断给出当前生效定义和新定义的 root、role 与 namespace，显式覆盖后更新生效来源。团队目录属于配置来源，不是企业强制策略边界。
+
+### 凭据与转换
+
+共享声明只保存环境变量引用，不保存凭据值。适配器使用 agent 原生的引用机制；不可靠或不能无损表达的字段拒绝转换。启动前核对必需引用是否存在，错误不会输出变量值。OAuth 登录和凭据生命周期保留在 agent 的原生存储中。所有权记录保留已移除名称的身份摘要；URL 或 command / args 变化须使用新名称，不能靠移除重加或更换作用域沿用旧凭据身份。
+
+Rulesync 的 MCP 转换在隔离临时目录中执行，禁用 global 模式，不让转换器定位真实 home。输出还要通过适配器核对；Rulesync 能输出某 target，并不代表 modeck 接受它的所有字段或已经验证连接。Rulesync 自身会整体重建部分 server 映射，因此真实配置合并与所有权检查由 modeck 执行。
+
+### 原生配置与所有权
+
+显式同步逐个比较上次应用的受管摘要、当前原生条目和本次期望条目。未受管 server 保留；同名未受管条目不自动收归 modeck。受管条目被外部修改后停止覆盖或删除，退出 mode 的条目也只有在所有权和摘要仍匹配时才可移除。
+
+原生文件可能包含用户现有的秘密。计划保存无秘密的声明及观测摘要，所有权记录保存 server 名称、agent、目标路径和身份摘要，不持久保存整个原生文件镜像或凭据值；可捕获错误的回滚使用进程内的旧内容。写入围绕实际目标文件串行化，并复核计划是否过期。逐条记录所属 agent；共享一个原生文件的多个 agent 不能相互静默接管条目。CodeBuddy 的 JSONC 使用语法树校验和逐 server 编辑，保留无关设置及注释，并复核编辑后的完整语义。该流程不提供进程崩溃后的自动恢复。
+
+会话启动配置保留 agent 原生加载机制；默认不启用排除其他来源的 strict 选项。Codex 的 `-c` 对 MCP 表执行合并，不能用空表清空原有 server，也不能假定同名 server 的新定义会删除旧字段。遇到同名身份或凭据来源冲突时必须停止，避免旧凭据被带到新 endpoint。
+
+### 生效、连接和审批
+
+配置文件已生成或已同步，只说明原生配置准备完成；工具是否可见、网络是否连接、OAuth 是否登录、项目是否可信以及工具调用是否获批，仍由 agent 运行时决定。modeck 不自动启动 MCP server 来验证配置，不自动登录、不安装 server，也不提升工具权限。
+
+原生企业策略继续生效。Claude 的 `managed-mcp.json` 可禁止动态 MCP 配置，Codex 的 requirements 可以按名称与 command / URL 限制 server；云端和 MDM 策略不能仅靠扫描本地文件穷尽。策略未知或需要运行时审批必须如实报告，不能显示为已批准。参见 [Claude 企业 MCP 策略](https://code.claude.com/docs/en/managed-mcp)、[Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) 和 [Codex managed configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration)。
 
 ## Hook 与启动适配
 

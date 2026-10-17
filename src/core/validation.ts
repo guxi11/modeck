@@ -6,15 +6,16 @@ import {
   canonical, checkRelativePath, LIMITS, modeError, parseJson, sha256,
 } from "../contracts/index.js";
 import type {
-  Config, Mode, ResourceManifest, ResourceSpec, Selector, Source, ModeErrorCode,
+  Config, McpEnvRef, McpServer, ResourceManifest, ResourceSpec, Selector, Source, ModeErrorCode,
 } from "../contracts/index.js";
 import { compare, copyJson, immutable, requireValue } from "./values.js";
 
 type ModeInput = { readonly extends?: readonly string[];
-  readonly rules?: readonly string[]; readonly skills?: readonly string[] };
+  readonly rules?: readonly string[]; readonly skills?: readonly string[]; readonly mcp?: readonly string[] };
 type ConfigInput = { readonly defaults?: readonly string[]; readonly modes: Readonly<Record<string, ModeInput>>;
-  readonly resources: { readonly rules?: Readonly<Record<string, string | Exclude<Source, { type: "use" }>>>;
-    readonly skills?: Readonly<Record<string, string | Exclude<Source, { type: "use" }>>> } };
+  readonly resources?: { readonly rules?: Readonly<Record<string, string | Exclude<Source, { type: "use" }>>>;
+    readonly skills?: Readonly<Record<string, string | Exclude<Source, { type: "use" }>>> };
+  readonly mcp?: { readonly servers: Readonly<Record<string, McpServer>> } };
 const ajv = new Ajv2020({ strict: true, allErrors: true });
 const schema = <T>(name: string): ValidateFunction<T> => ajv.compile<T>(parseJson(
   readFileSync(new URL(`../../schemas/${name}.schema.json`, import.meta.url), "utf8"),
@@ -55,6 +56,35 @@ const parseSource = (value: string | Exclude<Source, { type: "use" }>): Source =
   return { type: "use", url: match![1]!, path: match![2]! };
 };
 
+const checkMcpUrl = (value: string): void => {
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw modeError("E_CONFIG", "MCP endpoint must be an HTTP(S) URL"); }
+  requireValue(["https:", "http:"].includes(url.protocol) && !!url.hostname && !url.username && !url.password
+    && !/[\\\s\p{Cc}?#$`]/u.test(value) && !/^[a-z]+:\/\/[^/]*@/iu.test(value),
+  "E_CONFIG", "MCP endpoints cannot contain credentials, queries, fragments or interpolation");
+};
+
+const mcpServer = (server: McpServer): McpServer => {
+  const refs = (values: Readonly<Record<string, McpEnvRef>> = {}): Record<string, McpEnvRef> =>
+    Object.fromEntries(Object.entries(values).map(([name, ref]) => [name, { env: ref.env, required: ref.required ?? true }]));
+  const override = server.override === true ? { override: true } : {};
+  if (server.transport !== "stdio") {
+    checkMcpUrl(server.url);
+    const names = Object.keys(server.headers ?? {}).map(name => name.toLowerCase());
+    requireValue(new Set(names).size === names.length, "E_CONFIG", "MCP header names must be unique ignoring case");
+    return { transport: server.transport, url: server.url, headers: refs(server.headers), ...override };
+  }
+  requireValue(server.command.trim() === server.command && !/[\s$`]/u.test(server.command),
+    "E_CONFIG", "MCP command must be one executable without shell interpolation");
+  (server.args ?? []).forEach(arg => {
+    requireValue(!/\$|`|(?:^|[-_=:\s])(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|password|passwd|secret|credentials|auth|authorization|bearer)(?:$|[=:\s])/iu.test(arg),
+      "E_CONFIG", "MCP arguments cannot contain credential flags or interpolation; use environment references");
+    if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(arg)) checkMcpUrl(arg);
+  });
+  return { transport: "stdio", command: server.command, args: [...server.args ?? []], env: refs(server.env), ...override };
+};
+
 const checkGraph = (config: Config): void => {
   const ids = Object.keys(config.modes).sort(compare);
   const known = (id: string): void => requireValue(Object.hasOwn(config.modes, id), "E_CONFIG", "Unknown mode", { id });
@@ -62,11 +92,14 @@ const checkGraph = (config: Config): void => {
   ids.forEach(id => {
     const mode = config.modes[id]!;
     mode.extends.forEach(known);
+    mode.mcp.forEach(server => requireValue(Object.hasOwn(config.mcp.servers, server),
+      "E_CONFIG", "Unknown MCP server binding", { mode: id, server }));
     requireValue(new Set(mode.skills).size === mode.skills.length,
       "E_CONFIG", "Duplicate skill binding", { mode: id });
     [...mode.rules.map(resource => ({ id: resource, kind: "rule" })),
       ...mode.skills.map(resource => ({ id: resource, kind: "skill" }))].forEach(binding => {
-      requireValue(config.resources[binding.id]?.kind === binding.kind, "E_CONFIG", "Missing or wrong-kind resource", { mode: id, ...binding });
+      requireValue(Object.hasOwn(config.resources, binding.id) && config.resources[binding.id]?.kind === binding.kind,
+        "E_CONFIG", "Missing or wrong-kind resource", { mode: id, ...binding });
     });
   });
   const visit = (id: string, chain: readonly string[], done: ReadonlySet<string>): ReadonlySet<string> => {
@@ -80,19 +113,21 @@ const checkGraph = (config: Config): void => {
 
 export const parseConfig = (value: unknown): Config => {
   const input = validated(value, configSchema, "E_CONFIG");
-  const ruleIds = Object.keys(input.resources.rules ?? {});
-  requireValue(ruleIds.length + Object.keys(input.resources.skills ?? {}).length <= LIMITS.resources, "E_LIMIT", "Too many resources");
-  requireValue(!ruleIds.some(id => Object.hasOwn(input.resources.skills ?? {}, id)), "E_CONFIG", "Resource IDs must be globally unique");
+  const ruleIds = Object.keys(input.resources?.rules ?? {});
+  requireValue(ruleIds.length + Object.keys(input.resources?.skills ?? {}).length <= LIMITS.resources, "E_LIMIT", "Too many resources");
+  requireValue(!ruleIds.some(id => Object.hasOwn(input.resources?.skills ?? {}, id)), "E_CONFIG", "Resource IDs must be globally unique");
   const config: Config = {
     defaults: [...input.defaults ?? []],
+    mcp: { servers: Object.fromEntries(Object.entries(input.mcp?.servers ?? {}).map(([id, server]) => [id, mcpServer(server)])) },
     resources: Object.fromEntries((["rules", "skills"] as const).flatMap(group =>
-      Object.entries(input.resources[group] ?? {}).map(([id, source]) => [id,
+      Object.entries(input.resources?.[group] ?? {}).map(([id, source]) => [id,
         { kind: group === "rules" ? "rule" as const : "skill" as const,
           source: parseSource(source) }]))),
     modes: Object.fromEntries(Object.entries(input.modes).map(([id, mode]) => [id, {
       extends: [...mode.extends ?? []],
       rules: [...mode.rules ?? []],
       skills: [...mode.skills ?? []],
+      mcp: [...mode.mcp ?? []],
     }])),
   };
   Object.values(config.resources).forEach(checkSource);

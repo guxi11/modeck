@@ -3,14 +3,15 @@ import { access, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { agentDefinitions, agents, isAgent, LIMITS, modeError, parseJson } from "../contracts/index.js";
-import type { Agent, ModeError } from "../contracts/index.js";
+import { agentDefinitions, agents, isAgent, isMcpAgent, LIMITS, modeError, parseJson } from "../contracts/index.js";
+import type { Agent, McpAgent, ModeError } from "../contracts/index.js";
 import { manageResources } from "./resource.js";
 import { initialize } from "./init.js";
 import { migrateHome } from "./scan.js";
 import { migrate } from "./migrate.js";
 import { configRootFor, projectRootFor } from "./config.js";
 import { manageConfig } from "./manage-config.js";
+import { manageMcp } from "./mcp.js";
 import { configRoots } from "../integration/registry.js";
 import { loadRecord } from "../integration/install.js";
 import { selectAgents } from "./bind.js";
@@ -25,18 +26,27 @@ const help = "Usage: modeck <command> [options]\n\nCommands:\n"
   + "  resolve                Resolve context\n"
   + "  render                 Render context\n  hook                   Handle agent session hooks\n"
   + "  register               Register a configuration\n  unregister             Unregister a configuration\n"
-  + "  config                 Manage registered configurations\n  run                    Start one agent session with context, without hook binding\n\n"
+  + "  config                 Manage registered configurations\n  mcp <render|plan|apply|status>  Manage selected MCP servers\n"
+  + "  run                    Start one agent session with context and selected MCP servers\n\n"
   + "Options:\n  -h, --help              Show help\n  -v, --version           Show version\n";
 const commandHelp: Readonly<Record<string, string>> = {
   init: "Usage: modeck init [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
   scan: "Usage: modeck scan [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
   migrate: "Usage: modeck migrate [--config <dir>] [--mode <name>] [--list | --answers <file>] [-h|--help]\n",
-  register: "Usage: modeck register [--config <dir>] [--target-home <dir>] [-h|--help]\n",
+  register: "Usage: modeck register [--config <dir>] [--role <personal|team|project>] [--namespace <id>] [--target-home <dir>] [-h|--help]\n",
   unregister: "Usage: modeck unregister [--config <dir>] [--target-home <dir>] [-h|--help]\n",
   config: "Usage: modeck config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--dry-run] [--expect <digest>] [-h|--help]\n",
   resource: "Usage: modeck res <init|update> [--config <dir>] [-h|--help]\n",
+  mcp: "Usage: modeck mcp <render|plan|apply|status> --agent <name> [--config <dir>] [--cwd <dir>] [--state <dir>] [--target-home <dir>] [--scope <user|project>] [--expect <digest>] [-h|--help]\n\n"
+    + "Agents: claude, codex, codebuddy. Render only: cursor, copilot (VS Code), opencode.\n"
+    + "render emits native server definitions with environment references; plan previews per-server ownership changes.\n"
+    + "Render-only targets accept stdio and HTTP with basic command/args/env or url/headers fields; explicit SSE is rejected.\n"
+    + "apply requires --expect from the current plan and rejects changed files or ownership drift.\n"
+    + "Native synchronization is explicit; run injects selected servers for a single session.\n"
+    + "status reports configuration and ownership only. Tool visibility, OAuth and approval remain native agent decisions.\n"
+    + "Scope defaults to project; Codex supports user scope only. Secrets are read from the agent environment.\n",
   run: "Usage: modeck run --agent <claude|codex|codebuddy> [--config <dir>] [--cwd <dir>] [--state <dir>] [--executable <file>] [-h|--help] [-- <agent arguments>]\n\n"
-    + "Prepare mode rules and skills for one agent session without creating a hook binding.\n"
+    + "Prepare mode rules, skills and MCP servers for one agent session without creating a hook binding.\n"
     + "Use this to try a configuration or launch a temporary/CI session. Bound agents can normally be started directly.\n\n"
     + "Options:\n"
     + "  --agent <name>         Required agent CLI: claude, codex or codebuddy\n"
@@ -48,14 +58,20 @@ const commandHelp: Readonly<Record<string, string>> = {
     + "Install declared external resources with modeck res init before launching.\n"
     + "Context stays fixed for the session; restart after changing modes or working directory.\n"
     + "Existing hooks skip duplicate injection only when their context matches; mismatches fail.\n"
+    + "MCP credentials use environment references; required variables must exist before startup.\n"
+    + "Native MCP servers remain available. Conflicting same-name definitions and unsupported managed policies are rejected.\n"
+    + "If a previous MCP apply left managed servers outside the selected modes, apply a new MCP plan to remove them before running.\n"
+    + "CodeBuddy persistent --input-format stream-json without --print cannot inject selected MCP servers.\n"
+    + "MCP configuration does not grant tool approval or perform OAuth sign-in.\n"
     + "The agent inherits terminal I/O, and its exit status and signals are forwarded.\n",
 };
 const values: Readonly<Record<string, readonly string[]>> = {
   resource: ["config"],
   init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
-  hook: ["config", "state", "agent"], register: ["config", "target-home"], unregister: ["config", "target-home"],
+  hook: ["config", "state", "agent"], register: ["config", "target-home", "role", "namespace"], unregister: ["config", "target-home"],
   config: ["answers", "target-home", "state", "expect", "format"], run: ["config", "state", "cwd", "agent", "executable"],
+  mcp: ["config", "state", "cwd", "agent", "target-home", "scope", "expect"],
 };
 const booleans: Readonly<Record<string, readonly string[]>> = { init: ["list"], scan: ["list"], migrate: ["list"], config: ["list", "dry-run"] };
 const options = (command: string, argv: readonly string[]): Readonly<Record<string, string | boolean>> => {
@@ -84,6 +100,12 @@ const required = (opts: Readonly<Record<string, string | boolean>>, name: string
 const agentFor = (opts: Readonly<Record<string, string | boolean>>): Agent => {
   const value = required(opts, "agent");
   if (!isAgent(value)) throw modeError("E_USAGE", "Unknown agent");
+  return value;
+};
+const mcpAgentFor = (opts: Readonly<Record<string, string | boolean>>, action: string): McpAgent => {
+  const value = required(opts, "agent");
+  if (!isMcpAgent(value)) throw modeError("E_USAGE", "Unknown MCP agent");
+  if (action !== "render" && !isAgent(value)) throw modeError("E_USAGE", "This MCP agent supports render only");
   return value;
 };
 const pathFor = async (value: string): Promise<string> => safeAbsolute(absolute(value));
@@ -163,10 +185,17 @@ export const main = async (argv: string[]): Promise<number> => {
     if (!Object.hasOwn(values, command)) throw modeError("E_USAGE", "Unknown command", { command });
     const separator = argv.indexOf("--", 1);
     if (separator >= 0 && command !== "run") throw modeError("E_USAGE", "Only run accepts agent arguments");
-    const opts = options(command, argv.slice(command === "resource" && !argv[1]?.startsWith("--") ? 2 : 1, separator < 0 ? undefined : separator));
+    const hasAction = ["resource", "mcp"].includes(command) && argv[1] !== undefined && !argv[1].startsWith("-");
+    const opts = options(command, argv.slice(hasAction ? 2 : 1, separator < 0 ? undefined : separator));
     if (opts.help) { process.stdout.write(commandHelp[command] ?? help); return 0; }
     if (command === "resource") {
       await manageResources(await pathFor(String(opts.config ?? process.cwd())), argv[1] ?? ""); return 0;
+    }
+    if (command === "mcp") {
+      if (!hasAction || !["render", "plan", "apply", "status"].includes(argv[1]!)) {
+        throw modeError("E_USAGE", "Expected mcp render, plan, apply or status");
+      }
+      mcpAgentFor(opts, argv[1]!);
     }
     const configured = async (single = false, agent?: Agent) => {
       const record = agent === undefined ? null : await loadRecord(homedir(), agent);
@@ -205,7 +234,7 @@ export const main = async (argv: string[]): Promise<number> => {
       if (opts.list || opts["dry-run"] || format === "json") json(result); else reportConfig(command, result);
       return result.conflicts ? 4 : 0;
     }
-    const selectedAgent = command === "resolve" ? "codex" : opts.agent !== undefined ? agentFor(opts)
+    const selectedAgent = command === "resolve" ? "codex" : command === "mcp" ? (isAgent(opts.agent) ? opts.agent : undefined) : opts.agent !== undefined ? agentFor(opts)
       : command === "render" ? (await selectAgents("render", await pathFor(homedir())))[0] : undefined;
     if (command === "render" && !selectedAgent) return 0;
     const { configRoot, stateRoot } = await configured(false, selectedAgent);
@@ -218,6 +247,15 @@ export const main = async (argv: string[]): Promise<number> => {
       if (reply) json(reply); return 0;
     }
     const cwd = await realpath(absolute(String(opts.cwd ?? process.cwd())));
+    if (command === "mcp") {
+      const agent = mcpAgentFor(opts, argv[1]!);
+      const result = await manageMcp({ action: hasAction ? argv[1]! : "", agent, configRoot, stateRoot, cwd,
+        targetHome: await pathFor(String(opts["target-home"] ?? homedir())),
+        scope: String(opts.scope ?? (agent === "codex" ? "user" : "project")),
+        ...(typeof opts.expect === "string" ? { expectDigest: opts.expect } : {}) });
+      json(result);
+      return items(object(result).conflicts).length ? 4 : 0;
+    }
     if (command === "run") {
       const agent = agentFor(opts);
       const result = await runAgent({ agent, configRoot, stateRoot, cwd,
