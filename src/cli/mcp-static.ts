@@ -1,12 +1,13 @@
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { lstat } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 import { modeError } from "../contracts/index.js";
 import type { StaticMcpRequest, StaticMcpSummary } from "../contracts/mcp-static.js";
-import { safeAbsolute } from "../integration/fs.js";
+import { missing, safeAbsolute } from "../integration/fs.js";
 import { manageStaticMcp } from "../mcp/manage.js";
 
-const help = "Usage: modeck mcp <migrate|apply|status|recover> --agent <claude|codex> --scope <user|project> [--config <dir>] [--target-home <dir>] [--cwd <dir>] [--format <text|json>]\n\n"
-  + "Central source: <config>/modeck-mcp.yaml; --config defaults to the current directory. No modes, hooks, registry combination or run integration.\n"
+const help = "Usage: modeck mcp <migrate|apply|status|recover> --agent <claude|codex> --scope <user|project> [--config <dir|modeck-mcp.yaml>] [--target-home <dir>] [--cwd <dir>] [--format <text|json>]\n\n"
+  + "Central source: the independent modeck-mcp.yaml file. --config accepts its explicit path or an existing directory containing it; the default is the current directory. Mode YAML files are never used. No modes, hooks, registry combination or run integration.\n"
   + "  migrate  Copy safely representable native definitions into central configuration and explicitly enroll successful imports/matches for management in one transaction; never alter native bytes. Literal credentials, nonempty arguments, credential-like URL paths, unsupported fields and owned drift are rejected per server.\n"
   + "  apply    Atomically merge central definitions; preserve unmanaged and centrally removed servers, reject conflicts/drift without changing the native batch.\n"
   + "           Matching unmanaged entries are not adopted by apply; use explicit migrate before centrally updating an existing native source.\n"
@@ -39,6 +40,13 @@ const options = (argv: readonly string[]): Readonly<Record<string, string>> => {
   }
   return result;
 };
+const configurationDirectory = async (value: string): Promise<string> => {
+  const path = await safeAbsolute(resolve(value));
+  const stat = await lstat(path).catch(error => { if (missing(error)) return null; throw error; });
+  if (stat?.isDirectory()) return path;
+  if (basename(path) === "modeck-mcp.yaml" && (!stat || stat.isFile())) return dirname(path);
+  throw modeError("E_USAGE", "MCP --config requires an existing directory or the independent modeck-mcp.yaml file; mode YAML files are not supported");
+};
 const report = (summary: StaticMcpSummary, json: boolean): void => {
   if (json) { process.stdout.write(`${JSON.stringify(summary)}\n`); return; }
   const { counts } = summary;
@@ -67,7 +75,7 @@ export const mcpStaticCommand = async (argv: readonly string[]): Promise<number>
     const request: StaticMcpRequest = {
       agent: opts.agent, scope: opts.scope,
       targetHome: await safeAbsolute(resolve(opts["target-home"] ?? homedir())),
-      configRoot: await safeAbsolute(resolve(opts.config ?? process.cwd())),
+      configRoot: await configurationDirectory(opts.config ?? process.cwd()),
       cwd: await safeAbsolute(resolve(opts.cwd ?? process.cwd())),
     };
     const result = await manageStaticMcp(action as "migrate" | "apply" | "status" | "recover", request);
