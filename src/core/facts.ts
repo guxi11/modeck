@@ -100,7 +100,7 @@ const dependenciesAt = async (root: string): Promise<readonly string[]> => {
   return [...new Set(names)].sort(compare);
 };
 
-export const collectFacts = async ({ cwd, stateRoot }: CollectFactsRequest): Promise<ProjectFacts> => {
+export const collectFacts = async ({ cwd, stateRoot, ignoreSelector = false }: CollectFactsRequest): Promise<ProjectFacts> => {
   try {
     const directory = await realpath(absolute(cwd));
     if (!(await lstat(directory)).isDirectory()) throw modeError("E_PATH", "cwd must be a directory", { cwd });
@@ -116,7 +116,7 @@ export const collectFacts = async ({ cwd, stateRoot }: CollectFactsRequest): Pro
       throw error;
     });
     if (stateInfo && !stateInfo.isDirectory()) throw modeError("E_PATH", "State root must be a directory", { path: canonicalState });
-    const selector = await selectorAt(directory, boundary);
+    const selector = ignoreSelector ? null : await selectorAt(directory, boundary);
     const files = await scanFiles(boundary, canonicalState);
     const dependencies = await dependenciesAt(boundary);
     return immutable({ cwd: directory, boundary, selector, files, dependencies });

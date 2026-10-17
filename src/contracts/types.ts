@@ -38,7 +38,7 @@ export type ManagedFile = DeepReadonly<{ path: string; digest: Sha256; mode: num
 export type BindRecord = DeepReadonly<{ schemaVersion: 1; owner: "modeck/v1"; agent: Agent; configRoot: string; stateRoot: string; runtimeDigest: Sha256; files: ManagedFile[]; hookFile: string; hookGroup: unknown; beforeHookFile: FileImage | null; afterHookFileDigest: Sha256 }>;
 export type ManifestParser = DeepReadonly<(value: unknown) => ResourceManifest>;
 export type LoadConfigRequest = DeepReadonly<{ configRoot: string; facts?: ProjectFacts }>;
-export type CollectFactsRequest = DeepReadonly<{ cwd: string; stateRoot: string }>;
+export type CollectFactsRequest = DeepReadonly<{ cwd: string; stateRoot: string; ignoreSelector?: boolean }>;
 export type ResolveRequest = DeepReadonly<{ context: ConfigContext; facts: ProjectFacts; resourceDigest: Sha256 }>;
 export type CompileRequest = DeepReadonly<{ plan: ResolvedPlan; resources: VerifiedResourceSet; agent: Agent; nativeSkillNames?: string[] }>;
 export type ReadResourcesRequest = DeepReadonly<{ context: ConfigContext; stateRoot: string; parseManifest: ManifestParser; resourceIds?: Id[] }>;

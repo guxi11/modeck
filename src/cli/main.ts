@@ -5,6 +5,7 @@ import { delimiter, join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentDefinitions, agents, isAgent, LIMITS, modeError, parseJson } from "../contracts/index.js";
 import type { Agent, ModeError } from "../contracts/index.js";
+import { evaluateModes } from "./eval.js";
 import { manageResources } from "./resource.js";
 import { mcpStaticCommand } from "./mcp-static.js";
 import { initialize } from "./init.js";
@@ -24,12 +25,25 @@ const help = "Usage: modeck <command> [options]\n\nCommands:\n"
   + "  res <init|update>  Manage external resources\n  init                   Initialize configuration\n"
   + "  scan                   Import resources from agent homes\n  migrate                Migrate existing configuration\n"
   + "  mcp <migrate|apply|status|recover>  Manage static native MCP configuration\n"
+  + "  eval                   Evaluate automatic modes\n  save                   Save automatic modes to .modes\n"
   + "  resolve                Resolve context\n"
   + "  render                 Render context\n  hook                   Handle agent session hooks\n"
   + "  register               Register a configuration\n  unregister             Unregister a configuration\n"
   + "  config                 Manage registered configurations\n  run                    Start one agent session with context, without hook binding\n\n"
   + "Options:\n  -h, --help              Show help\n  -v, --version           Show version\n";
 const commandHelp: Readonly<Record<string, string>> = {
+  eval: "Usage: modeck eval [--config <dir>] [--cwd <dir>] [--state <dir>] [--format <text|json>] [-h|--help]\n\n"
+    + "Ignore existing .modes and evaluate configured auto selectors, defaults and inheritance.\n"
+    + "Uses enabled registered configurations unless --config is supplied; --cwd defaults to the current directory.\n"
+    + "Read-only: reports mode IDs, sources and reasons without installing resources or creating state.\n"
+    + "Auto selectors execute as trusted user code. --state only identifies a directory to exclude from project facts.\n",
+  save: "Usage: modeck save [--config <dir>] [--cwd <dir>] [--state <dir>] [--format <text|json>] [--yes] [-h|--help]\n\n"
+    + "Evaluate as eval does, then atomically save the fixed mode IDs to the Git repository root .modes.\n"
+    + "Outside Git, the destination is --cwd (default: current directory). Defaults still apply when resolving.\n"
+    + "Always previews old and new contents on stderr. Existing files require a TTY confirmation (default No),\n"
+    + "or explicit --yes to overwrite, including in non-TTY use. Missing files can be created without a TTY.\n"
+    + "Empty results, nearer .modes overrides and selections that cannot be faithfully fixed are refused without writing.\n"
+    + "--format selects text or JSON output; --config, --cwd and --state have the same meaning as eval.\n",
   init: "Usage: modeck init [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
   scan: "Usage: modeck scan [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
   migrate: "Usage: modeck migrate [--config <dir>] [--mode <name>] [--list | --answers <file>] [-h|--help]\n",
@@ -53,13 +67,14 @@ const commandHelp: Readonly<Record<string, string>> = {
     + "The agent inherits terminal I/O, and its exit status and signals are forwarded.\n",
 };
 const values: Readonly<Record<string, readonly string[]>> = {
+  eval: ["config", "cwd", "state", "format"], save: ["config", "cwd", "state", "format"],
   resource: ["config"],
   init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
   hook: ["config", "state", "agent"], register: ["config", "target-home"], unregister: ["config", "target-home"],
   config: ["answers", "target-home", "state", "expect", "format"], run: ["config", "state", "cwd", "agent", "executable"],
 };
-const booleans: Readonly<Record<string, readonly string[]>> = { init: ["list"], scan: ["list"], migrate: ["list"], config: ["list", "dry-run"] };
+const booleans: Readonly<Record<string, readonly string[]>> = { save: ["yes"], init: ["list"], scan: ["list"], migrate: ["list"], config: ["list", "dry-run"] };
 const options = (command: string, argv: readonly string[]): Readonly<Record<string, string | boolean>> => {
   const parse = (index: number, result: Readonly<Record<string, string | boolean>>): Readonly<Record<string, string | boolean>> => {
     const token = argv[index];
@@ -186,6 +201,13 @@ export const main = async (argv: string[]): Promise<number> => {
     };
     const format = String(opts.format ?? "text");
     if (!["text", "json"].includes(format)) throw modeError("E_USAGE", "Unknown output format");
+    if (command === "eval" || command === "save") {
+      const cwd = await realpath(absolute(String(opts.cwd ?? process.cwd())));
+      const configRoot = await configRootFor(homedir(), cwd, typeof opts.config === "string" ? opts.config : undefined);
+      const stateRoot = await pathFor(String(opts.state ?? process.env.MODECK_STATE ?? join(homedir(), ".local/share/modeck/v1")));
+      await evaluateModes({ command, configRoot, stateRoot, cwd, format, yes: opts.yes === true });
+      return 0;
+    }
     if (command === "init" || command === "scan") {
       if (opts.list && opts.answers) throw modeError("E_USAGE", "--list and --answers cannot be combined");
       const result = await (command === "init" ? initialize : migrateHome)(await pathFor(process.cwd()), await pathFor(String(opts.home ?? homedir())), {
