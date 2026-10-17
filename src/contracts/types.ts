@@ -10,18 +10,9 @@ export type Kind = DeepReadonly<"rule" | "skill">;
 export type Source = DeepReadonly<{ type: "local"; path: string }
   | { type: "use"; url: string; path: string }>;
 export type ResourceSpec = DeepReadonly<{ kind: Kind; source: Source }>;
-export type McpEnvRef = DeepReadonly<{ env: string; required?: boolean }>;
-export type McpServer = DeepReadonly<({ transport: "stdio"; command: string; args?: string[];
-  env?: Record<string, McpEnvRef> } | { transport: "http" | "sse"; url: string;
-  headers?: Record<string, McpEnvRef> }) & { override?: boolean }>;
-export type ConfigSourceRole = "personal" | "team" | "project";
-export type ConfigSource = DeepReadonly<{ root: string; enabled: boolean; role?: ConfigSourceRole; namespace?: string }>;
-export type McpProvenance = DeepReadonly<{ server: Id; root: string; role: ConfigSourceRole; namespace: string;
-  modeIds: Id[]; action: "select" | "deduplicate" | "override" }>;
-export type Mode = DeepReadonly<{ extends: Id[]; rules: Id[]; skills: Id[]; mcp: Id[] }>;
-export type Config = DeepReadonly<{ defaults: Id[]; modes: Record<Id, Mode>; resources: Record<Id, ResourceSpec>;
-  mcp: { servers: Record<Id, McpServer> } }>;
-export type ConfigRegistry = DeepReadonly<{ schemaVersion: 1; projects: ConfigSource[] }>;
+export type Mode = DeepReadonly<{ extends: Id[]; rules: Id[]; skills: Id[] }>;
+export type Config = DeepReadonly<{ defaults: Id[]; modes: Record<Id, Mode>; resources: Record<Id, ResourceSpec> }>;
+export type ConfigRegistry = DeepReadonly<{ schemaVersion: 1; projects: { root: string; enabled: boolean }[] }>;
 export type Selector = DeepReadonly<{ auto: boolean; add: Id[] }>;
 export type TreeEntry = DeepReadonly<{ path: string; kind: "directory" }
   | { path: string; kind: "file"; digest: Sha256; bytes: number; executable: boolean }>;
@@ -33,7 +24,7 @@ export type ProjectFacts = DeepReadonly<{ cwd: string; boundary: string; files: 
 export type Reason = DeepReadonly<{ mode: Id; via: "default" | "detect" | "selector" | "parent"; from: Id | null; conditionIndex: number | null }>;
 export type Diagnostic = DeepReadonly<{ code: string; message: string; path: string | null }>;
 export type BoundResource = DeepReadonly<{ id: Id; kind: Kind }>;
-export type ResolvedPlan = DeepReadonly<{ schemaVersion: 1; configDigest: Sha256; resourceDigest: Sha256; cwd: string; boundary: string; selectorPath: string | null; modeIds: Id[]; resources: BoundResource[]; mcp: Id[]; reasons: Reason[]; diagnostics: Diagnostic[] }>;
+export type ResolvedPlan = DeepReadonly<{ schemaVersion: 1; configDigest: Sha256; resourceDigest: Sha256; cwd: string; boundary: string; selectorPath: string | null; modeIds: Id[]; resources: BoundResource[]; reasons: Reason[]; diagnostics: Diagnostic[] }>;
 export type VerifiedResource = DeepReadonly<{ id: Id; kind: Kind; treeDigest: Sha256; root: string; entry: string; entryBytes: Uint8Array; skill: { name: string; description: string } | null }>;
 export type VerifiedResourceSet = DeepReadonly<{ schemaVersion: 1; configDigest: Sha256; manifest: ResourceManifest; resourceDigest: Sha256; resources: VerifiedResource[] }>;
 export type RenderedContext = DeepReadonly<{ schemaVersion: 1; protocol: "modeck-context/1"; agent: Agent; configDigest: Sha256; resourceDigest: Sha256; selectionDigest: Sha256; modeIds: Id[]; text: string; contentDigest: Sha256; byteLength: number }>;
@@ -42,9 +33,9 @@ export type HookReply = DeepReadonly<{ hookSpecificOutput: { hookEventName: "Ses
 export type RunMarker = DeepReadonly<{ version: 1; agent: Agent; configRoot: string; stateRoot: string; cwd: string; contentDigest: Sha256; ownerPid: number }>;
 export type FileImage = DeepReadonly<{ data: string; encoding: "utf8" | "base64"; mode: number }>;
 export type FileChange = DeepReadonly<{ path: string; category: "shared-json" | "owned"; beforeDigest: Sha256 | null; beforeMode: number | null; after: FileImage | null }>;
-export type BindPlan = DeepReadonly<{ schemaVersion: 1; operation: "bind" | "unbind"; agent: Agent; targetHome: string; owner: "modeck/v1"; changes: FileChange[]; mcp?: import("./mcp.js").McpTransaction; conflicts: Diagnostic[]; warnings: Diagnostic[]; planDigest: Sha256 }>;
+export type BindPlan = DeepReadonly<{ schemaVersion: 1; operation: "bind" | "unbind"; agent: Agent; targetHome: string; owner: "modeck/v1"; changes: FileChange[]; conflicts: Diagnostic[]; warnings: Diagnostic[]; planDigest: Sha256 }>;
 export type ManagedFile = DeepReadonly<{ path: string; digest: Sha256; mode: number }>;
-export type BindRecord = DeepReadonly<{ schemaVersion: 1; owner: "modeck/v1"; agent: Agent; configRoot: string; stateRoot: string; runtimeDigest: Sha256; files: ManagedFile[]; hookFile: string; hookGroup: unknown; beforeHookFile: FileImage | null; afterHookFileDigest: Sha256; mcp?: import("./mcp.js").McpBinding }>;
+export type BindRecord = DeepReadonly<{ schemaVersion: 1; owner: "modeck/v1"; agent: Agent; configRoot: string; stateRoot: string; runtimeDigest: Sha256; files: ManagedFile[]; hookFile: string; hookGroup: unknown; beforeHookFile: FileImage | null; afterHookFileDigest: Sha256 }>;
 export type ManifestParser = DeepReadonly<(value: unknown) => ResourceManifest>;
 export type LoadConfigRequest = DeepReadonly<{ configRoot: string; facts?: ProjectFacts }>;
 export type CollectFactsRequest = DeepReadonly<{ cwd: string; stateRoot: string }>;
@@ -52,10 +43,9 @@ export type ResolveRequest = DeepReadonly<{ context: ConfigContext; facts: Proje
 export type CompileRequest = DeepReadonly<{ plan: ResolvedPlan; resources: VerifiedResourceSet; agent: Agent; nativeSkillNames?: string[] }>;
 export type ReadResourcesRequest = DeepReadonly<{ context: ConfigContext; stateRoot: string; parseManifest: ManifestParser; resourceIds?: Id[] }>;
 export type PrepareRequest = DeepReadonly<{ configRoot: string; configRoots?: string[]; stateRoot: string; cwd: string; agent: Agent }>;
-export type PreparedContext = DeepReadonly<{ plan: ResolvedPlan; rendered: RenderedContext;
-  mcp: { servers: Record<Id, McpServer>; configDigest: Sha256; provenance: McpProvenance[] } }>;
+export type PreparedContext = DeepReadonly<{ plan: ResolvedPlan; rendered: RenderedContext }>;
 export type EncodeHookRequest = DeepReadonly<{ event: HookEvent; rendered: RenderedContext; marker: RunMarker | null; configRoot: string; stateRoot: string }>;
-export type PlanBindRequest = DeepReadonly<{ agent: Agent; targetHome: string; configRoot: string; configRoots?: string[]; stateRoot: string; runtimeRoot: string; cwd?: string; scope?: import("./mcp.js").McpScope }>;
+export type PlanBindRequest = DeepReadonly<{ agent: Agent; targetHome: string; configRoot: string; configRoots?: string[]; stateRoot: string; runtimeRoot: string }>;
 export type PlanUnbindRequest = DeepReadonly<{ agent: Agent; targetHome: string }>;
 export type ApplyBindPlanRequest = DeepReadonly<{ plan: BindPlan; expectDigest?: Sha256 }>;
 export type RunAgentRequest = DeepReadonly<PrepareRequest & { argv: string[]; executable: string }>;

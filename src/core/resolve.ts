@@ -41,6 +41,5 @@ export const resolve = ({ context, facts, resourceDigest }: ResolveRequest): Res
   }, []);
   return immutable({ schemaVersion: 1 as const, configDigest: context.configDigest, resourceDigest,
     cwd: facts.cwd, boundary: facts.boundary, selectorPath: facts.selector?.path ?? null,
-    modeIds: selected.modes, resources, mcp: [...new Set(selected.modes.flatMap(id => config.modes[id]!.mcp))],
-    reasons: selected.reasons, diagnostics: [] });
+    modeIds: selected.modes, resources, reasons: selected.reasons, diagnostics: [] });
 };

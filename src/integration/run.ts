@@ -2,19 +2,15 @@ import { spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
 import { agentDefinitions, LIMITS, modeError } from "../contracts/index.js";
 import type { Agent, RunAgentRequest, RunResult } from "../contracts/index.js";
 import { codexConfig } from "./codex.js";
 import { data, imageJson, object, readImage, safeAbsolute } from "./fs.js";
 import { markerText } from "./hooks.js";
 import { prepare } from "./prepare.js";
-import { prepareMcpLaunch } from "./mcp-launch.js";
-import { loadRecord } from "./install.js";
 
 type Parsed = { readonly rest: readonly string[]; readonly overrides: readonly string[];
-  readonly cd: string | null; readonly append: string | null; readonly appendFile: string | null;
-  readonly print: boolean; readonly inputFormat: string | null };
+  readonly cd: string | null; readonly append: string | null; readonly appendFile: string | null };
 
 const parseArguments = (agent: Agent, argv: readonly string[]): Parsed => {
   const adapter = agentDefinitions[agent];
@@ -44,7 +40,7 @@ const parseArguments = (agent: Agent, argv: readonly string[]): Parsed => {
     const canonicalFlag = ({ "-c": "--config", "-C": "--cd", "-m": "--model", "-s": "--sandbox", "-a": "--ask-for-approval", "-p": "--print", "-o": "--output-last-message" } as Readonly<Record<string, string>>)[flag] ?? flag;
     const configKey = canonicalFlag === "--config" ? value!.slice(0, value!.indexOf("=")).trim() : null;
     if (configKey !== null && (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(configKey) || !value!.includes("=")
-      || /^(?:profile|model_instructions_file|instructions|mcp_servers)(?:\.|$)/.test(configKey)
+      || /^(?:profile|model_instructions_file|instructions)(?:\.|$)/.test(configKey)
       || configKey.startsWith("developer_instructions."))) throw modeError("E_WRAPPER_CONFLICT", "Unsupported Codex config override");
     const identity = configKey === null ? canonicalFlag : `config:${configKey}`;
     if (seen.has(identity)) throw modeError("E_WRAPPER_CONFLICT", "Duplicate wrapper flag", { flag });
@@ -54,20 +50,16 @@ const parseArguments = (agent: Agent, argv: readonly string[]): Parsed => {
     const updated: Parsed = { rest, overrides: configKey === null ? state.overrides : [...state.overrides, "-c", value!],
       cd: canonicalFlag === "--cd" ? value! : state.cd,
       append: canonicalFlag === "--append-system-prompt" ? value! : state.append,
-      appendFile: canonicalFlag === "--append-system-prompt-file" ? value! : state.appendFile,
-      print: state.print || canonicalFlag === "--print",
-      inputFormat: canonicalFlag === "--input-format" ? value! : state.inputFormat };
+      appendFile: canonicalFlag === "--append-system-prompt-file" ? value! : state.appendFile };
     if (updated.append !== null && updated.appendFile !== null) throw modeError("E_WRAPPER_CONFLICT", "Append prompt options are mutually exclusive");
     return walk(next, updated, new Set([...seen, identity]), exec, prompt);
   };
-  return walk(0, { rest: [], overrides: [], cd: null, append: null, appendFile: null,
-    print: false, inputFormat: null }, new Set(), false, null);
+  return walk(0, { rest: [], overrides: [], cd: null, append: null, appendFile: null }, new Set(), false, null);
 };
 
 export const runAgent = async (request: RunAgentRequest): Promise<RunResult> => {
   if (process.env.MODECK_RUN_V1 !== undefined) throw modeError("E_WRAPPER_CONFLICT", "Nested wrappers are not supported");
   const { agent } = request;
-  if (await loadRecord(homedir(), agent)) throw modeError("E_WRAPPER_CONFLICT", `Agent is bound; start ${agentDefinitions[agent].executable} directly. Stop the current session and explicitly synchronize modeck config before restarting after a mode or cwd change.`);
   const adapter = agentDefinitions[agent];
   const configRoot = await safeAbsolute(request.configRoot);
   const stateRoot = await safeAbsolute(request.stateRoot);
@@ -77,10 +69,6 @@ export const runAgent = async (request: RunAgentRequest): Promise<RunResult> => 
   if (parsed.cd !== null && await realpath(resolve(parsed.cd)) !== cwd) throw modeError("E_WRAPPER_CONFLICT", "Agent cwd conflicts with --cwd");
   const prepared = await prepare({ agent, configRoot, stateRoot, cwd,
     ...(request.configRoots === undefined ? {} : { configRoots: request.configRoots }) });
-  if (agent === "codebuddy" && !parsed.print && parsed.inputFormat === "stream-json"
-    && Object.keys(prepared.mcp.servers).length) {
-    throw modeError("E_WRAPPER_CONFLICT", "CodeBuddy persistent stream-json does not support temporary MCP injection");
-  }
   const packageImage = await readImage(fileURLToPath(new URL("../../package.json", import.meta.url)), LIMITS.jsonBytes);
   const version = packageImage ? object(imageJson(packageImage)).version : null;
   if (typeof version !== "string") throw modeError("E_IO", "Package version is unavailable");
@@ -103,24 +91,14 @@ export const runAgent = async (request: RunAgentRequest): Promise<RunResult> => 
     : ["--append-system-prompt", combined];
   const marker = markerText({ version: 1, agent, configRoot, stateRoot, cwd,
     contentDigest: prepared.rendered.contentDigest, ownerPid: process.pid });
-  const mcp = await prepareMcpLaunch({ agent, cwd, servers: prepared.mcp.servers,
-    ...(baseline ? { codexSnapshot: baseline.snapshot } : {}) });
-  try {
-    if (mcp.verify) {
-      if ((await codexConfig(executable, cwd, parsed.overrides, version)).snapshot !== baseline?.snapshot) {
-        throw modeError("E_CODEX_CONFIG", "Effective Codex configuration changed while preparing MCP");
-      }
-      mcp.verify((await codexConfig(executable, cwd, [...parsed.overrides, ...mcp.argv], version)).snapshot);
-    }
-    return await new Promise<RunResult>((resolveResult, reject) => {
-      const child = spawn(executable, [...injection, ...mcp.argv, ...parsed.rest],
-        { cwd, env: { ...process.env, MODECK_RUN_V1: marker }, stdio: "inherit", shell: false });
-      const signals: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
-      const handlers = signals.map(signal => ({ signal, handler: (): void => { child.kill(signal); } }));
-      handlers.forEach(({ signal, handler }) => process.on(signal, handler));
-      const cleanup = (): void => { handlers.forEach(({ signal, handler }) => process.off(signal, handler)); };
-      child.once("error", error => { cleanup(); reject(modeError("E_IO", "Cannot start agent", { cause: String(error) })); });
-      child.once("exit", (exitCode, signal) => { cleanup(); resolveResult({ exitCode, signal }); });
-    });
-  } finally { await mcp.cleanup(); }
+  return new Promise<RunResult>((resolveResult, reject) => {
+    const child = spawn(executable, [...injection, ...parsed.rest],
+      { cwd, env: { ...process.env, MODECK_RUN_V1: marker }, stdio: "inherit", shell: false });
+    const signals: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+    const handlers = signals.map(signal => ({ signal, handler: (): void => { child.kill(signal); } }));
+    handlers.forEach(({ signal, handler }) => process.on(signal, handler));
+    const cleanup = (): void => { handlers.forEach(({ signal, handler }) => process.off(signal, handler)); };
+    child.once("error", error => { cleanup(); reject(modeError("E_IO", "Cannot start agent", { cause: String(error) })); });
+    child.once("exit", (exitCode, signal) => { cleanup(); resolveResult({ exitCode, signal }); });
+  });
 };
