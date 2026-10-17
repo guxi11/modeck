@@ -2,27 +2,22 @@
   <img src="assets/logo.svg" width="480" alt="modeck：按工作方式组合规则和技能">
 </p>
 
-# modeck
-
-**让 Claude Code、Codex 和 CodeBuddy 随项目切换规则和技能。**
-
-modeck 是一个 TypeScript CLI。把 rules、skills 组成命名的 mode，在原生 agent 的会话开始时加载；共享配置集中维护，业务项目只需一个可选的 `.modes` 文本文件。
+<p align="center">
+  <strong>让 Claude Code、Codex 和 CodeBuddy 随项目切换规则和技能。</strong>
+</p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/agents-3-173B35?style=flat-square" alt="支持 3 种 agent">
+  modeck 是一个 TypeScript CLI。把 rules、skills 组成命名的 mode，在原生 agent 的会话开始时加载；共享配置集中维护，业务项目只需一个可选的 <code>.modes</code> 文本文件。
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/agents-3-173B35?style=flat-square" alt="支持 3 种 agent：Claude Code、Codex、CodeBuddy Code CLI" title="支持的 agent 种类数：Claude Code、Codex、CodeBuddy Code CLI">
   <img src="https://img.shields.io/badge/Node.js-%E2%89%A520-173B35?style=flat-square" alt="Node.js 20 或更高版本">
 </p>
 
-终端入口提供资源、配置和会话命令，运行 `modeck --help` 可查看：
-
-```text
-Usage: modeck <command> [options]
-
-Commands:
-  res <init|update>  Manage external resources
-  init                   Initialize configuration
-  scan                   Import resources from agent homes
-```
+<p align="center">
+  <code>agents 3</code> 表示支持 Claude Code、Codex、CodeBuddy Code CLI 三种 agent；这是静态支持范围标识，不统计本机安装、当前绑定或运行中的 agent 数量。
+</p>
 
 ## 快速开始
 
@@ -149,6 +144,99 @@ modeck-lock.json
 `/vendor/` 和 `/.modeck/` 会自动加入 `.gitignore`；`.modeck/` 存放本机状态、暂存和备份。共享 YAML 和根目录 `modeck-lock.json`，其他机器拉取配置后运行 `modeck res init`，即可安装相同的锁定版本。资源地址和路径留在 YAML，安装路径、commit 和摘要由工具维护。
 
 会话启动时只读取并校验这些已安装资源，不自动下载或更新。修改资源来源后需再次运行 `res init`；已有 `.modeck/resources/` 安装会在校验后迁移到 `vendor/`，保留锁定版本，目标重名或本地修改会阻止迁移。移除声明不会删除本地目录。
+
+## 命令介绍
+
+运行 `modeck --help` 查看命令总览，当前输出如下：
+
+```text
+Usage: modeck <command> [options]
+
+Commands:
+  res <init|update>  Manage external resources
+  init                   Initialize configuration
+  scan                   Import resources from agent homes
+  migrate                Migrate existing configuration
+  sync                   Synchronize resources
+  resolve                Resolve context
+  render                 Render context
+  hook                   Handle agent session hooks
+  register               Register a configuration
+  unregister             Unregister a configuration
+  config                 Manage registered configurations
+  run                    Run an agent with context
+
+Options:
+  -h, --help              Show help
+  -v, --version           Show version
+```
+
+以下命令中的 `CONFIG_DIR` 是配置目录，`PROJECT_DIR` 是业务项目目录，运行前替换为实际路径。agent 标识为 `claude`、`codex` 或 `codebuddy`。
+
+### 初始化与导入
+
+`init` 创建配置；已有配置后用 `scan` 追加从 agent 用户目录发现的资源。`--list` 只输出发现结果的 JSON，不执行导入；实际导入时按提示选择资源，并在移动原生入口前确认变更和备份位置。
+
+```sh
+modeck init --agent codex --config CONFIG_DIR --list
+modeck init --agent codex --config CONFIG_DIR
+modeck scan --agent claude --config CONFIG_DIR --list
+modeck scan --agent claude --config CONFIG_DIR
+```
+
+`modeck init --help` 和 `modeck scan --help` 可查看各自支持的参数。
+
+### 管理多份配置
+
+注册目录后，通过 `config` 统一选择启用的配置和绑定的 agent。新注册的目录默认未启用；所有绑定的 agent 共用选中的配置集合，按注册顺序组合加载。
+
+```sh
+modeck register --config CONFIG_DIR
+modeck config --list
+modeck config --dry-run
+modeck config
+modeck unregister --config CONFIG_DIR
+```
+
+`config --list` 输出已注册目录、启用状态及各 agent 的绑定状态；`config --dry-run` 交互选择后输出变更计划和冲突，不应用变更。`unregister` 只移除注册，不删除配置目录。
+
+需要脚本化管理时，`config --answers FILE` 读取 JSON 文件：`configs` 为要启用的已注册目录绝对路径数组，`agents` 为要绑定的 agent 标识数组。两项都必须提供，空数组表示不启用配置或不绑定 agent。先用 `modeck config --answers FILE --dry-run` 检查计划，再用 `modeck config --answers FILE --expect DIGEST` 应用，其中 `DIGEST` 替换为计划输出的 `planDigest`；计划变化时会拒绝应用。
+
+### 安装与更新资源
+
+`res` 操作指定配置目录中的外部资源；省略 `--config` 时使用当前目录。在多份配置之间切换时建议明确指定目录。
+
+```sh
+modeck res init --config CONFIG_DIR
+modeck res update --config CONFIG_DIR
+modeck res --help
+```
+
+新增声明或恢复缺失内容用 `res init`；确实需要升级远端版本时用 `res update`，并审查、共享更新后的 `modeck-lock.json`。
+
+### 排查 mode 选择
+
+在业务项目目录运行 `modeck resolve`，输出解析计划的 JSON，包括最终 mode、选中的资源、选择原因和诊断信息。可指定业务目录，或指定单份配置单独排查：
+
+```sh
+modeck resolve
+modeck resolve --cwd PROJECT_DIR
+modeck resolve --config CONFIG_DIR --cwd PROJECT_DIR
+```
+
+省略 `--config` 时优先使用注册配置集合；尚未注册时回退到已有绑定，再尝试当前目录的配置。`resolve` 会准备并校验上下文，也会执行配置中的自动选择脚本；缺失外部资源需先运行 `res init`。
+
+### 直接启动会话
+
+完成 hook 绑定后，通常直接启动原生 agent 即可。也可以用 `run` 为一次启动准备并注入上下文；`--` 后面传递受支持的 agent 参数或提示词：
+
+```sh
+modeck run --agent codex
+modeck run --agent claude -- "检查当前项目的代码结构"
+modeck run --agent codebuddy -- "检查当前项目的代码结构"
+```
+
+`run` 会从 `PATH` 查找对应 CLI，需要先安装该 CLI。它只接受实现支持的会话参数，不能任意转发所有原生子命令；账号登录等操作直接运行原生 CLI。`hook` 是安装后的 SessionStart 内部入口，日常无需手动调用。
 
 ## 调整或移除绑定
 
