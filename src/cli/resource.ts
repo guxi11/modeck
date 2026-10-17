@@ -60,6 +60,8 @@ export const manageResources = async (root: string, action: string): Promise<Loc
     const context = await loadConfig({ configRoot: root });
     const declarations: readonly Declaration[] = context.config.externalResources ?? [];
     const { lock, legacy } = await readLock(root);
+    requireValue(!legacy || lock.resources.every(entry => declarations.some(declaration => sameSource(declaration, entry))),
+      "E_CONFIG", "Add every legacy lock resource to YAML externalResources with matching url, path, target and ref before migrating");
     declarations.forEach((entry, index) => {
       validate(root, { ...entry, commit: "0".repeat(40), digest: "0".repeat(64) });
       requireValue(declarations.every((other, otherIndex) => index === otherIndex || !overlaps(entry.target, other.target)), "E_CONFIG", "External resource targets overlap");
