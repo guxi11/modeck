@@ -85,7 +85,7 @@ export const manageResources = async (root: string, action: string): Promise<Loc
     const ignore = ignorePresent ? utf8((await regularBytes(ignoreFile, LIMITS.jsonBytes)).bytes) : "";
     const staging = await mkdtemp(join(mutex, "stage-"));
     const progress = (index: number, phase: string): void => {
-      process.stderr.write(`modeck res ${action}: [${index + 1}/${declarations.length}] ${phase}\n`);
+      process.stderr.write(`modeck res ${action}: [${index + 1}/${declarations.length}] ${declarations[index]!.id}: ${phase}\n`);
     };
     try {
       const prepared = await declarations.reduce(async (pending, declaration, index) => {
@@ -184,7 +184,9 @@ export const manageResources = async (root: string, action: string): Promise<Loc
       const results = prepared.map(({ entry, status }) => ({ target: entry.target, status, commit: entry.commit, digest: entry.digest }));
       const summary = results.reduce((counts, item) => ({ ...counts, [item.status]: counts[item.status] + 1 }),
         { total: results.length, installed: 0, restored: 0, skipped: 0, updated: 0, unchanged: 0 });
-      process.stderr.write(`modeck res ${action}: complete (${summary.total} resources)\n`);
+      const counts = Object.entries(summary).filter(([status, count]) => status !== "total" && count > 0)
+        .map(([status, count]) => `${status}: ${count}`).join(", ");
+      process.stderr.write(`modeck res ${action}: complete (${summary.total} resources${counts ? `; ${counts}` : ""})\n`);
       return { ...result, results, summary };
     } finally { await rm(staging, { recursive: true, force: true }); }
   } finally { await rm(mutex, { recursive: true, force: true }); }

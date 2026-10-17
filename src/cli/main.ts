@@ -76,6 +76,32 @@ const agentFor = (opts: Readonly<Record<string, string | boolean>>): Agent => {
 };
 const pathFor = async (value: string): Promise<string> => safeAbsolute(absolute(value));
 const json = (value: unknown): void => { process.stdout.write(`${JSON.stringify(value)}\n`); };
+const items = (value: unknown): readonly unknown[] => Array.isArray(value) ? value : [];
+const reportImport = (command: string, value: unknown): void => {
+  const result = object(value);
+  if (typeof result.message === "string") { process.stdout.write(`${result.message}\n`); return; }
+  const count = items(result.resources).length;
+  if (command !== "init" && count === 0) { process.stdout.write("No resources selected; no changes made.\n"); return; }
+  process.stdout.write(`modeck ${command}: ${command === "init" ? "initialized" : "imported"} (${count} resources)\nConfiguration: ${result.configRoot}\n`);
+  if (typeof result.backupDirectory === "string") process.stdout.write(`Backups: ${result.backupDirectory}\n`);
+  if (items(result.retained).length) process.stdout.write(`Retained ${items(result.retained).length} managed/shared entries.\n`);
+};
+const reportConfig = (command: string, result: Readonly<Record<string, unknown>>): void => {
+  if (command !== "config") {
+    process.stdout.write(`modeck ${command}: ${result.changed ? "complete" : "no changes"}\n`);
+    return;
+  }
+  process.stdout.write(result.conflicts ? "modeck config: conflicts found; no changes made.\n"
+    : `modeck config: complete (${items(result.projects).filter(project => object(project).enabled).length} configurations enabled)\n`);
+  for (const value of items(result.plans)) {
+    const plan = object(value);
+    if (!result.conflicts) process.stdout.write(`  ${plan.agent}: ${plan.operation === "bind" ? "bound" : "unbound"}\n`);
+    for (const value of [...items(plan.conflicts), ...items(plan.warnings)]) {
+      const diagnostic = object(value);
+      process.stderr.write(`${plan.agent}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}\n`);
+    }
+  }
+};
 const packageVersion = async (): Promise<string> => {
   const image = await readImage(join(runtimeRoot, "package.json"), LIMITS.jsonBytes);
   const version = image ? object(imageJson(image)).version : undefined;
@@ -125,7 +151,7 @@ export const main = async (argv: string[]): Promise<number> => {
     const opts = options(command, argv.slice(command === "resource" && !argv[1]?.startsWith("--") ? 2 : 1, separator < 0 ? undefined : separator));
     if (opts.help) { process.stdout.write(commandHelp[command] ?? help); return 0; }
     if (command === "resource") {
-      json(await manageResources(await pathFor(String(opts.config ?? process.cwd())), argv[1] ?? "")); return 0;
+      await manageResources(await pathFor(String(opts.config ?? process.cwd())), argv[1] ?? ""); return 0;
     }
     const configured = async (single = false, agent?: Agent) => {
       const record = agent === undefined ? null : await loadRecord(homedir(), agent);
@@ -143,21 +169,25 @@ export const main = async (argv: string[]): Promise<number> => {
     if (!["text", "json"].includes(format)) throw modeError("E_USAGE", "Unknown output format");
     if (command === "init" || command === "scan") {
       if (opts.list && opts.answers) throw modeError("E_USAGE", "--list and --answers cannot be combined");
-      json(await (command === "init" ? initialize : migrateHome)(await pathFor(process.cwd()), await pathFor(String(opts.home ?? homedir())), {
+      const result = await (command === "init" ? initialize : migrateHome)(await pathFor(process.cwd()), await pathFor(String(opts.home ?? homedir())), {
         list: opts.list === true, ...(typeof opts.answers === "string" ? { answers: await pathFor(opts.answers) } : {}),
         ...(opts.agent !== undefined ? { agent: agentFor(opts) } : {}),
         ...(typeof opts.config === "string" ? { configRoot: await pathFor(opts.config) } : {}),
-      })); return 0;
+      });
+      if (opts.list) json(result); else reportImport(command, result);
+      return 0;
     }
     if (command === "migrate") {
       if (opts.list && opts.answers) throw modeError("E_USAGE", "--list and --answers cannot be combined");
-      json(await migrate({ cwd: await realpath(process.cwd()), ...await configured(true),
+      const result = await migrate({ cwd: await realpath(process.cwd()), ...await configured(true),
         list: opts.list === true, ...(typeof opts.answers === "string" ? { answers: await pathFor(opts.answers) } : {}),
-        ...(typeof opts.mode === "string" ? { mode: opts.mode } : {}) })); return 0;
+        ...(typeof opts.mode === "string" ? { mode: opts.mode } : {}) });
+      if (opts.list) json(result); else reportImport(command, result);
+      return 0;
     }
     if (command === "register" || command === "unregister" || command === "config") {
       const result = await manageConfig(command, await pathFor(String(opts["target-home"] ?? homedir())), process.cwd(), runtimeRoot, opts);
-      json(result);
+      if (opts.list || opts["dry-run"] || format === "json") json(result); else reportConfig(command, result);
       return result.conflicts ? 4 : 0;
     }
     const selectedAgent = command === "resolve" ? "codex" : opts.agent !== undefined ? agentFor(opts)
@@ -170,14 +200,13 @@ export const main = async (argv: string[]): Promise<number> => {
       const states = opts.state !== undefined || process.env.MODECK_STATE !== undefined ? [stateRoot]
         : [...new Set(records.flatMap(record => record && (record.configRoot === configRoot || roots.includes(record.configRoot)) ? [record.stateRoot] : []))];
       const requests = roots.flatMap(root => (states.length ? states : [stateRoot]).map(stateRoot => ({ root, stateRoot })));
-      const results = await requests.reduce(async (pending, { root, stateRoot }) => {
+      const count = await requests.reduce(async (pending, { root, stateRoot }) => {
         const previous = await pending;
         const result: VerifiedResourceSet = await syncResources({ context: await loadConfig({ configRoot: root }), stateRoot,
           mode: opts.update ? "update" : "reuse", parseManifest });
-        return [...previous, { configRoot: root, stateRoot, schemaVersion: 1, configDigest: result.configDigest, resourceDigest: result.resourceDigest,
-          resources: result.manifest.resources.map(({ id, treeDigest, commit }) => ({ id, treeDigest, commit })) }];
-      }, Promise.resolve([] as readonly unknown[]));
-      json(results.length === 1 ? results[0] : results); return 0;
+        return previous + result.resources.length;
+      }, Promise.resolve(0));
+      process.stdout.write(`modeck sync: complete (${count} resources)\n`); return 0;
     }
     if (command === "hook") {
       const agent = agentFor(opts);

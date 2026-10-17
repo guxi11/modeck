@@ -64,7 +64,6 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
   if (options.list) return { ...discovered, configRoot: root, homeRoot, agents: selectedAgents };
   if (!pending.length && (!initial || context)) {
     const message = "No new rules or skills found; no changes made.";
-    process.stderr.write(`${message}\n`);
     return { configRoot: root, homeRoot, agents: selectedAgents, resources: [], message };
   }
   if (!options.answers) process.stderr.write(`\nResources · ${pending.filter(item => item.kind === "rule").length} rules · ${pending.filter(item => item.kind === "skill").length} skills\n`
