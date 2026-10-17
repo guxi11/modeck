@@ -72,14 +72,15 @@ flowchart TB
 
 ## 资源与完整性
 
-[资源仓库](../src/resources/repository.ts)统一处理本地路径和 `{ type: 'git', url, ref, path }` 描述。本地路径相对配置目录；rule 指向 Markdown 文件，skill 指向含 `SKILL.md` 的完整目录。初始化导入的资源也采用这一模型。
+[资源仓库](../src/resources/repository.ts)统一处理本地路径和 `(use URL)/path` 资源映射，也兼容旧式 `{ type: 'git', url, ref, path }` 描述。本地路径相对配置目录；rule 指向 Markdown 文件，skill 指向含 `SKILL.md` 的完整目录。简洁声明直接放入 `resources.rules` 或 `resources.skills`，不需要 `head`、`ref`、`target` 或独立清单。
 
 资源读取与同步行为如下：
 
 | 来源 | `render` / `hook` 等运行期读取 | `sync` | `sync --update` |
 | --- | --- | --- | --- |
 | 本地 | 重新快照源文件或目录，发布内容对象 | 同样重新快照 | 同样重新快照 |
-| Git | 读取已有缓存，未缓存时报错 | 复用缓存；缺缓存时获取 | 重新解析 ref 并获取 |
+| `(use URL)/path` | 读取 `.modeck/resources/` 的安装内容，复核锁定来源和摘要；缺失时提示 `res init` | 验证已安装内容 | 验证已安装内容；更新使用 `res update` |
+| 旧式 Git 对象 | 读取已有缓存，未缓存时报错 | 复用缓存；缺缓存时获取 | 重新解析 ref 并获取 |
 
 运行期资源层不拉取 Git；自动选择脚本自身仍有联网能力。`sync` 默认处理全部声明资源，运行期只处理所选资源。
 
@@ -97,7 +98,9 @@ flowchart TB
 
 [Git 获取](../src/resources/git.ts)读取 commit 的 blob，不运行仓库安装命令，不初始化 submodule，并禁用 Git hooks 和多项隐式配置。Git 树中的 symlink、gitlink 和特殊条目被拒绝。资源内容及 skill 脚本不会在获取过程中执行。
 
-实现不写共享锁文件，也没有 `--frozen` 命令。Git 缓存保存解析结果，但不同机器独立同步同一可变 ref 时仍可能得到不同 commit。需要固定来源时，在配置中使用完整 commit；远端是否仍提供该 commit 也影响获取。内容摘要用于发现变化，不能证明资源作者可信。
+`res init` 从简洁映射生成安装请求，技能放入 `.modeck/resources/skills/<id>/`，规则放入 `.modeck/resources/rules/<id>.md`。首次安装使用仓库默认分支，根目录 `modeck-lock.json` 保存解析后的 commit、摘要及生成路径；后续 init 跳过完整安装并按锁恢复缺失内容，新增声明只安装新增项。`res update` 重新获取默认分支并逐项输出进度，最后输出结构化状态和汇总。
+
+整个 `.modeck/` 是本机安装及备份目录，加入配置目录 `.gitignore`；共享 YAML 和根目录 `modeck-lock.json`。运行期验证安装内容与锁记录，不联网；来源声明变化或缓存缺失时需要重新执行 `res init`，本地内容被修改时拒绝覆盖。资源安装在配置身份变化等可捕获错误下回滚目标、锁和忽略文件。没有 `--frozen` 命令；远端是否仍提供锁定 commit 影响缺失资源的恢复，内容摘要也不能证明资源作者可信。
 
 ## 编译与按需技能
 
@@ -168,7 +171,7 @@ flowchart TB
 
 | 建议 | 解决的问题 | 实施时保留的边界 |
 | --- | --- | --- |
-| 可分享的资源锁与严格复用模式 | 可变 Git ref 的跨机器版本漂移 | 与本机缓存分离，不把绝对 home 路径写进共享身份 |
+| 独立的严格复用模式 | 缺少锁定内容时禁止获取的额外约束 | 沿用根目录资源锁，不把绝对 home 路径写进共享身份 |
 | 安装中断恢复协议 | 崩溃后只能检查残留锁 | 不自动覆盖已被外部修改的文件 |
 | Agent 兼容性验收矩阵 | hook 协议输出与模型实际采纳之间的差距 | 记录 CLI 版本、信任状态和实测范围 |
 | 为自动选择脚本设计受限执行接口 | 自动选择 JS 的本机权限范围较大 | YAML 与脚本已分离；Worker 隔离仍不能包装成权限沙箱 |

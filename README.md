@@ -19,7 +19,7 @@ modeck 是一个 TypeScript CLI。把 rules、skills 组成命名的 mode，在�
 Usage: modeck <command> [options]
 
 Commands:
-  res <add|init|update>  Manage external resources
+  res <init|update>  Manage external resources
   init                   Initialize configuration
   scan                   Import resources from agent homes
 ```
@@ -87,6 +87,7 @@ defaults: [base]
 modes:
   base: {}
   prog:
+    extends: [base]
     rules: [coding]
     skills: [review]
 ```
@@ -105,16 +106,27 @@ prog
 
 ## 管理外部资源
 
-在配置目录添加一个 Git 仓库中的 skill：
+直接在 `modeck.yaml` 的资源映射中声明 Git 地址和仓库内路径，名称可直接用于 mode：
 
-```sh
-modeck res add \
-  --url https://github.com/wondelai/skills.git \
-  --path technical-documentation \
-  --target resources/technical-documentation
+```yaml
+resources:
+  skills:
+    technical-documentation: (use https://github.com/wondelai/skills.git)/technical-documentation
+modes:
+  doc:
+    skills: [technical-documentation]
 ```
 
-命令下载完整目录，在 `modeck-resources.json` 记录 commit 和摘要，并将目标加入 `.gitignore`。把目标路径登记到 `modeck.yaml` 的 `resources.skills`，再将名称加入需要的 mode，才会加载。`modeck res init` 按清单还原资源，`modeck res update` 更新资源；本地内容有修改时拒绝覆盖。
+在配置目录运行：
+
+```sh
+modeck res init
+modeck res update
+```
+
+`res init` 增量安装：首次从仓库默认分支获取，已有且完整的资源跳过，缺失资源按根目录 `modeck-lock.json` 中的 commit 和摘要恢复。输出包含逐项状态及安装汇总；`res update` 获取最新内容并展示处理进度，本地修改会阻止覆盖。
+
+下载内容自动放入 `.modeck/resources/`，整个 `.modeck/` 加入 `.gitignore`。共享 YAML 和 `modeck-lock.json`，无需填写 `head`、`ref` 或 `target`，也无需另建资源清单。rule 的同类声明指向仓库内的单个 Markdown 文件；本地资源仍使用相对路径。移除声明不会删除本地目录。
 
 ## 调整或移除绑定
 
