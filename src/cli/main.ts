@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { agentDefinitions, agents, isAgent, LIMITS, modeError, parseJson } from "../contracts/index.js";
 import type { Agent, ModeError } from "../contracts/index.js";
 import { manageResources } from "./resource.js";
+import { mcpStaticCommand } from "./mcp-static.js";
 import { initialize } from "./init.js";
 import { migrateHome } from "./scan.js";
 import { migrate } from "./migrate.js";
@@ -22,6 +23,7 @@ const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
 const help = "Usage: modeck <command> [options]\n\nCommands:\n"
   + "  res <init|update>  Manage external resources\n  init                   Initialize configuration\n"
   + "  scan                   Import resources from agent homes\n  migrate                Migrate existing configuration\n"
+  + "  mcp <migrate|apply|status|recover>  Manage static native MCP configuration\n"
   + "  resolve                Resolve context\n"
   + "  render                 Render context\n  hook                   Handle agent session hooks\n"
   + "  register               Register a configuration\n  unregister             Unregister a configuration\n"
@@ -160,6 +162,7 @@ export const main = async (argv: string[]): Promise<number> => {
     if (major < 22 || major === 22 && minor < 20 || process.platform === "win32") {
       throw modeError("E_PLATFORM", "Node22.20.0+ on macOS/Linux is required");
     }
+    if (command === "mcp") return mcpStaticCommand(argv.slice(1));
     if (!Object.hasOwn(values, command)) throw modeError("E_USAGE", "Unknown command", { command });
     const separator = argv.indexOf("--", 1);
     if (separator >= 0 && command !== "run") throw modeError("E_USAGE", "Only run accepts agent arguments");
