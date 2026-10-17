@@ -24,16 +24,12 @@ Commands:
   scan                   Import resources from agent homes
 ```
 
-## 从源码安装
+## 快速开始
 
-需要 Node.js 20+、npm、Git、macOS 或 Linux，以及你要使用的 agent CLI。在终端构建并链接源码：
+需要 Node.js 20+ 和你要使用的 agent CLI。通过 npm 全局安装：
 
 ```sh
-git clone https://github.com/guxi11/modeck.git
-cd modeck
-npm ci
-npm run build
-npm link
+npm install -g modeck
 modeck --version
 ```
 
@@ -73,7 +69,7 @@ modeck --version
 
    输出规则正文和技能索引。之后在该目录启动原生 agent，会话通过 hook 加载选中的配置。
 
-## 组合工作方式
+## 组合工作模式
 
 在 `modeck.yaml` 中声明资源，再通过资源名称组合 mode。本地资源写相对路径，外部资源写 `(use 仓库地址)/仓库内路径`：
 
@@ -98,17 +94,17 @@ modes:
 
 示例中的 `coding` 和 `review` 对应配置目录里已有的本地文件或目录；`technical-documentation` 从外部仓库安装。保存配置后，在配置目录运行 `modeck res init`，再在业务项目的 `.modes` 中选择 `prog`、`doc` 或组合使用。
 
-rule 是 Markdown 文件，skill 是包含 `SKILL.md` 的完整目录。`defaults` 始终加载，`extends` 可复用其他 mode。初始化导入的资源默认归入 `base`；将只用于编程的资源移入 `prog`，才能按需加载。
+rule 是 Markdown 文件，skill 是包含 `SKILL.md` 的完整目录。`defaults` 始终加载，`extends` 可复用其他 mode；`modes` 可定义多个工作模式，并通过继承组合规则与技能。初始化导入的资源默认归入 `base`；将只用于编程的资源移入 `prog`，才能按需加载。
 
 自动选择脚本 `modeck-auto.mjs` 接收目录、文件和依赖等工作区事实，默认导出函数并返回已声明的 mode 名称。初始化生成的函数返回空数组。
 
-需要固定某个项目的工作方式时，在业务目录创建纯文本 `.modes`：
+需要固定某个项目的工作模式时，在业务目录创建纯文本 `.modes`，可指定多个 mode：
 
 ```text
-prog
+base, prog
 ```
 
-多个名称用逗号或换行分隔。非空 `.modes` 替代自动选择，并保留默认 mode 和继承关系；缺失或空白时使用自动选择。
+多个名称用逗号或换行分隔。非空 `.modes` 中的多个 mode 会组合加载，并保留默认 mode 和继承关系；缺失或空白时使用自动选择。
 
 ## 管理外部资源
 
