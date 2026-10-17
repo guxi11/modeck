@@ -8,6 +8,13 @@
     "modes"
   ],
   "properties": {
+    "externalResources": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/externalResource"
+      }
+    },
     "defaults": {
       "$ref": "#/$defs/ids"
     },
@@ -63,6 +70,30 @@
     }
   },
   "$defs": {
+    "externalResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "path", "target"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "path": {
+          "$ref": "#/$defs/path"
+        },
+        "target": {
+          "$ref": "#/$defs/path"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "default": "HEAD"
+        }
+      }
+    },
     "id": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]{0,63}$"

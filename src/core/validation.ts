@@ -6,13 +6,14 @@ import {
   canonical, checkRelativePath, LIMITS, modeError, parseJson, sha256,
 } from "../contracts/index.js";
 import type {
-  Config, Mode, ResourceManifest, ResourceSpec, Selector, ModeErrorCode,
+  Config, ExternalResourceSpec, Mode, ResourceManifest, ResourceSpec, Selector, ModeErrorCode,
 } from "../contracts/index.js";
 import { compare, copyJson, immutable, requireValue } from "./values.js";
 
 type ModeInput = { readonly extends?: readonly string[];
   readonly rules?: readonly string[]; readonly skills?: readonly string[] };
 type ConfigInput = { readonly defaults?: readonly string[]; readonly modes: Readonly<Record<string, ModeInput>>;
+  readonly externalResources?: readonly (Omit<ExternalResourceSpec, "ref"> & { readonly ref?: string })[];
   readonly resources: { readonly rules?: Readonly<Record<string, string | ResourceSpec["source"]>>;
     readonly skills?: Readonly<Record<string, string | ResourceSpec["source"]>> } };
 const ajv = new Ajv2020({ strict: true, allErrors: true });
@@ -51,6 +52,27 @@ const checkSource = (spec: ResourceSpec): void => {
   ), "E_CONFIG", "Invalid Git ref", { ref });
 };
 
+const checkExternalResources = (resources: readonly ExternalResourceSpec[]): void => {
+  const protectedNames = new Set(["modeck.yaml", "modeck.yml", "modeck-auto.mjs", "modeck-lock.json",
+    "modeck-resources.json", "package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
+    "pnpm-lock.yaml", "bun.lock", "bun.lockb", "agents.md", "update-skills.mjs", ".gitignore",
+    ".gitattributes", ".gitmodules", "node_modules", ".modeck-resources-busy"]);
+  const targets = resources.map(resource => {
+    checkSource({ kind: "skill", source: { type: "git", url: resource.url, path: resource.path, ref: resource.ref } });
+    checkRelativePath(resource.target, false);
+    const target = resource.target.toLowerCase();
+    requireValue(!target.split("/").some(part => protectedNames.has(part))
+      && !/[\s*?![\]\\#]/u.test(target)
+      && target.split("/").every((part, index) => part !== ".modeck"
+        || index === 0 && target.startsWith(".modeck/resources/")),
+    "E_PATH", "Unsafe external resource target", { target: resource.target });
+    return target;
+  });
+  requireValue(targets.every((target, index) => targets.slice(0, index).every(other =>
+    target !== other && !target.startsWith(`${other}/`) && !other.startsWith(`${target}/`))),
+  "E_CONFIG", "External resource targets overlap");
+};
+
 const checkGraph = (config: Config): void => {
   const ids = Object.keys(config.modes).sort(compare);
   const known = (id: string): void => requireValue(Object.hasOwn(config.modes, id), "E_CONFIG", "Unknown mode", { id });
@@ -81,6 +103,9 @@ export const parseConfig = (value: unknown): Config => {
   requireValue(!ruleIds.some(id => Object.hasOwn(input.resources.skills ?? {}, id)), "E_CONFIG", "Resource IDs must be globally unique");
   const config: Config = {
     defaults: [...input.defaults ?? []],
+    ...(input.externalResources === undefined ? {} : {
+      externalResources: input.externalResources.map(resource => ({ ...resource, ref: resource.ref ?? "HEAD" })),
+    }),
     resources: Object.fromEntries((["rules", "skills"] as const).flatMap(group =>
       Object.entries(input.resources[group] ?? {}).map(([id, source]) => [id,
         { kind: group === "rules" ? "rule" as const : "skill" as const,
@@ -92,6 +117,7 @@ export const parseConfig = (value: unknown): Config => {
     }])),
   };
   Object.values(config.resources).forEach(checkSource);
+  checkExternalResources(config.externalResources ?? []);
   checkGraph(config);
   return immutable(config);
 };
