@@ -1,7 +1,7 @@
 import { mkdtemp, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { canonical, LIMITS, modeError, parseJson, sha256 } from "../contracts/index.js";
+import { canonical, LIMITS, modeError, parseJson, sha256, useResourcePath } from "../contracts/index.js";
 import type {
   ConfigContext, ManifestResource, ReadResourcesRequest, ResourceManifest, ResourceSpec,
   SyncResourcesRequest, VerifiedResource, VerifiedResourceSet,
@@ -16,14 +16,16 @@ import type { Snapshot } from "./tree.js";
 
 const digest = (value: unknown): string => sha256(Buffer.from(canonical(value)));
 
-const localSnapshot = async (context: ConfigContext, spec: ResourceSpec): Promise<Snapshot> => {
+const localSnapshot = async (context: ConfigContext, id: string, spec: ResourceSpec): Promise<Snapshot> => {
+  const path = spec.source.type === "use" ? useResourcePath(id, spec.kind) : spec.source.path;
   try {
-    const source = await safePath(childPath(context.configRoot, spec.source.path, spec.kind === "skill"));
+    const source = await safePath(childPath(context.configRoot, path, spec.kind === "skill"));
     requireValue(!(spec.kind === "skill" && source === context.configRoot),
       "E_PATH", "Local skills require a dedicated directory");
     return await snapshotLocal(source, spec.kind);
   } catch (error) {
-    if (missing(error)) throw modeError("E_RESOURCE_MISSING", "Local resource is missing", { path: spec.source.path });
+    if (missing(error)) throw modeError("E_RESOURCE_MISSING", spec.source.type === "use"
+      ? "Installed resource is missing; run modeck res init" : "Local resource is missing", { path });
     throw error;
   }
 };
@@ -79,7 +81,7 @@ const resourceImage = async (request: ReadResourcesRequest, stateRoot: string, i
     requireValue(sync !== null, "E_RESOURCE_MISSING", "Git resource is not cached; run modeck sync", { id });
   }
   const fetched = spec.source.type === "git" ? await gitSnapshot(request.context, stateRoot, spec)
-    : { snapshot: await localSnapshot(request.context, spec), commit: null };
+    : { snapshot: await localSnapshot(request.context, id, spec), commit: null };
   resourceEntry(fetched.snapshot, spec.kind);
   const manifestResource: ManifestResource = { id, kind: spec.kind, sourceDigest: digest(spec), commit: fetched.commit,
     treeDigest: fetched.snapshot.treeDigest, entries: fetched.snapshot.entries };

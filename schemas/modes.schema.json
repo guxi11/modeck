@@ -8,13 +8,6 @@
     "modes"
   ],
   "properties": {
-    "externalResources": {
-      "type": "array",
-      "maxItems": 512,
-      "items": {
-        "$ref": "#/$defs/externalResource"
-      }
-    },
     "defaults": {
       "$ref": "#/$defs/ids"
     },
@@ -41,7 +34,7 @@
           "additionalProperties": {
             "oneOf": [
               {
-                "$ref": "#/$defs/path"
+                "$ref": "#/$defs/resourceString"
               },
               {
                 "$ref": "#/$defs/source"
@@ -58,7 +51,7 @@
           "additionalProperties": {
             "oneOf": [
               {
-                "$ref": "#/$defs/path"
+                "$ref": "#/$defs/resourceString"
               },
               {
                 "$ref": "#/$defs/source"
@@ -70,30 +63,6 @@
     }
   },
   "$defs": {
-    "externalResource": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["url", "path", "target"],
-      "properties": {
-        "url": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 2048
-        },
-        "path": {
-          "$ref": "#/$defs/path"
-        },
-        "target": {
-          "$ref": "#/$defs/path"
-        },
-        "ref": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256,
-          "default": "HEAD"
-        }
-      }
-    },
     "id": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]{0,63}$"
@@ -173,6 +142,12 @@
           "$ref": "#/$defs/ids"
         }
       }
+    },
+    "resourceString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 3079,
+      "description": "Relative local path or (use URL)/path to an installed Git resource"
     }
   }
 }

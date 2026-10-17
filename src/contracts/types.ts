@@ -8,12 +8,11 @@ export type Sha256 = DeepReadonly<string>;
 export type Agent = DeepReadonly<"codex" | "claude" | "codebuddy">;
 export type Kind = DeepReadonly<"rule" | "skill">;
 export type Source = DeepReadonly<{ type: "local"; path: string }
-  | { type: "git"; url: string; ref: string; path: string }>;
+  | { type: "git"; url: string; ref: string; path: string }
+  | { type: "use"; url: string; path: string }>;
 export type ResourceSpec = DeepReadonly<{ kind: Kind; source: Source }>;
-export type ExternalResourceSpec = DeepReadonly<{ url: string; path: string; target: string; ref: string }>;
 export type Mode = DeepReadonly<{ extends: Id[]; rules: Id[]; skills: Id[] }>;
-export type Config = DeepReadonly<{ defaults: Id[]; modes: Record<Id, Mode>; resources: Record<Id, ResourceSpec>;
-  externalResources?: ExternalResourceSpec[] }>;
+export type Config = DeepReadonly<{ defaults: Id[]; modes: Record<Id, Mode>; resources: Record<Id, ResourceSpec> }>;
 export type ConfigRegistry = DeepReadonly<{ schemaVersion: 1; projects: { root: string; enabled: boolean }[] }>;
 export type Selector = DeepReadonly<{ auto: boolean; add: Id[] }>;
 export type TreeEntry = DeepReadonly<{ path: string; kind: "directory" }

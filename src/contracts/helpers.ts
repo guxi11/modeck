@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { LIMITS } from "./constants.js";
-import type { ModeError, ModeErrorCode, Sha256 } from "./types.js";
+import type { Kind, ModeError, ModeErrorCode, Sha256 } from "./types.js";
 
 export const modeError = (
   code: ModeErrorCode,
@@ -52,6 +52,13 @@ export const checkRelativePath = (path: string, allowRoot: boolean): void => {
     !part || part === "." || part === ".." || part.toLowerCase() === ".git")) {
     throw modeError("E_PATH", "Expected a safe relative POSIX path", { path });
   }
+};
+
+export const useResourcePath = (id: string, kind: Kind): string => {
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(id) || kind !== "rule" && kind !== "skill") {
+    throw modeError("E_PATH", "Invalid installed resource identity", { id, kind });
+  }
+  return kind === "rule" ? `.modeck/resources/rules/${id}.md` : `.modeck/resources/skills/${id}`;
 };
 
 export const parseJson = (text: string): unknown => {
