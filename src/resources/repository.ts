@@ -3,10 +3,10 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { canonical, LIMITS, modeError, parseJson, sha256, useResourcePath } from "../contracts/index.js";
 import type {
-  ConfigContext, ManifestResource, ReadResourcesRequest, ResourceManifest, ResourceSpec,
+  ConfigContext, Kind, ManifestResource, ReadResourcesRequest, ResourceManifest, ResourceSpec,
   SyncResourcesRequest, VerifiedResource, VerifiedResourceSet,
 } from "../contracts/index.js";
-import { childPath, compare, ensureDirectory, exists, missing, regularBytes, removeTemporary, requireValue, safePath, utf8 } from "./fs.js";
+import { childPath, commitPattern, compare, ensureDirectory, exists, hashPattern, missing, regularBytes, removeTemporary, requireValue, safePath, utf8 } from "./fs.js";
 import { extractTree, fetchCommit, gitSource, initGit } from "./git.js";
 import { validateContext } from "./manifest.js";
 import { resourceEntry, validateNames } from "./skill.js";
@@ -28,6 +28,39 @@ const localSnapshot = async (context: ConfigContext, id: string, spec: ResourceS
       ? "Installed resource is missing; run modeck res init" : "Local resource is missing", { path });
     throw error;
   }
+};
+
+type InstalledEntry = Readonly<{ id?: string; kind?: Kind; url: string; path: string;
+  target: string; commit: string; digest: string }>;
+const installedSnapshot = async (context: ConfigContext, id: string, spec: ResourceSpec):
+Promise<{ readonly snapshot: Snapshot; readonly commit: string }> => {
+  if (spec.source.type !== "use") throw modeError("E_CONFIG", "Expected an installed resource");
+  let lock: { readonly version?: unknown; readonly resources?: unknown };
+  try {
+    lock = parseJson(utf8((await regularBytes(join(context.configRoot, "modeck-lock.json"), LIMITS.jsonBytes)).bytes)) as typeof lock;
+  } catch (error) {
+    if (missing(error)) throw modeError("E_RESOURCE_MISSING", "Resource lock is missing; run modeck res init", { id });
+    throw error;
+  }
+  requireValue(lock?.version === 1 && Array.isArray(lock.resources) && lock.resources.length <= LIMITS.resources,
+    "E_CONFIG", "Invalid resource lock; run modeck res init");
+  const entries = lock.resources as readonly InstalledEntry[];
+  requireValue(entries.every(entry => entry && typeof entry === "object"
+    && [entry.url, entry.path, entry.target].every(value => typeof value === "string" && value.length > 0)
+    && (entry.kind === undefined || entry.kind === "rule" || entry.kind === "skill")
+    && typeof entry.commit === "string" && commitPattern.test(entry.commit)
+    && typeof entry.digest === "string" && hashPattern.test(entry.digest)),
+  "E_CONFIG", "Invalid resource lock entry; run modeck res init");
+  requireValue(new Set(entries.map(entry => entry.target.toLowerCase())).size === entries.length,
+    "E_CONFIG", "Duplicate resource lock targets; run modeck res init");
+  const target = useResourcePath(id, spec.kind);
+  const entry = entries.find(entry => entry.target === target);
+  requireValue(entry && entry.url === spec.source.url && entry.path === spec.source.path
+    && (entry.kind ?? "skill") === spec.kind && (entry.id === undefined || entry.id === id),
+  "E_RESOURCE_MISSING", "Installed resource does not match its declaration; run modeck res init", { id });
+  const snapshot = await localSnapshot(context, id, spec);
+  requireValue(snapshot.treeDigest === entry!.digest, "E_INTEGRITY", "Installed resource differs from its lock", { id });
+  return { snapshot, commit: entry!.commit };
 };
 
 const gitSnapshot = async (context: ConfigContext, stateRoot: string, spec: ResourceSpec):
@@ -81,7 +114,8 @@ const resourceImage = async (request: ReadResourcesRequest, stateRoot: string, i
     requireValue(sync !== null, "E_RESOURCE_MISSING", "Git resource is not cached; run modeck sync", { id });
   }
   const fetched = spec.source.type === "git" ? await gitSnapshot(request.context, stateRoot, spec)
-    : { snapshot: await localSnapshot(request.context, id, spec), commit: null };
+    : spec.source.type === "use" ? await installedSnapshot(request.context, id, spec)
+      : { snapshot: await localSnapshot(request.context, id, spec), commit: null };
   resourceEntry(fetched.snapshot, spec.kind);
   const manifestResource: ManifestResource = { id, kind: spec.kind, sourceDigest: digest(spec), commit: fetched.commit,
     treeDigest: fetched.snapshot.treeDigest, entries: fetched.snapshot.entries };
