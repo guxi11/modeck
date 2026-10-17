@@ -40,7 +40,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/modeck.mjs`�
 **C2：稳定编译。**
 
 - VerifiedResourceSet与plan身份一致，严格按正文协议生成rule/skill索引/preload；目录/入口路径能直接使用，不写cwd/原因/时间到正文。
-- selectionDigest只覆盖协议/agent/选中mode顺序/有序选中资源的id-kind-treeDigest-preload；正文不写configDigest/lockDigest。未选资源合法更新并sync、无关detector变化不改正文；Git commit变化但选中树不变也不改正文。contentDigest覆盖实际输出bytes，state位置不同则可不同，不伪称跨机相同。9000 UTF-16和32768-byte上限均报错，不截断。
+- selectionDigest只覆盖协议/agent/选中mode顺序/有序选中资源的id-kind-treeDigest-preload；正文不写configDigest/lockDigest。未选资源合法更新、无关detector变化不改正文；Git commit变化但选中树不变也不改正文。contentDigest覆盖实际输出bytes，state位置不同则可不同，不伪称跨机相同。9000 UTF-16和32768-byte上限均报错，不截断。
 
 完成标准：导出完全匹配C0；临时fixture下显式/自动/禁用/DAG/顺序可解释；不同cwd相同选中结果的text/digest一致；无关detector/未选资源更新不变，选中树（含asset/exec位）/顺序/agent变化才改变身份。完整性错误仍失败，不能以输出稳定为由绕过local未同步修改；size/非法输入失败。只写临时fixture/脚本不进仓库。集成后typecheck/build通过。提交自己文件，回传commit、导出清单、验证命令/结果和真实限制。
 
@@ -56,8 +56,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/modeck.mjs`�
 
 **R2：同步和Git。**
 
-- sync reuse/update/frozen三态严格分离，空配置也须锁；锁含完整commit，frozen锁原字节不动但可补固定对象；本地漂移必须失败，除非显式update。
-- Git隔离环境、argv、URL/ref限制、无checkout/filter/hook/submodule/script；通过Git对象提取安全树，保留exec。固定commit不可用就失败，不跟进ref新头；工具获取只发生sync/import。
+- Git隔离环境、argv、URL/ref限制、无checkout/filter/hook/submodule/script；通过Git对象提取安全树，保留exec。固定commit不可用就失败，不跟进ref新头；外部资源获取只发生 res init/update。
 - exclusive锁、staging、原子CAS发布、失败旧锁不动、源/旧锁提交前复核。对象损坏报错，不能默默重写；临时不引用对象可留，不做GC。
 
 **R3：配置仓库创建/导入。**
@@ -65,7 +64,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/modeck.mjs`�
 - init安全新目录+最小modes.json+git init，无README/规则/样例/锁。
 - import远端或显式本地Git到新目录，完整安全tracked tree、origin/main/HEAD/index一致；拒绝已有destination、unsafe entries，validate回调成功才rename；不自动同步/安装。调用Git不能使用来源hooks/templates或真实全局配置。
 
-完成标准：临时本地源与临时Git仓库（包括带空格路径）能首次sync、frozen重建、分享后复现；Git ref移动frozen仍旧commit；local/Git完整skill脚本保留exec；改内容库任意asset/新增文件/本地源或lock均检测；缺锁离线失败；拒绝symlink和非法源，失败不改旧锁/不留半成品destination。用临时fixture/脚本，不提交测试。集成后typecheck/build通过。只提交自己文件，回传commit和验证证据。
+完成标准：临时本地源与临时Git仓库（包括带空格路径）能首次安装、按锁恢复、分享后复现；远端变化后 res init 仍恢复锁定 commit；local/Git完整skill脚本保留exec；改内容库任意asset/新增文件/本地源或lock均检测；缺锁离线失败；拒绝symlink和非法源，失败不改旧锁/不留半成品destination。用临时fixture/脚本，不提交测试。集成后typecheck/build通过。只提交自己文件，回传commit和验证证据。
 
 ## 5. integration 任务包（可直接派发）
 
@@ -106,9 +105,9 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/modeck.mjs`�
 | --- | --- |
 | init/import分享 | 新Git目录可提交；导入锁复用，无真实HOME变化/来源代码执行 |
 | JSON/解析 | 重复key/未知引用/未选中DAG循环报错；最近.mode、不跨边界；禁父冲突与顺序固定 |
-| 稳定正文 | 同state下两个cwd选中mode/树/顺序相同则text逐字节相等；无关detector、已sync未选资源、同树Git换commit不改正文；选中树/顺序/agent变化改digest；resolve/JSON诊断可变，绝对项目路径不入正文 |
+| 稳定正文 | 同state下两个cwd选中mode/树/顺序相同则text逐字节相等；无关detector、已安装未选资源、同树Git换commit不改正文；选中树/顺序/agent变化改digest；resolve/JSON诊断可变，绝对项目路径不入正文 |
 | 技能定位 | root/entry实际存在；scripts/reference/assets全在且exec保留；preload正文准确；超限失败无截断 |
-| frozen完整性 | lock不变；移动Git ref仍取旧commit；坏/缺对象、本地漂移、增删asset均失败；只sync能补对象 |
+| 安装完整性 | res init 按锁恢复缺失内容；远端变化不改变锁定版本；安装内容漂移报错；res update 显式更新 |
 | hook | JSON shape、15秒timeout、Codex信任警告、Claude首轮等待依据、失败不保证阻断；compact不被旧标记吞掉 |
 | hook预载 | 隔离HOME下验证hook直接调用统一CLI，tarball/runtime/原生skills目录无新入口skill；旧owned入口安全清理，用户手写/漂移同名skill保留 |
 | wrapper | baseline不丢、cwd不分叉、unknown/替换prompt参数拒绝、marker不双注入、--no-daemon、stdin/exit/signals真实进程行为 |

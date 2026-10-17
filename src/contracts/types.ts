@@ -8,7 +8,6 @@ export type Sha256 = DeepReadonly<string>;
 export type Agent = DeepReadonly<"codex" | "claude" | "codebuddy">;
 export type Kind = DeepReadonly<"rule" | "skill">;
 export type Source = DeepReadonly<{ type: "local"; path: string }
-  | { type: "git"; url: string; ref: string; path: string }
   | { type: "use"; url: string; path: string }>;
 export type ResourceSpec = DeepReadonly<{ kind: Kind; source: Source }>;
 export type Mode = DeepReadonly<{ extends: Id[]; rules: Id[]; skills: Id[] }>;
@@ -42,9 +41,7 @@ export type LoadConfigRequest = DeepReadonly<{ configRoot: string; facts?: Proje
 export type CollectFactsRequest = DeepReadonly<{ cwd: string; stateRoot: string }>;
 export type ResolveRequest = DeepReadonly<{ context: ConfigContext; facts: ProjectFacts; resourceDigest: Sha256 }>;
 export type CompileRequest = DeepReadonly<{ plan: ResolvedPlan; resources: VerifiedResourceSet; agent: Agent; nativeSkillNames?: string[] }>;
-export type SyncMode = DeepReadonly<"reuse" | "update">;
 export type ReadResourcesRequest = DeepReadonly<{ context: ConfigContext; stateRoot: string; parseManifest: ManifestParser; resourceIds?: Id[] }>;
-export type SyncResourcesRequest = DeepReadonly<ReadResourcesRequest & { mode: SyncMode }>;
 export type PrepareRequest = DeepReadonly<{ configRoot: string; configRoots?: string[]; stateRoot: string; cwd: string; agent: Agent }>;
 export type PreparedContext = DeepReadonly<{ plan: ResolvedPlan; rendered: RenderedContext }>;
 export type EncodeHookRequest = DeepReadonly<{ event: HookEvent; rendered: RenderedContext; marker: RunMarker | null; configRoot: string; stateRoot: string }>;

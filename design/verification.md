@@ -25,7 +25,7 @@ npm install --ignore-scripts --no-audit --no-fund --prefix /private/tmp/mode-rev
 
 | 临时脚本 | 实际覆盖及结果 |
 |---|---|
-| `resources-core.mjs` | init/import 的新可提交 Git 仓库；完整本地 skill、脚本/二进制 asset/reference/隐藏文件/空目录/exec；缺锁、未 sync 漂移、任意 CAS 新增/坏 asset 离线失败；nearest selector、worktree、非 Git 边界、全图循环、禁父冲突及顺序；同 state 不同 cwd 字节相等，无关 detector/未选资源合法更新不扰动正文，所选树/exec/顺序/agent 改摘要，超限无部分输出。 |
+| `resources-core.mjs` | init/import 的新可提交 Git 仓库；完整本地 skill、脚本/二进制 asset/reference/隐藏文件/空目录/exec；缺锁、任意 CAS 新增/坏 asset 离线失败；nearest selector、worktree、非 Git 边界、全图循环、禁父冲突及顺序；同 state 不同 cwd 字节相等，无关 detector/未选资源合法更新不扰动正文，所选树/exec/顺序/agent 改摘要，超限无部分输出。 |
 | `git-resources.mjs`、`git-casefold.mjs` | Git 完整树及 exec，reuse/update/frozen 分离，移动 ref 仍锁旧 commit，空 state 补固定对象、锁原字节不变，同树换 commit 不改正文；不可取 commit、symlink 和 casefold 冲突失败；直接构造 Git 空目录对象验证保留。 |
 | `install.mjs`、`lock-recheck.mjs` | 默认 preview 零写，apply 带/不带 expect，stale 拒绝；两 agent 原生目录共存，重复安装零变化；独立 runtime 无源码/node_modules 仍能执行带空格及单引号路径的 hook；第三方 JSON/hook 编辑保留，own 漂移/evoloop/symlink/危险权限拒绝，精确卸载保留 state/config/其他 skill；有效锁区分活跃与残留。 |
 | `wrappers.mjs`、`revised-hooks.mjs` | multiline/引号/backslash/空 baseline 和 append/file；安全 argv/cwd，未知或冲突参数拒绝；stdin、退出 37、SIGINT/SIGTERM/SIGHUP；marker 去重仍完整验证资源，纯 hook 每次 compact 注入；JSON、字段类型、绝对 cwd、输入上限及 help arity。 |

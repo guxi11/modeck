@@ -45,13 +45,6 @@ const checkSource = (spec: ResourceSpec): void => {
     requireValue(["https:", "ssh:"].includes(parsed.protocol) && parsed.hostname && !parsed.password
       && !parsed.search && !parsed.hash && !/\p{Cc}/u.test(url), "E_CONFIG", "Unsupported Git URL");
   }
-  if (spec.source.type === "use") return;
-  const { ref } = spec.source;
-  requireValue(ref === "HEAD" || /^[0-9a-f]{40}$/.test(ref) || (
-    /^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(ref) && !ref.includes("..")
-    && !ref.includes("//") && !ref.endsWith("/") && !ref.endsWith(".")
-    && ref.split("/").every(part => !part.startsWith(".") && !part.endsWith(".lock"))
-  ), "E_CONFIG", "Invalid Git ref", { ref });
 };
 
 const parseSource = (value: string | Exclude<Source, { type: "use" }>): Source => {

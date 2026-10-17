@@ -1,1 +1,1 @@
-export { readResources, syncResources } from "./repository.js";
+export { readResources } from "./repository.js";

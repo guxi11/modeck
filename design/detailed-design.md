@@ -6,14 +6,14 @@
 
 Node.js >=20，TypeScript strict，ESM，首版支持 macOS/Linux。Windows 在写入前报 `E_PLATFORM`，不生成不能执行的 shell hook。包名为 `modeck`，bin 为 `modeck`；无 ai-rulez 依赖。只提供 Claude Code、Codex 两个真实 Adapter。
 
-闭环是 `init/import → 编辑 modes.json → sync → resolve/render → install 或 run → uninstall`。init 创建有 Git 元数据的新配置目录；import 导入指定 Git revision 到新目录；两者都不隐式安装、联网同步资源或修改本机指针。配置仓库由用户正常 Git 提交/分享，下载内容及机器状态不进入仓库。
+闭环是 `init/import → 编辑配置 → res init → resolve/render → install 或 run → uninstall`。init 创建有 Git 元数据的新配置目录；import 导入指定 Git revision 到新目录；两者都不隐式安装、联网同步资源或修改本机指针。配置仓库由用户正常 Git 提交/分享，下载内容及机器状态不进入仓库。
 
 三个 Module 的 Seam：
 
 | Module | 隐藏的 Implementation | 对外 Interface |
 | --- | --- | --- |
 | core | 校验、特征采集、DAG 展开、稳定编译 | 规范化配置、纯 resolve/compile；唯一公共 contracts |
-| resources | Git、本地树快照、锁、内容库、校验与原子发布 | init/import、sync、离线 readResources |
+| resources | Git、本地树快照、锁、内容库、校验与原子发布 | 离线 readResources；安装由 res init/update 管理 |
 | integration | 命令行、hook 编码、wrapper、安装/进程内回滚 | CLI 与两套 Adapter；只编排前两个 Module |
 
 core 不导入 resources/integration；resources 只导入 `contracts` 的类型、协议常量及公共纯工具，不导入 core Implementation；integration 只从三者的公开 index/contracts 导入。共享契约只能由 core owner 修改；另两人不自行复制或“补一份”类型。
@@ -66,13 +66,6 @@ core 提交三个文件 `schemas/modes.schema.json`、`selector.schema.json`、`
         {
           "type": "object", "additionalProperties": false, "required": ["type", "path"],
           "properties": { "type": { "const": "local" }, "path": { "$ref": "#/$defs/path" } }
-        },
-        {
-          "type": "object", "additionalProperties": false, "required": ["type", "url", "ref", "path"],
-          "properties": {
-            "type": { "const": "git" }, "url": { "type": "string", "minLength": 1, "maxLength": 2048 },
-            "ref": { "type": "string", "minLength": 1, "maxLength": 256 }, "path": { "$ref": "#/$defs/path" }
-          }
         }
       ]
     },
@@ -192,24 +185,13 @@ SKILL.md 使用 UTF-8 YAML frontmatter，单个文档，无自定义 tag/alias�
 
 固定内容库位置：`<state>/store/sha256/<treeDigest>/tree/`，旁边是 `manifest.json`（entries 的 canonical JSON + LF）。内容库独立于配置路径，可跨配置复用。文件物化成 0444/0555，目录 0555，执行位语义保留；验证摘要不依赖其余权限。发布用同文件系统 staging + rename，已有目标必须验证后才复用，损坏目标报 `E_INTEGRITY`，不可“相信目录名”。不自动 GC；因此已输出的 skill 绝对路径在卸载 adapter 后仍然有效。
 
-同步语义固定如下：
-
-| 操作 | 有锁 | 无锁 | 网络/写入 |
-| --- | --- | --- | --- |
-| `sync` | 只复用锁；任何描述/本地内容漂移报错 | 锁定所有资源并创建锁 | 可获取缺失的固定 commit、填充内容库 |
-| `sync --update` | 重新解析全部 Git ref/本地内容并更新锁 | 同首次 sync | 显式允许所有资源版本更新 |
-| `sync --frozen` | 描述、集合、本地树与锁必须匹配，锁字节不变 | `E_LOCK_MISSING` | 可获取缺失固定 commit/从匹配本地源重建内容库 |
-| resolve/render/hook/run/install | 只读锁，完整验证全部资源/内容库和本地源 | `E_LOCK_MISSING` | 无网络、不修复、不写内容库 |
-
-`--update` 与 `--frozen` 互斥。空配置也须 `sync` 生成空锁。只修改 modes/defaults 不要求更新资源锁，但 configDigest 改变。离线验证也检查未选中资源，避免把已损坏的共享配置宣称为有效。Git 离线阶段不要求保留临时 Git repo；校验 sourceDigest、commit 格式、树及 lock 即可，不重新访问远端。本地源每次重算树，不能用旧内容库隐藏本地改动；frozen 不是“有文件就算通过”。
-
-sync 在配置根旁/锁同文件系统创建临时锁输出；配置写锁使用 exclusive lockfile，全部资源校验及发布成功后，复查 modes.json/旧锁原始摘要，再原子替换 modes.lock.json；中途失败旧锁原样保留。已发布但未引用的内容对象可以留下，不是假成功。互斥锁记录 pid，不自动按时间抢锁；残留锁报 `E_BUSY` 并给出路径，由人确认进程退出后处理。
+外部资源通过 `res init` 按声明和 `modeck-lock.json` 同步：已安装项校验后跳过，缺失项按锁定 commit 恢复，新增声明首次安装并加入锁；`res update` 获取默认分支并更新安装内容和锁。运行期读取所选本地资源与已安装资源并验证完整性，不联网获取资源。
 
 Git url 支持 `https://`、`ssh://` 以及以 `./` 开始且位于配置根内的本地仓库目录（用于离线分发/fixture）；不支持 scp 简写、git ext/helper、任意绝对本机路径、URL 密码或控制字符。ref 接受 HEAD、完整 commit、合法分支/tag 名；分支/tag 同名且无法唯一解析时报错。路径字符串按第2节校验；本地仓库真实目录及父目录不可为 symlink。锁保留相对描述的摘要，不保存展开后的绝对 URL。日志去除 URL 凭据。
 
 Git 子进程使用 argv，无 shell；清除继承的 `GIT_*`（需要的显式重建），禁用 system/global config、credential helper、hooks、templates、未授权 protocol、submodule recursion、prompts、filters；远端只按已校验scheme开放https或ssh，本地来源只开放file。Git 工作目录为工具 staging，不在来源目录执行工作树操作。首版https支持公开仓库，私有仓库通过ssh现有key/agent认证，交互提示关闭，不接受来源指定 sshCommand。对 ssh 不插值 URL 到 shell 命令。抓取到全 commit 后，以 `ls-tree -rz`/`cat-file` 提取普通文件，不 checkout、不触发 LFS/filter/submodule；LFS 指针视为普通字节，不能宣称已经下载 LFS 实体。网络命令每次最多120秒，输出受限，失败清理 staging。frozen 抓取旧 commit 不可用则明确失败，不能替换成 ref 的新头。
 
-init 的最小内容为 `modes.json`（schemaVersion1、defaults=[base]、单个空语义base、resources={}；base默认字段由parseConfig补齐后写出）及工具生成的 `.git`；不创建 README/样例规则/锁。destination 必须不存在，父目录安全，失败不留下半成品。import 同样只接受新 destination；url 接受上述远端 URL，另外 CLI 的显式本地绝对 Git 目录可用于导入（不写入资源描述）。以 `git init + fetch + read-tree` 和受约束的 tracked tree 物化建立普通可提交配置仓库，设置 origin、HEAD/本地分支 `main` 指向所选 commit；不执行 checkout/hook，不自动 sync，不复制远端仓库控制目录。拒绝导入 symlink/gitlink/不安全文件树；`.git` 仅为本工具创建的元数据。配置与已有锁经回调校验后才 rename 到 destination。接收者导入后 `sync --frozen` 得到同内容；源仓库若没有锁，须先普通 sync 才有复现承诺。本地资源分享要求其所有文件已提交；Git不保留空目录，需由用户放置占位文件，否则接收者frozen应明确失败，不能默默丢目录后通过。相对本地Git源也须随配置完整分发，否则不具备跨机器复现前提。
+init 的最小内容为 `modes.json`（schemaVersion1、defaults=[base]、单个空语义base、resources={}；base默认字段由parseConfig补齐后写出）及工具生成的 `.git`；不创建 README/样例规则/锁。destination 必须不存在，父目录安全，失败不留下半成品。import 同样只接受新 destination；url 接受上述远端 URL，另外 CLI 的显式本地绝对 Git 目录可用于导入（不写入资源描述）。以 `git init + fetch + read-tree` 和受约束的 tracked tree 物化建立普通可提交配置仓库，设置 origin、HEAD/本地分支 `main` 指向所选 commit；不执行 checkout/hook，不自动安装资源，不复制远端仓库控制目录。拒绝导入 symlink/gitlink/不安全文件树；`.git` 仅为本工具创建的元数据。配置与已有锁经回调校验后才 rename 到 destination。接收者通过 `res init` 恢复锁定的外部资源。本地资源分享要求其所有文件已提交；Git不保留空目录，需由用户放置占位文件，否则接收者frozen应明确失败，不能默默丢目录后通过。相对本地Git源也须随配置完整分发，否则不具备跨机器复现前提。
 
 ## 5. 解析与稳定编译
 
@@ -240,7 +222,6 @@ rule/preload 文本按 UTF-8 fatal 解码，去单个 BOM，CRLF/CR统一LF，�
 
 `contentDigest = sha256(实际 text UTF-8 bytes)`，text自己不包含contentDigest，避免递归。RenderedContext同时返回selectionDigest/text/contentDigest/byteLength；其中configDigest/lockDigest只是诊断元数据，禁止被Adapter再拼进注入正文。在同一state绝对位置内，只要选中mode顺序、选中资源绑定/树/preload、agent和协议相同，text与contentDigest必须相同：无关detector或未选资源的合法变更即使改变configDigest/lockDigest，也不扰动正文。整JSON输出的诊断字段可以不同，验收比较text/selectionDigest/contentDigest，不比较整个render JSON。
 
-稳定输出不豁免第4节完整性检查：未选资源合法变更并显式sync后才有有效锁；任何local源改变但未sync仍报E_LOCK_MISMATCH，不能只读旧内容库绕锁。迁移state路径会改变skill实际定位及正文摘要，这个稳定性只保证同一安装位置；不能承诺跨机器前缀、provider cache key、KV/cache hit。
 
 这个摘要只覆盖本工具text。Codex/Claude原生skill初始索引也可能包含绝对路径；迁移HOME或原生skill安装位置会改变agent自己的model-visible prompt，即使本工具text/digest不变也不能声称完整前缀相同。不得为了缓存比较从原生索引里删去实际资源定位。
 
@@ -254,7 +235,7 @@ type Sha256 = string;
 type Agent = "codex" | "claude";
 type Kind = "rule" | "skill";
 type Source = { type: "local"; path: string }
-  | { type: "git"; url: string; ref: string; path: string };
+  | { type: "use"; url: string; path: string };
 type ResourceSpec = { kind: Kind; source: Source };
 type Condition = { type: "exists"; path: string }
   | { type: "glob"; pattern: string } | { type: "dependency"; name: string };
@@ -291,9 +272,7 @@ type ResolveRequest = { context: ConfigContext; facts: ProjectFacts; lockDigest:
 type CompileRequest = { plan: ResolvedPlan; resources: VerifiedResourceSet; agent: Agent };
 type InitConfigRequest = { destination: string; initialConfig: Config };
 type ImportConfigRequest = { url: string; ref: string; destination: string; validate: ImportValidator };
-type SyncMode = "reuse" | "update" | "frozen";
 type ReadResourcesRequest = { context: ConfigContext; stateRoot: string; parseLock: LockParser };
-type SyncResourcesRequest = ReadResourcesRequest & { mode: SyncMode };
 type PrepareRequest = { configRoot: string; stateRoot: string; cwd: string; agent: Agent };
 type PreparedContext = { plan: ResolvedPlan; rendered: RenderedContext };
 type EncodeHookRequest = { event: HookEvent; rendered: RenderedContext; marker: RunMarker | null; configRoot: string; stateRoot: string };
@@ -325,7 +304,6 @@ type ModeError = Error & { code: ModeErrorCode; details: Readonly<Record<string,
 | core/index | `compile({plan,resources,agent})` | RenderedContext；纯计算 |
 | resources/index | `initConfig({destination,initialConfig})` | Promise<string>；安全创建Git目录，initialConfig由CLI调用parseConfig得到 |
 | resources/index | `importConfig({url,ref,destination,validate})` | Promise<string>；validate:(stagingRoot:string)=>Promise<void>；成功才发布 |
-| resources/index | `syncResources({context,stateRoot,mode,parseLock})` | Promise<VerifiedResourceSet>；mode:reuse/update/frozen；parseLock:(unknown)=>ResourceLock |
 | resources/index | `readResources({context,stateRoot,parseLock})` | Promise<VerifiedResourceSet>；只读、离线、完整验证 |
 | integration/index | `prepare({configRoot,stateRoot,cwd,agent})` | Promise<{plan:ResolvedPlan,rendered:RenderedContext}>；唯一 load/read/facts/resolve/compile 编排 |
 | integration/index | `encodeHook({event,rendered,marker,configRoot,stateRoot})` | HookReply；纯编码/身份与摘要检查，marker:RunMarker\|null；pid存活检查在hook I/O入口完成 |
@@ -345,7 +323,6 @@ type ModeError = Error & { code: ModeErrorCode; details: Readonly<Record<string,
 | --- | --- | --- |
 | `init` | 必需 `--dir` | `{schemaVersion:1,configRoot}`；新目录，最小配置+git init |
 | `import` | 必需 `--from`,`--dir`；`--ref HEAD` | 同init；校验成功才发布 |
-| `sync` | `--config`,`--state`；可选互斥 `--update`/`--frozen` | `{schemaVersion:1,configDigest,lockDigest,resources:[{id,treeDigest,commit}]}` |
 | `resolve` | `--config`,`--state`,`--cwd` | ResolvedPlan（始终JSON，不另设 --json） |
 | `render` | 同resolve；必需 `--agent`；`--format text\|json` 默认text | text 原样；json为RenderedContext |
 | `hook` | 必需 `--agent`；`--config`,`--state` | stdin事件→一次HookReply JSON；去重/跳过stdout空，exit0 |

@@ -18,7 +18,7 @@ modeck 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Cla
 | --- | --- | --- |
 | [contracts](../src/contracts/index.ts) | 类型、错误、协议、摘要及上限 | `Config`、`ResolvedPlan`、`VerifiedResourceSet`、`RenderedContext`、`BindPlan` |
 | [core](../src/core/index.ts) | 配置校验、工作区事实、mode 解析、文本编译 | `collectFacts` / `loadConfig` 执行 I/O；`resolve` / `compile` 为纯函数 |
-| [resources](../src/resources/index.ts) | 本地与 Git 资源、内容存储、完整性校验 | `readResources` / `syncResources` 返回已验证资源，隐藏下载与存储细节 |
+| [resources](../src/resources/index.ts) | 本地与已安装资源、内容存储、完整性校验 | `readResources` 返回已验证资源；外部资源安装由 CLI 的 `res init/update` 管理 |
 | [integration](../src/integration/index.ts) | 准备上下文、hook 协议、绑定与进程启动 | `prepare`、`encodeHook`、`planBind` / `applyBindPlan`、`runAgent` |
 | [cli](../src/cli/main.ts) | 参数、交互、配置发现、初始化与迁移 | 文件系统和终端副作用留在命令边界 |
 | [schemas](../schemas/modes.schema.json) | 配置与资源 manifest 的数据契约 | schema 校验后继续核对引用、继承图和树摘要 |
@@ -72,17 +72,16 @@ flowchart TB
 
 ## 资源与完整性
 
-[资源仓库](../src/resources/repository.ts)统一处理本地路径和 `(use URL)/path` 资源映射，也兼容旧式 `{ type: 'git', url, ref, path }` 描述。本地路径相对配置目录；rule 指向 Markdown 文件，skill 指向含 `SKILL.md` 的完整目录。简洁声明直接放入 `resources.rules` 或 `resources.skills`，不需要 `head`、`ref`、`target` 或独立清单。
+[资源仓库](../src/resources/repository.ts)统一处理本地路径和 `(use URL)/path` 资源映射。本地路径相对配置目录；rule 指向 Markdown 文件，skill 指向含 `SKILL.md` 的完整目录。简洁声明直接放入 `resources.rules` 或 `resources.skills`，不需要 `head`、`ref`、`target` 或独立清单。
 
 资源读取与同步行为如下：
 
-| 来源 | `render` / `hook` 等运行期读取 | `sync` | `sync --update` |
+| 来源 | `render` / `hook` 等运行期读取 | `res init` | `res update` |
 | --- | --- | --- | --- |
-| 本地 | 重新快照源文件或目录，发布内容对象 | 同样重新快照 | 同样重新快照 |
-| `(use URL)/path` | 读取 `vendor/` 的安装内容，复核锁定来源和摘要；缺失时提示 `res init` | 验证已安装内容 | 验证已安装内容；更新使用 `res update` |
-| 旧式 Git 对象 | 读取已有缓存，未缓存时报错 | 复用缓存；缺缓存时获取 | 重新解析 ref 并获取 |
+| 本地 | 重新快照源文件或目录，发布内容对象 | 无需安装 | 无需安装 |
+| `(use URL)/path` | 读取 `vendor/` 的安装内容，复核锁定来源和摘要；缺失时提示 `res init` | 按声明和锁同步：校验已安装项、按锁恢复缺失项、安装新增项 | 获取默认分支并更新安装内容和锁 |
 
-运行期资源层不拉取 Git；自动选择脚本自身仍有联网能力。`sync` 默认处理全部声明资源，运行期只处理所选资源。
+运行期资源层不拉取 Git；自动选择脚本自身仍有联网能力。`res init/update` 处理指定配置目录中的全部外部资源声明，运行期只处理所选资源。
 
 默认状态目录是 `~/.local/share/modeck/v1`，可由 `--state` 或 `MODECK_STATE` 调整，且必须位于配置目录之外。状态目录包含以下内容：
 
@@ -91,8 +90,6 @@ flowchart TB
 | `store/sha256/<treeDigest>/tree/` | 规则标准化为 `content.md`，技能保留完整资源树 |
 | `store/sha256/<treeDigest>/manifest.json` | 按路径排序的树条目：文件摘要、字节数和可执行位 |
 | `skills/<name>@<digest前缀>/` | 验证后物化的技能短路径，作为索引的 root；前缀从八位开始，碰撞时逐位延长 |
-| `git/<descriptorDigest>.json` | Git 来源、解析后的 commit 与资源树信息；缓存键包含配置根目录、ID 和来源描述 |
-| `.work/` | Git 获取的临时目录 |
 
 [内容存储](../src/resources/store.ts)先写临时目录，再以 rename 发布只读内容对象。读取时复核 manifest 和整棵树，额外文件、缺失条目、正文或可执行位变化都会影响验证。[树校验](../src/resources/tree.ts)拒绝资源中的符号链接、特殊文件、大小写冲突及部分敏感路径和私钥内容；这些检查不等同于完整的秘密扫描。
 

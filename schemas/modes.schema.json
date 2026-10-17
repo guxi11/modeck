@@ -81,52 +81,20 @@
       "maxLength": 1024
     },
     "source": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "path"
-          ],
-          "properties": {
-            "type": {
-              "const": "local"
-            },
-            "path": {
-              "$ref": "#/$defs/path"
-            }
-          }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "path"
+      ],
+      "properties": {
+        "type": {
+          "const": "local"
         },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "url",
-            "ref",
-            "path"
-          ],
-          "properties": {
-            "type": {
-              "const": "git"
-            },
-            "url": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 2048
-            },
-            "ref": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 256
-            },
-            "path": {
-              "$ref": "#/$defs/path"
-            }
-          }
+        "path": {
+          "$ref": "#/$defs/path"
         }
-      ]
+      }
     },
     "mode": {
       "type": "object",

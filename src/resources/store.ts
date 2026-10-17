@@ -43,7 +43,7 @@ const skillRoot = async (stateRoot: string, name: string, snapshot: Snapshot, le
 
 export const readObject = async (stateRoot: string, manifestResource: ManifestResource): Promise<VerifiedResource> => {
   const object = objectPath(stateRoot, manifestResource.treeDigest);
-  if (!await exists(object)) throw modeError("E_RESOURCE_MISSING", "Stored content is missing; run sync", { id: manifestResource.id, path: object });
+  if (!await exists(object)) throw modeError("E_RESOURCE_MISSING", "Stored content is missing; retry context preparation", { id: manifestResource.id, path: object });
   try {
     await safePath(object);
     requireValue((await lstat(object)).isDirectory(), "E_INTEGRITY", "Content object is not a directory");

@@ -200,7 +200,7 @@ modeck res update --config CONFIG_DIR
 modeck res --help
 ```
 
-新增声明或恢复缺失内容用 `res init`；确实需要升级远端版本时用 `res update`，并审查、共享更新后的 `modeck-lock.json`。
+`res init` 按声明和 `modeck-lock.json` 同步资源：已有资源校验后跳过，缺失内容按锁定 commit 恢复，新增声明首次安装并加入锁。确实需要升级远端版本时用 `res update`，并审查、共享更新后的锁文件。
 
 ### 排查 mode 选择
 
@@ -216,7 +216,9 @@ modeck resolve --config CONFIG_DIR --cwd PROJECT_DIR
 
 ### 直接启动会话
 
-完成 hook 绑定后，通常直接启动原生 agent 即可。也可以用 `run` 为一次启动准备并注入上下文；`--` 后面传递受支持的 agent 参数或提示词：
+`run` 为单次 agent 启动选择 mode、校验资源并注入规则和技能索引，不创建 hook 绑定，也不修改 agent 配置。适合试用一份配置，或在临时环境、CI 中执行一次任务。已经绑定 hook 的日常会话直接启动原生 agent 即可。
+
+`--agent` 必填；`--config` 指定配置目录，省略时使用已注册或已绑定配置，再回退到当前目录。`--cwd` 指定 agent 工作目录，并决定项目事实和 `.modes` 的选择，默认使用当前目录。`--` 后传递受支持的 agent 会话参数或提示词：
 
 ```sh
 modeck run --agent codex
@@ -224,7 +226,9 @@ modeck run --agent claude -- "检查当前项目的代码结构"
 modeck run --agent codebuddy -- "检查当前项目的代码结构"
 ```
 
-`run` 会从 `PATH` 查找对应 CLI，需要先安装该 CLI。它只接受实现支持的会话参数，不能任意转发所有原生子命令；账号登录等操作直接运行原生 CLI。`hook` 是安装后的 SessionStart 内部入口，日常无需手动调用。
+需要先安装对应 CLI，并为声明的外部资源执行 `res init`。`run` 默认从 `PATH` 查找 CLI，`--executable` 可指定可执行文件，`--state` 可指定配置目录之外的资源缓存。完整参数见 `modeck run --help`。它继承终端输入输出，并传递 agent 的退出码和终止信号。
+
+上下文在启动时确定，切换 mode 或工作目录后应重新启动。已有 hook 只有在配置、目录和上下文一致时才跳过重复注入，不一致会报错。`run` 只接受实现支持的会话参数，不能任意转发所有原生子命令；账号登录等操作直接运行原生 CLI。`hook` 是绑定后的 SessionStart 内部入口，日常无需手动调用。
 
 ## 调整或移除绑定
 

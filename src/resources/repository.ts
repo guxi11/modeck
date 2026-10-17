@@ -1,16 +1,13 @@
-import { mkdtemp, rename, unlink, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { canonical, LIMITS, modeError, parseJson, sha256, useResourcePath } from "../contracts/index.js";
 import type {
   ConfigContext, Kind, ManifestResource, ReadResourcesRequest, ResourceManifest, ResourceSpec,
-  SyncResourcesRequest, VerifiedResource, VerifiedResourceSet,
+  VerifiedResource, VerifiedResourceSet,
 } from "../contracts/index.js";
-import { childPath, commitPattern, compare, ensureDirectory, exists, hashPattern, missing, regularBytes, removeTemporary, requireValue, safePath, utf8 } from "./fs.js";
-import { extractTree, fetchCommit, gitSource, initGit } from "./git.js";
+import { childPath, commitPattern, compare, hashPattern, missing, regularBytes, requireValue, safePath, utf8 } from "./fs.js";
 import { validateContext } from "./manifest.js";
 import { resourceEntry, validateNames } from "./skill.js";
-import { publishObject, readObject } from "./store.js";
+import { publishObject } from "./store.js";
 import { snapshotLocal } from "./tree.js";
 import type { Snapshot } from "./tree.js";
 
@@ -63,68 +60,18 @@ Promise<{ readonly snapshot: Snapshot; readonly commit: string }> => {
   return { snapshot, commit: entry!.commit };
 };
 
-const gitSnapshot = async (context: ConfigContext, stateRoot: string, spec: ResourceSpec):
-Promise<{ readonly snapshot: Snapshot; readonly commit: string }> => {
-  if (spec.source.type !== "git") throw modeError("E_CONFIG", "Expected a Git resource");
-  const source = await gitSource(spec.source.url, context.configRoot);
-  const work = await ensureDirectory(join(stateRoot, ".work"));
-  const temporary = await mkdtemp(join(work, "git-"));
-  try {
-    await initGit(temporary);
-    const commit = await fetchCommit(temporary, source, spec.source.ref);
-    return { snapshot: await extractTree(temporary, commit, spec.source.path, spec.kind), commit };
-  } finally { await removeTemporary(temporary); }
-};
-
-// Git descriptors are cached outside the shared repository, scoped to their source root.
-const cachePath = (context: ConfigContext, stateRoot: string, id: string, spec: ResourceSpec): string =>
-  join(stateRoot, "git", `${digest({ configRoot: context.configRoot, id, spec })}.json`);
-
-const cachedGit = async (request: ReadResourcesRequest, stateRoot: string, id: string, spec: ResourceSpec): Promise<ManifestResource | null> => {
-  const path = cachePath(request.context, stateRoot, id, spec);
-  if (!await exists(path)) return null;
-  const { bytes } = await regularBytes(path, LIMITS.manifestBytes);
-  const manifest = request.parseManifest(parseJson(utf8(bytes)));
-  const resource = manifest.resources[0];
-  requireValue(manifest.resources.length === 1 && resource?.id === id && resource.kind === spec.kind
-    && resource.sourceDigest === digest(spec) && resource.commit !== null
-    && manifest.resourceSpecDigest === digest({ [id]: spec }), "E_INTEGRITY", "Git cache does not match its resource", { id });
-  return resource!;
-};
-
-const cacheGit = async (context: ConfigContext, stateRoot: string, id: string, spec: ResourceSpec, manifestResource: ManifestResource): Promise<void> => {
-  const directory = await ensureDirectory(join(stateRoot, "git"));
-  const temporary = join(directory, `.stage-${randomUUID()}`);
-  const manifest: ResourceManifest = { schemaVersion: 1, resourceSpecDigest: digest({ [id]: spec }), resources: [manifestResource] };
-  const bytes = Buffer.from(`${canonical(manifest)}\n`);
-  requireValue(bytes.length <= LIMITS.manifestBytes, "E_LIMIT", "Git cache manifest exceeds byte limit");
-  try {
-    await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
-    await safePath(directory);
-    await rename(temporary, cachePath(context, stateRoot, id, spec));
-  } finally { await unlink(temporary).catch(error => { if (!missing(error)) throw error; }); }
-};
-
 type ResourceImage = { readonly manifestResource: ManifestResource; readonly verified: VerifiedResource };
-const resourceImage = async (request: ReadResourcesRequest, stateRoot: string, id: string, spec: ResourceSpec,
-  sync: "reuse" | "update" | null): Promise<ResourceImage> => {
-  if (spec.source.type === "git" && sync !== "update") {
-    const cached = await cachedGit(request, stateRoot, id, spec);
-    if (cached) return { manifestResource: cached, verified: await readObject(stateRoot, cached) };
-    requireValue(sync !== null, "E_RESOURCE_MISSING", "Git resource is not cached; run modeck sync", { id });
-  }
-  const fetched = spec.source.type === "git" ? await gitSnapshot(request.context, stateRoot, spec)
-    : spec.source.type === "use" ? await installedSnapshot(request.context, id, spec)
-      : { snapshot: await localSnapshot(request.context, id, spec), commit: null };
+const resourceImage = async (request: ReadResourcesRequest, stateRoot: string, id: string, spec: ResourceSpec): Promise<ResourceImage> => {
+  const fetched = spec.source.type === "use" ? await installedSnapshot(request.context, id, spec)
+    : { snapshot: await localSnapshot(request.context, id, spec), commit: null };
   resourceEntry(fetched.snapshot, spec.kind);
   const manifestResource: ManifestResource = { id, kind: spec.kind, sourceDigest: digest(spec), commit: fetched.commit,
     treeDigest: fetched.snapshot.treeDigest, entries: fetched.snapshot.entries };
   const verified = await publishObject(stateRoot, manifestResource, fetched.snapshot);
-  if (spec.source.type === "git") await cacheGit(request.context, stateRoot, id, spec, manifestResource);
   return { manifestResource, verified };
 };
 
-const resourcesFor = async (request: ReadResourcesRequest, sync: "reuse" | "update" | null): Promise<VerifiedResourceSet> => {
+export const readResources = async (request: ReadResourcesRequest): Promise<VerifiedResourceSet> => {
   try {
     const { context } = request;
     const stateRoot = await safePath(request.stateRoot, true);
@@ -134,7 +81,7 @@ const resourcesFor = async (request: ReadResourcesRequest, sync: "reuse" | "upda
       const current = await pending;
       const spec = context.config.resources[id];
       requireValue(spec, "E_CONFIG", "Unknown requested resource", { id });
-      return [...current, await resourceImage(request, stateRoot, id, spec!, sync)];
+      return [...current, await resourceImage(request, stateRoot, id, spec!)];
     }, Promise.resolve([] as readonly ResourceImage[]));
     const resources = images.map(image => image.verified);
     validateNames(resources);
@@ -149,12 +96,4 @@ const resourcesFor = async (request: ReadResourcesRequest, sync: "reuse" | "upda
     if (error instanceof Error && "code" in error && String(error.code).startsWith("E_")) throw error;
     throw modeError("E_IO", "Resource operation failed", { cause: String(error) });
   }
-};
-
-export const readResources = async (request: ReadResourcesRequest): Promise<VerifiedResourceSet> => resourcesFor(request, null);
-
-export const syncResources = async (request: SyncResourcesRequest): Promise<VerifiedResourceSet> => {
-  requireValue(request.mode === "reuse" || request.mode === "update", "E_USAGE",
-    "Unsupported resource synchronization mode");
-  return resourcesFor(request, request.mode === "update" ? "update" : "reuse");
 };

@@ -4,9 +4,7 @@ import { homedir } from "node:os";
 import { delimiter, join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LIMITS, modeError, parseJson } from "../contracts/index.js";
-import type { Agent, ModeError, VerifiedResourceSet } from "../contracts/index.js";
-import { loadConfig, parseManifest } from "../core/index.js";
-import { syncResources } from "../resources/index.js";
+import type { Agent, ModeError } from "../contracts/index.js";
 import { manageResources } from "./resource.js";
 import { initialize } from "./init.js";
 import { migrateHome } from "./scan.js";
@@ -24,10 +22,10 @@ const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
 const help = "Usage: modeck <command> [options]\n\nCommands:\n"
   + "  res <init|update>  Manage external resources\n  init                   Initialize configuration\n"
   + "  scan                   Import resources from agent homes\n  migrate                Migrate existing configuration\n"
-  + "  sync                   Synchronize resources\n  resolve                Resolve context\n"
+  + "  resolve                Resolve context\n"
   + "  render                 Render context\n  hook                   Handle agent session hooks\n"
   + "  register               Register a configuration\n  unregister             Unregister a configuration\n"
-  + "  config                 Manage registered configurations\n  run                    Run an agent with context\n\n"
+  + "  config                 Manage registered configurations\n  run                    Start one agent session with context, without hook binding\n\n"
   + "Options:\n  -h, --help              Show help\n  -v, --version           Show version\n";
 const commandHelp: Readonly<Record<string, string>> = {
   init: "Usage: modeck init [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
@@ -37,15 +35,29 @@ const commandHelp: Readonly<Record<string, string>> = {
   unregister: "Usage: modeck unregister [--config <dir>] [--target-home <dir>] [-h|--help]\n",
   config: "Usage: modeck config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--dry-run] [--expect <digest>] [-h|--help]\n",
   resource: "Usage: modeck res <init|update> [--config <dir>] [-h|--help]\n",
+  run: "Usage: modeck run --agent <claude|codex|codebuddy> [--config <dir>] [--cwd <dir>] [--state <dir>] [--executable <file>] [-h|--help] [-- <agent arguments>]\n\n"
+    + "Prepare mode rules and skills for one agent session without creating a hook binding.\n"
+    + "Use this to try a configuration or launch a temporary/CI session. Bound agents can normally be started directly.\n\n"
+    + "Options:\n"
+    + "  --agent <name>         Required agent CLI: claude, codex or codebuddy\n"
+    + "  --config <dir>         Configuration directory; defaults to registered/bound/current configuration\n"
+    + "  --cwd <dir>            Agent working directory and mode selection; defaults to current directory\n"
+    + "  --state <dir>          Resource cache outside the configuration directory\n"
+    + "  --executable <file>    Agent CLI executable; defaults to its name on PATH\n"
+    + "  -- <agent arguments>   Supported session flags and prompt; not arbitrary native subcommands\n\n"
+    + "Install declared external resources with modeck res init before launching.\n"
+    + "Context stays fixed for the session; restart after changing modes or working directory.\n"
+    + "Existing hooks skip duplicate injection only when their context matches; mismatches fail.\n"
+    + "The agent inherits terminal I/O, and its exit status and signals are forwarded.\n",
 };
 const values: Readonly<Record<string, readonly string[]>> = {
   resource: ["config"],
-  init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"], sync: ["config", "state"],
+  init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
   hook: ["config", "state", "agent"], register: ["config", "target-home"], unregister: ["config", "target-home"],
   config: ["answers", "target-home", "state", "expect", "format"], run: ["config", "state", "cwd", "agent", "executable"],
 };
-const booleans: Readonly<Record<string, readonly string[]>> = { init: ["list"], scan: ["list"], migrate: ["list"], sync: ["update"], config: ["list", "dry-run"] };
+const booleans: Readonly<Record<string, readonly string[]>> = { init: ["list"], scan: ["list"], migrate: ["list"], config: ["list", "dry-run"] };
 const options = (command: string, argv: readonly string[]): Readonly<Record<string, string | boolean>> => {
   const parse = (index: number, result: Readonly<Record<string, string | boolean>>): Readonly<Record<string, string | boolean>> => {
     const token = argv[index];
@@ -194,20 +206,6 @@ export const main = async (argv: string[]): Promise<number> => {
       : command === "render" ? (await selectAgents("render", await pathFor(homedir())))[0] : undefined;
     if (command === "render" && !selectedAgent) return 0;
     const { configRoot, stateRoot } = await configured(false, selectedAgent);
-    if (command === "sync") {
-      const records = await Promise.all((["claude", "codex", "codebuddy"] as const).map(agent => loadRecord(homedir(), agent)));
-      const roots = await configRoots(configRoot);
-      const states = opts.state !== undefined || process.env.MODECK_STATE !== undefined ? [stateRoot]
-        : [...new Set(records.flatMap(record => record && (record.configRoot === configRoot || roots.includes(record.configRoot)) ? [record.stateRoot] : []))];
-      const requests = roots.flatMap(root => (states.length ? states : [stateRoot]).map(stateRoot => ({ root, stateRoot })));
-      const count = await requests.reduce(async (pending, { root, stateRoot }) => {
-        const previous = await pending;
-        const result: VerifiedResourceSet = await syncResources({ context: await loadConfig({ configRoot: root }), stateRoot,
-          mode: opts.update ? "update" : "reuse", parseManifest });
-        return previous + result.resources.length;
-      }, Promise.resolve(0));
-      process.stdout.write(`modeck sync: complete (${count} resources)\n`); return 0;
-    }
     if (command === "hook") {
       const agent = agentFor(opts);
       const event = parseEvent(await input(), agent);

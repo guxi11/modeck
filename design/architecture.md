@@ -81,7 +81,7 @@ Codex：官方现有 `hooks.json` 或 config.toml 内联 hook，SessionStart 的
 
 hook 统一调用同一 npm 可执行文件，读 stdin cwd 后调用 resolver；不在 hooks 里联网同步。hook 出错要有 stderr 和失败状态；各 agent 对失败状态是否阻止首次请求的差异要如实记录，不能保证所有运行时 fail-closed。
 
-安装默认预览，实际写入须明确 apply，支持指定 target root。仅管理自己创建的 skill 与 hook；已有文件应保留并合并，无可安全合并方式就报冲突。需要可回滚的安装记录或对称 uninstall，避免卸载他人内容。evoloop 标记的目标不应直接被本工具覆写，真实配置整合留用户选择；本次仅隔离验证，不执行用户机器 sync。
+安装默认预览，实际写入须明确 apply，支持指定 target root。仅管理自己创建的 skill 与 hook；已有文件应保留并合并，无可安全合并方式就报冲突。需要可回滚的安装记录或对称 uninstall，避免卸载他人内容。evoloop 标记的目标不应直接被本工具覆写，真实配置整合留用户选择；本次资源安装仅在隔离目录验证。
 
 参考依据：
 
