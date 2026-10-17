@@ -11,19 +11,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/agents-3-173B35?style=flat-square" alt="支持 3 种 agent：Claude Code、Codex、CodeBuddy Code CLI" title="支持的 agent 种类数：Claude Code、Codex、CodeBuddy Code CLI">
-  <img src="https://img.shields.io/badge/Node.js-%E2%89%A520-173B35?style=flat-square" alt="Node.js 20 或更高版本">
-</p>
-
-<p align="center">
-  <code>agents 3</code> 表示支持 Claude Code、Codex、CodeBuddy Code CLI 三种 agent；这是静态支持范围标识，不统计本机安装、当前绑定或运行中的 agent 数量。
-</p>
-
-<p align="center">
   <a href="assets/comparison.png"><img src="assets/comparison-share.svg" width="100%" alt="modeck 工作方式对比：原生 CC/Codex 的全局和项目资源分别维护；个人与团队配置统一组织规则、技能、外部资源和工作模式，供多个 agent 共用。"></a>
 </p>
 
-## 快速开始
+## 安装
 
 需要 Node.js 20+ 和你要使用的 agent CLI。通过 npm 全局安装：
 
