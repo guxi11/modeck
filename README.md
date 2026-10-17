@@ -35,13 +35,11 @@ modeck --version
 
    按提示选择 agent 和资源。初始化生成 `modeck.yaml` 和 `modeck-auto.mjs`；移动原生入口前展示变更与备份位置，受管或共享入口保留。
 
-2. 注册这个目录：
+2. 注册配置, 支持注册多份配置：
 
    ```sh
    modeck register
    ```
-
-   注册只加入目录清单。你可以分别注册多份配置。
 
 3. 选择启用的配置和绑定的 agent：
 
@@ -51,13 +49,14 @@ modeck --version
 
    modeck 安装 SessionStart hook，保留其他工具的 hook。使用 Codex 时，在 `/hooks` 中审查并信任安装的定义；绑定本身不授予信任。
 
-4. 进入业务项目目录，预览会话上下文：
+4. 预览会话上下文：
 
    ```sh
-   modeck render --agent codex
+   cd path-to-target-project
+   modeck render
    ```
 
-   输出规则正文和技能索引。之后在该目录启动原生 agent，会话通过 hook 加载选中的配置。
+   输出规则正文和技能索引。之后在该目录启动原生 agent，会话通过 hook 加载相同内容。
 
 ## 组合工作模式
 
@@ -91,7 +90,7 @@ rule 是 Markdown 文件，skill 是包含 `SKILL.md` 的完整目录。`default
 需要固定某个项目的工作模式时，在业务目录创建纯文本 `.modes`，可指定多个 mode：
 
 ```text
-base, prog
+prog,doc,web
 ```
 
 多个名称用逗号或换行分隔。非空 `.modes` 中的多个 mode 会组合加载，并保留默认 mode 和继承关系；缺失或空白时使用自动选择。
@@ -108,11 +107,6 @@ resources:
     team-guide: (use https://github.com/your-org/agent-resources.git)/rules/team-guide.md
   skills:
     review: (use https://github.com/your-org/agent-resources.git)/skills/review
-defaults: [base]
-modes:
-  base:
-    rules: [team-guide]
-    skills: [review]
 ```
 
 安装外部资源需要本机可用 Git。在配置目录运行：
@@ -151,15 +145,13 @@ Commands:
   res <init|update>  Manage external resources
   init                   Initialize configuration
   scan                   Import resources from agent homes
-  migrate                Migrate existing configuration
-  sync                   Synchronize resources
+  migrate                Migrate existing project-scope configuration
   resolve                Resolve context
   render                 Render context
   hook                   Handle agent session hooks
   register               Register a configuration
   unregister             Unregister a configuration
   config                 Manage registered configurations
-  run                    Run an agent with context
 
 Options:
   -h, --help              Show help
@@ -173,6 +165,7 @@ Options:
 `init` 创建配置；已有配置后用 `scan` 追加从 agent 用户目录发现的资源。`--list` 只输出发现结果的 JSON，不执行导入；实际导入时按提示选择资源，并在移动原生入口前确认变更和备份位置。
 
 ```sh
+modeck init # 进入引导流程
 modeck init --agent codex --config CONFIG_DIR --list
 modeck init --agent codex --config CONFIG_DIR
 modeck scan --agent claude --config CONFIG_DIR --list
