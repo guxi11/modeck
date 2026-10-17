@@ -75,7 +75,7 @@ modeck --version
 
 ## 组合工作方式
 
-在 `modeck.yaml` 中，使用你实际导入的资源名称和相对路径组织 mode：
+在 `modeck.yaml` 中声明资源，再通过资源名称组合 mode。本地资源写相对路径，外部资源写 `(use 仓库地址)/仓库内路径`：
 
 ```yaml
 resources:
@@ -83,6 +83,7 @@ resources:
     coding: rules/coding.md
   skills:
     review: skills/review
+    technical-documentation: (use https://github.com/wondelai/skills.git)/technical-documentation
 defaults: [base]
 modes:
   base: {}
@@ -90,7 +91,12 @@ modes:
     extends: [base]
     rules: [coding]
     skills: [review]
+  doc:
+    extends: [base]
+    skills: [technical-documentation]
 ```
+
+示例中的 `coding` 和 `review` 对应配置目录里已有的本地文件或目录；`technical-documentation` 从外部仓库安装。保存配置后，在配置目录运行 `modeck res init`，再在业务项目的 `.modes` 中选择 `prog`、`doc` 或组合使用。
 
 rule 是 Markdown 文件，skill 是包含 `SKILL.md` 的完整目录。`defaults` 始终加载，`extends` 可复用其他 mode。初始化导入的资源默认归入 `base`；将只用于编程的资源移入 `prog`，才能按需加载。
 
@@ -106,27 +112,47 @@ prog
 
 ## 管理外部资源
 
-直接在 `modeck.yaml` 的资源映射中声明 Git 地址和仓库内路径，名称可直接用于 mode：
+外部规则和技能都直接声明在 `modeck.yaml` 中，格式为 `资源名称: (use Git仓库地址)/仓库内路径`。rule 指向单个 Markdown 文件，skill 指向包含 `SKILL.md` 的目录。
+
+下面以你自己的资源仓库为例；将 `your-org/agent-resources` 和仓库内路径替换为实际值：
 
 ```yaml
 resources:
+  rules:
+    team-guide: (use https://github.com/your-org/agent-resources.git)/rules/team-guide.md
   skills:
-    technical-documentation: (use https://github.com/wondelai/skills.git)/technical-documentation
+    review: (use https://github.com/your-org/agent-resources.git)/skills/review
+defaults: [base]
 modes:
-  doc:
-    skills: [technical-documentation]
+  base:
+    rules: [team-guide]
+    skills: [review]
 ```
 
-在配置目录运行：
+安装外部资源需要本机可用 Git。在配置目录运行：
 
 ```sh
-modeck res init
-modeck res update
+modeck res init     # 安装新增资源，按锁恢复缺失内容
+modeck res update   # 主动更新到远端默认分支的最新版本
 ```
 
-`res init` 增量安装：首次从仓库默认分支获取，已有且完整的资源跳过，缺失资源按根目录 `modeck-lock.json` 中的 commit 和摘要恢复。输出包含逐项状态及安装汇总；`res update` 获取最新内容并展示处理进度，本地修改会阻止覆盖。
+`res init` 增量安装：没有锁记录的资源从仓库默认分支获取，已有且完整的资源跳过，缺失资源按 `modeck-lock.json` 中的 commit 和摘要恢复。`res update` 重新获取默认分支并更新锁记录。两个命令都输出逐项状态和数量汇总；本地内容被修改时会停止，避免覆盖。
 
-下载内容自动放入顶层 `vendor/skills/<id>/` 和 `vendor/rules/<id>.md`，`/vendor/` 和 `/.modeck/` 加入 `.gitignore`。已有 `.modeck/resources/` 安装会在 `res init` 校验后迁移，并保留锁定版本。共享 YAML 和 `modeck-lock.json`，无需填写 `head`、`ref` 或 `target`，也无需另建资源清单。rule 的同类声明指向仓库内的单个 Markdown 文件；本地资源仍使用相对路径。移除声明不会删除本地目录。
+安装目录按资源名称自动生成，保留规则与技能分类。上例对应：
+
+```text
+vendor/
+  rules/
+    team-guide.md
+  skills/
+    review/
+      SKILL.md
+modeck-lock.json
+```
+
+`/vendor/` 和 `/.modeck/` 会自动加入 `.gitignore`；`.modeck/` 存放本机状态、暂存和备份。共享 YAML 和根目录 `modeck-lock.json`，其他机器拉取配置后运行 `modeck res init`，即可安装相同的锁定版本。资源地址和路径留在 YAML，安装路径、commit 和摘要由工具维护。
+
+会话启动时只读取并校验这些已安装资源，不自动下载或更新。修改资源来源后需再次运行 `res init`；已有 `.modeck/resources/` 安装会在校验后迁移到 `vendor/`，保留锁定版本，目标重名或本地修改会阻止迁移。移除声明不会删除本地目录。
 
 ## 调整或移除绑定
 
