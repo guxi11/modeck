@@ -63,8 +63,8 @@ const checkExternalResources = (resources: readonly ExternalResourceSpec[]): voi
     const target = resource.target.toLowerCase();
     requireValue(!target.split("/").some(part => protectedNames.has(part))
       && !/[\s*?![\]\\#]/u.test(target)
-      && target.split("/").every((part, index) => part !== ".modeck"
-        || index === 0 && target.startsWith(".modeck/resources/")),
+      && target.split("/").every((part, index) => !part.startsWith(".")
+        || index === 0 && part === ".modeck" && target.startsWith(".modeck/resources/")),
     "E_PATH", "Unsafe external resource target", { target: resource.target });
     return target;
   });
