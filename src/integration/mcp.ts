@@ -1,13 +1,13 @@
 import { lstat, readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { canonical, isAgent, LIMITS, modeError, sha256 } from "../contracts/index.js";
-import type { Agent, Diagnostic, FileImage, McpApplyRequest, McpDecision, McpLocationRequest, McpObservation, McpPlan, McpRequest, McpServers, McpStatus } from "../contracts/index.js";
+import type { Agent, Diagnostic, FileImage, McpApplyRequest, McpBinding, McpDecision, McpLocationRequest, McpObservation, McpPlan, McpRequest, McpServers, McpStatus, McpTransaction } from "../contracts/index.js";
 import { copyJson, immutable } from "../core/values.js";
 import { atomic, checkDirectory, digest, ensureParents, imageJson, jsonImage, missing, object, readImage, safeAbsolute, same } from "./fs.js";
 import type { ParentIdentity } from "./fs.js";
 import { nativeMcpDefinitions, renderMcpServers, validateMcpEnvironment } from "./mcp-format.js";
 import { assertMcpUnlocked, withMcpLock } from "./mcp-lock.js";
-import { checkMcpPolicy, mcpLocation, nativeImage, nativeRoot, nativeServers } from "./mcp-native.js";
+import { assertDefaultCodexProfile, checkMcpPolicy, mcpLocation, nativeImage, nativeRoot, nativeServers } from "./mcp-native.js";
 
 export { renderMcpServers, validateMcpEnvironment } from "./mcp-format.js";
 export { assertMcpPolicy, checkMcpPolicy } from "./mcp-native.js";
@@ -19,6 +19,8 @@ type Ownership = Readonly<{ schemaVersion: 1; owner: "modeck/mcp/1"; path: strin
 const hash = (value: unknown): string => sha256(Buffer.from(canonical(value)));
 const imageHash = (image: FileImage | null): string | null => image ? digest(image) : null;
 const diagnostic = (message: string, path: string | null = null): Diagnostic => ({ code: "E_INSTALL_CONFLICT", message, path });
+export const mcpSnapshotWarning = "Native MCP is a static scope snapshot and does not isolate tools by mode. Mode selection controls only the modeck-owned server set; unmanaged native servers remain visible. Sessions sharing this scope may see its servers regardless of their selected mode. Before switching mode or working directory, stop active sessions, explicitly synchronize modeck config from the intended directory, then restart. Static scopes do not switch automatically with cwd or mode. Hooks cannot block startup, enforce tool visibility, or hot reload MCP.";
+export const codexSnapshotWarning = "modeck synchronizes only the default Codex global user snapshot. Native --profile and trusted-project MCP are Codex capabilities outside modeck's supported binding scope; do not launch a bound session with --profile or -c/--config MCP overrides.";
 const snapshotMcpRequest = (request: McpRequest): McpRequest => {
   if (Object.keys(object(request)).some(key => !["agent", "targetHome", "cwd", "scope", "desired", "configDigest", "provenance"].includes(key))) {
     throw modeError("E_CONFIG", "Unsupported MCP request field");
@@ -44,7 +46,8 @@ const snapshotMcpRequest = (request: McpRequest): McpRequest => {
   }
   return snapshot;
 };
-const recordPath = (home: string, path: string): string => join(home, ".local/share/modeck/mcp", `${hash(path)}.json`);
+export const mcpRecordPath = (home: string, path: string): string => join(home, ".local/share/modeck/mcp", `${hash(path)}.json`);
+const recordPath = mcpRecordPath;
 const endpointHash = (server: unknown): string => {
   const value = object(server);
   return hash(typeof value.url === "string" ? { url: value.url } : { command: value.command, args: value.args ?? [] });
@@ -147,15 +150,16 @@ export const inspectMcp = async (request: McpLocationRequest, selected?: McpServ
   } finally { await assertMcpUnlocked(location.checks); }
 };
 
-const inspect = async (request: McpRequest, heldPath?: string) => {
+const inspect = async (request: McpRequest, heldPath?: string, cleanup = false) => {
   if (!/^[a-f0-9]{64}$/u.test(request.configDigest)) throw modeError("E_CONFIG", "Invalid MCP configuration digest");
   const targetHome = await safeAbsolute(request.targetHome);
   const cwd = await safeAbsolute(request.cwd);
   await checkDirectory(targetHome);
   await checkDirectory(cwd);
-  const normalized: McpRequest = { agent: request.agent, targetHome, cwd, scope: request.scope ?? "user",
+  const normalized: McpRequest = { agent: request.agent, targetHome, cwd, scope: request.scope ?? (request.agent === "codex" ? "user" : "project"),
     desired: request.desired, configDigest: request.configDigest,
     ...(request.provenance === undefined ? {} : { provenance: request.provenance }) };
+  if (!cleanup) await assertDefaultCodexProfile(normalized);
   const policyPaths = await checkMcpPolicy(normalized);
   const location = await mcpLocation(normalized);
   await assertMcpUnlocked(location.checks, heldPath);
@@ -183,7 +187,8 @@ const inspect = async (request: McpRequest, heldPath?: string) => {
     // Every active scope is inspected, but none is copied into a plan or state record.
     await Promise.all(location.active.filter(other => other !== path).map(async other => {
       const otherRoot = nativeRoot(request.agent, await readImage(other));
-      if (request.agent === "codex" && otherRoot.profile !== undefined) conflicts.push(diagnostic("An active Codex profile requires explicit native configuration", other));
+      if (!cleanup && request.agent === "codex" && (otherRoot.profile !== undefined || otherRoot.profiles !== undefined
+        || Object.keys(nativeServers(otherRoot, location.key)).length)) conflicts.push(diagnostic("modeck synchronizes only Codex's default user snapshot; profile and native project MCP layers are outside its supported scope", other));
       const otherServers = location.topLevel.includes(other) ? nativeServers(otherRoot, location.key) : {};
       const projects = other !== location.localStore || !Object.hasOwn(otherRoot, "projects") ? {} : object(otherRoot.projects);
       const localRoot = Object.hasOwn(projects, cwd) ? object(projects[cwd]) : {};
@@ -193,7 +198,7 @@ const inspect = async (request: McpRequest, heldPath?: string) => {
         if (candidates.some(value => hash(value) !== hash(desired[name]))) conflicts.push(diagnostic("A different native scope defines this MCP server", other));
       });
     }));
-    if (request.agent === "codex" && (root.profile !== undefined || root.profiles !== undefined)) conflicts.push(diagnostic("Codex profiles require an explicit native profile target", path));
+    if (!cleanup && request.agent === "codex" && (root.profile !== undefined || root.profiles !== undefined)) conflicts.push(diagnostic("modeck requires Codex's default user snapshot; legacy profile tables require inspection", path));
     const servers: readonly McpDecision[] = [...new Set([...Object.keys(owned.servers), ...Object.keys(desired)])].sort().map(name => {
       const previous = Object.hasOwn(owned.servers, name) ? owned.servers[name] : undefined;
       const present = Object.hasOwn(current, name) ? current[name] : undefined;
@@ -243,8 +248,91 @@ const inspect = async (request: McpRequest, heldPath?: string) => {
     if (canonical(await observe(observations.map(value => value.path))) !== canonical(observations)) throw modeError("E_PLAN_STALE", "MCP configuration changed while planning");
     if (canonical(identities) !== canonical(await identityTargets(targetHome, location.checks))) throw modeError("E_PLAN_STALE", "MCP identity history changed while planning");
     await checkMcpPolicy(normalized);
-    return { request: normalized, path, state, observations, servers, conflicts, image, after, recordImage, afterRecord };
+    return { request: normalized, location, path, state, observations, servers, conflicts, image, after, recordImage, afterRecord };
   } finally { await assertMcpUnlocked(location.checks, heldPath); }
+};
+
+export const mcpSelectionDigest = (agent: Agent, selected: McpServers): string => hash(nativeMcpDefinitions(agent, selected));
+
+const historicalLocation = async (agent: Agent, targetHome: string, cwd: string, path: string): Promise<McpLocationRequest> => {
+  const user: McpLocationRequest = { agent, targetHome, cwd, scope: "user" };
+  if ((await mcpLocation(user)).path === path) return user;
+  const project: McpLocationRequest = { agent, targetHome, cwd: dirname(path), scope: "project" };
+  if (agent !== "codex" && (await mcpLocation(project)).path === path) return project;
+  throw modeError("E_INSTALL_CONFLICT", "A legacy owned MCP scope cannot be identified safely; inspect it before rebinding", { path });
+};
+
+export const planBindingMcp = async (location: McpLocationRequest, selection?: Pick<McpRequest, "desired" | "configDigest" | "provenance">): Promise<McpTransaction> => {
+  const identities = await identityTargets(location.targetHome, []);
+  const records = await identityRecords(location.targetHome, identities);
+  const current = selection === undefined ? null : (await mcpLocation(location)).path;
+  const prior = records.filter(record => Object.values(record.servers).some(server => server.agent === location.agent));
+  const locations = [...(selection === undefined ? [] : [location]), ...await Promise.all(prior.filter(record => record.path !== current)
+    .map(record => historicalLocation(location.agent, location.targetHome, location.cwd, record.path)))];
+  const results = await Promise.all(locations.map(target => inspect({ ...target,
+    ...(selection !== undefined && canonical(target) === canonical(location) ? selection : { desired: {}, configDigest: "0".repeat(64) }) }, undefined,
+    selection === undefined || canonical(target) !== canonical(location))));
+  const conflicts = results.flatMap(result => result.conflicts);
+  if (conflicts.length) throw modeError("E_INSTALL_CONFLICT", conflicts.map(conflict => conflict.message).join("; "));
+  // A different binding's unselected server remains visible in a shared static scope.
+  if (selection !== undefined) {
+    if (results[0]?.servers.some(server => server.ownerAgent !== null && server.ownerAgent !== location.agent
+      && server.desiredDigest !== null)) throw modeError("E_INSTALL_CONFLICT", "Another binding owns a selected MCP server in the destination; use modeck config --scope user for separate agent stores");
+    const active = (await mcpLocation(location)).topLevel;
+    const remaining = records.filter(record => active.includes(record.path)).flatMap(record => Object.entries(record.servers)
+      .filter(([name, server]) => server.agent !== location.agent && !Object.hasOwn(selection.desired, name)));
+    if (remaining.length) throw modeError("E_INSTALL_CONFLICT", "Another binding owns unselected MCP servers in an active static scope; synchronize or unbind that owner first, then use modeck config --scope user for separate agent stores");
+  }
+  const changes = results.flatMap(result => [
+    { path: result.path, before: result.image, after: result.after, category: "shared-json" as const },
+    { path: result.state, before: result.recordImage, after: result.afterRecord, category: "owned" as const },
+  ].filter(change => !same(change.before, change.after)).map(({ before, ...change }) => ({ ...change,
+    beforeDigest: imageHash(before), beforeMode: before?.mode ?? null })));
+  const observations = await observe([...results.flatMap(result => result.observations.map(value => value.path)),
+    ...identities.map(path => recordPath(location.targetHome, path))]);
+  if (results.some(result => result.observations.some(value => canonical(value) !== canonical(observations.find(row => row.path === value.path))))
+    || canonical(identities) !== canonical(await identityTargets(location.targetHome, []))
+    || canonical(results.map(result => result.location)) !== canonical(await Promise.all(locations.map(mcpLocation)))) {
+    throw modeError("E_PLAN_STALE", "MCP configuration changed while planning binding");
+  }
+  return { locations, observations, topology: results.map(result => result.location), identityTargets: identities, changes,
+    defaultProfileOnly: selection !== undefined && location.agent === "codex" };
+};
+
+export const verifyBindingMcp = async (home: string, transaction: McpTransaction, heldPaths: readonly string[]): Promise<void> => {
+  const locations = await Promise.all(transaction.locations.map(mcpLocation));
+  if (canonical(locations) !== canonical(transaction.topology)) throw modeError("E_PLAN_STALE", "Native MCP scope topology changed after binding planning");
+  if (transaction.defaultProfileOnly) await Promise.all(transaction.locations.map(assertDefaultCodexProfile));
+  await assertMcpUnlocked(locations.flatMap(location => location.checks), heldPaths);
+  await Promise.all(transaction.locations.map(checkMcpPolicy));
+  if (canonical(transaction.observations) !== canonical(await observe(transaction.observations.map(value => value.path)))
+    || canonical(transaction.identityTargets) !== canonical(await identityTargets(home, []))) {
+    throw modeError("E_PLAN_STALE", "Native MCP configuration or ownership changed after binding planning");
+  }
+  await Promise.all(transaction.locations.map(checkMcpPolicy));
+  if (canonical(locations) !== canonical(await Promise.all(transaction.locations.map(mcpLocation)))) {
+    throw modeError("E_PLAN_STALE", "Native MCP scope topology changed during binding validation");
+  }
+};
+
+export const bindingMcpWarning = async (agent: Agent, targetHome: string, cwd: string, binding: McpBinding | undefined,
+  selected: McpServers): Promise<string | null> => {
+  const warning = `MCP selection is not synchronized with this native session. Previously loaded servers may remain available; do not use MCP tools in this session. ${mcpSnapshotWarning}${agent === "codex" ? ` ${codexSnapshotWarning}` : ""}`;
+  try {
+    if (!binding || binding.selectionDigest !== mcpSelectionDigest(agent, selected)
+      || binding.scope === "project" && binding.cwd !== cwd) return warning;
+    const location = { agent, targetHome, cwd, scope: binding.scope };
+    await assertDefaultCodexProfile(location);
+    const native = await inspectMcp(location, selected);
+    if (agent === "codex") {
+      const paths = await mcpLocation(location);
+      const roots = await Promise.all(paths.active.map(async path => ({ path, root: nativeRoot(agent, await readImage(path)) })));
+      if (roots.some(({ path, root }) => root.profile !== undefined || root.profiles !== undefined
+        || path !== paths.path && Object.keys(nativeServers(root, paths.key)).length)) return warning;
+    }
+    const desired = nativeMcpDefinitions(agent, selected);
+    return Object.entries(desired).some(([name, server]) => !Object.hasOwn(native, name) || hash(native[name]) !== hash(server)) ? warning : null;
+  } catch { return warning; }
 };
 
 export const planMcp = async (request: McpRequest): Promise<McpPlan> => {
@@ -253,7 +341,8 @@ export const planMcp = async (request: McpRequest): Promise<McpPlan> => {
   const payload = { schemaVersion: 1 as const, owner: "modeck/mcp/1" as const, request: result.request,
     targetPath: result.path, recordPath: result.state, observations: result.observations,
     servers: result.servers, conflicts: result.conflicts,
-    warnings: [{ code: "MCP_CONFIGURATION_ONLY", message: "Native configuration only: effective policy, authentication, connection, tool visibility and approval remain agent responsibilities.", path: null }] };
+    warnings: [{ code: "MCP_CONFIGURATION_ONLY", message: "Native configuration only: effective policy, authentication, connection, tool visibility and approval remain agent responsibilities.", path: null },
+      { code: "MCP_STATIC_SNAPSHOT", message: `${mcpSnapshotWarning}${request.agent === "codex" ? ` ${codexSnapshotWarning}` : ""}`, path: null }] };
   return { ...payload, planDigest: hash(payload) };
 };
 

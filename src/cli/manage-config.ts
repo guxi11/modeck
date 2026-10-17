@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { agents, canonical, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { Agent, BindPlan, BindRecord, ConfigRegistry, ConfigSourceRole, FileImage } from "../contracts/index.js";
 import { loadConfig } from "../core/index.js";
-import { applyBindPlan, loadRecord, planBind, planUnbind } from "../integration/install.js";
+import { applyBindPlans, bindingPlanConflicts, loadRecord, planBind, planUnbind, reverseBindPlans } from "../integration/install.js";
 import { atomic, checkDirectory, digest, ensureParents, imageJson, jsonImage, missing, object, parentIdentity, readImage, safeAbsolute, same } from "../integration/fs.js";
 import { loadRegistry, registryPath, registryRoot, sourceFor } from "../integration/registry.js";
 import { prepare } from "../integration/prepare.js";
@@ -90,20 +90,6 @@ const answersFor = async (answers: string | undefined, before: Snapshot): Promis
   return { configs, agents: selected };
 };
 
-const reverse = async (plan: BindPlan): Promise<BindPlan> => {
-  const changes = await Promise.all(plan.changes.map(async change => {
-    const before = await readImage(join(plan.targetHome, change.path));
-    if ((before ? digest(before) : null) !== change.beforeDigest || (before?.mode ?? null) !== change.beforeMode) {
-      return stale("Binding files changed before applying configuration");
-    }
-    return { ...change, beforeDigest: change.after ? digest(change.after) : null,
-      beforeMode: change.after?.mode ?? null, after: before };
-  }));
-  const payload = { ...plan, operation: plan.operation === "bind" ? "unbind" as const : "bind" as const, changes };
-  const { planDigest: _, ...body } = payload;
-  return { ...body, planDigest: hash(body) };
-};
-
 export const manageConfig = async (command: "register" | "unregister" | "config", home: string, cwd: string, runtimeRoot: string,
   opts: Options): Promise<{ readonly conflicts?: boolean; readonly [key: string]: unknown }> => {
   const root = await safeAbsolute(registryRoot(home));
@@ -111,7 +97,8 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
   if (command === "config" && opts.list) {
     if (opts.answers || opts["dry-run"] || opts.expect) throw modeError("E_USAGE", "--list cannot be combined with --answers, --dry-run or --expect");
     return { ...before.registry, agents: agents.map((agent, index) => ({ agent, bound: before.records[index] !== null,
-      configRoot: before.records[index]?.configRoot ?? null, stateRoot: before.records[index]?.stateRoot ?? null })) };
+      configRoot: before.records[index]?.configRoot ?? null, stateRoot: before.records[index]?.stateRoot ?? null,
+      mcp: before.records[index]?.mcp ?? null })) };
   }
   const expected = opts.expect;
   if (expected !== undefined && (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected))) throw modeError("E_USAGE", "Invalid expected plan digest");
@@ -123,6 +110,10 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
     if (project === root) throw modeError("E_CONFIG", "The registry directory cannot be registered as a configuration project");
     if (command === "unregister" && before.records.some(record => record?.configRoot === project)) {
       throw modeError("E_CONFIG", "Legacy agent bindings still reference this project; run modeck config before unregistering it", { project });
+    }
+    if (command === "unregister" && before.records.some(record => record?.configRoot === root)
+      && before.registry.projects.some(entry => entry.root === project && entry.enabled)) {
+      throw modeError("E_CONFIG", "Disable this configuration with modeck config before unregistering it; bound native MCP must be synchronized in the same transaction");
     }
     if (command === "register") await loadConfig({ configRoot: project });
     const exists = before.registry.projects.some(entry => entry.root === project);
@@ -160,7 +151,7 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
     const stateRoot = await stateFor(agents.indexOf(agent));
     const prepared = await prepare({ agent, configRoot: root, configRoots: roots, stateRoot, cwd });
     return { agent, stateRoot, configDigest: prepared.plan.configDigest, resourceDigest: prepared.plan.resourceDigest,
-      selectionDigest: prepared.rendered.selectionDigest, contentDigest: prepared.rendered.contentDigest };
+      selectionDigest: prepared.rendered.selectionDigest, contentDigest: prepared.rendered.contentDigest, mcpDigest: prepared.mcp.configDigest };
   }));
   const prepared = await fingerprints();
   const plans = await agents.reduce(async (pending, agent, index) => {
@@ -169,7 +160,8 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
     if (!selected.agents.includes(agent) && !record) return previous;
     const stateRoot = await stateFor(index);
     const plan = selected.agents.includes(agent)
-      ? await planBind({ agent, targetHome: home, configRoot: root, stateRoot, runtimeRoot, configRoots: roots })
+      ? await planBind({ agent, targetHome: home, configRoot: root, stateRoot, runtimeRoot, configRoots: roots, cwd,
+        ...(typeof opts.scope === "string" ? { scope: opts.scope as "user" | "project" } : {}) })
       : await planUnbind({ agent, targetHome: home });
     return [...previous, plan];
   }, Promise.resolve([] as readonly BindPlan[]));
@@ -177,31 +169,31 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
     before: before.image ? { digest: digest(before.image), mode: before.image.mode } : null, registry, plans,
     fingerprints: prepared });
   if (expected !== undefined && expected !== planDigest) return stale("Configuration plan digest changed");
-  const conflicts = plans.some(plan => plan.conflicts.length > 0);
+  const sharedConflicts = bindingPlanConflicts(plans);
+  const conflicts = sharedConflicts.length > 0 || plans.some(plan => plan.conflicts.length > 0);
   const result = { ...registry, plans: plans.map(plan => ({ ...plan, changes: plan.changes.map(({ after, ...change }) => ({
     ...change, afterDigest: after ? digest(after) : null, afterMode: after?.mode ?? null,
-  })) })), planDigest, conflicts, applied: !opts["dry-run"] && !conflicts };
+  })), ...(plan.mcp ? { mcp: { ...plan.mcp, changes: plan.mcp.changes.map(({ after, ...change }) => ({
+    ...change, afterDigest: after ? digest(after) : null, afterMode: after?.mode ?? null,
+  })) } } : {}), conflicts: [...plan.conflicts, ...sharedConflicts] })), planDigest, conflicts, applied: !opts["dry-run"] && !conflicts };
   if (opts["dry-run"] || conflicts) return result;
   return locked(home, root, async retain => {
     await unchanged(home, root, before);
     if (canonical(await fingerprints()) !== canonical(prepared)) {
       return stale("Selected configuration content changed after planning");
     }
-    const inverses = await Promise.all(plans.map(reverse));
-    const completed: BindPlan[] = [];
+    const inverses = await reverseBindPlans(plans);
+    let completed = false;
     try {
-      await plans.reduce(async (pending, plan, index) => {
-        await pending;
-        await applyBindPlan({ plan });
-        completed.push(inverses[index]!);
-      }, Promise.resolve());
+      await applyBindPlans(plans);
+      completed = true;
       await publish(root, before.image, registry);
       return result;
     } catch (error) {
-      const restored = await [...completed].reverse().reduce(async (pending, plan) => {
-        const prior = await pending;
-        try { await applyBindPlan({ plan }); return prior; } catch { return false; }
-      }, Promise.resolve(true));
+      const restored = await (async () => {
+        if (!completed) return true;
+        try { await applyBindPlans(inverses); return true; } catch { return false; }
+      })();
       const interrupted = error instanceof Error && "code" in error && error.code === "E_INSTALL_CONFLICT"
         && (await Promise.all(plans.map(async plan => {
           try { await lstat(join(home, ".modeck", plan.agent, "install.lock")); return true; }

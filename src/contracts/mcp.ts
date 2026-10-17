@@ -1,4 +1,4 @@
-import type { Agent, Diagnostic, McpProvenance, McpServer } from "./types.js";
+import type { Agent, Diagnostic, FileChange, McpProvenance, McpServer } from "./types.js";
 import { agents } from "./agents.js";
 
 export type McpAgent = Agent | "cursor" | "copilot" | "opencode";
@@ -8,12 +8,17 @@ export const isMcpAgent = (value: unknown): value is McpAgent => typeof value ==
 export type McpServers = Readonly<Record<string, McpServer>>;
 export type McpScope = "user" | "project";
 export type McpLocationRequest = Readonly<{ agent: Agent; targetHome: string; cwd: string; scope?: McpScope }>;
+export type McpLocation = Readonly<{ path: string; key: "mcpServers" | "mcp_servers";
+  checks: readonly string[]; active: readonly string[]; topLevel: readonly string[]; localStore: string | null }>;
 export type McpPlanRequest = McpLocationRequest & Readonly<{ desired: McpServers; configDigest: string;
   provenance?: readonly McpProvenance[] }>;
 export type McpRequest = McpPlanRequest;
 export type McpDecision = Readonly<{ name: string; action: "add" | "update" | "remove" | "keep" | "conflict";
   ownerAgent: Agent | null; ownedDigest: string | null; currentDigest: string | null; desiredDigest: string | null }>;
 export type McpObservation = Readonly<{ path: string; digest: string | null; mode: number | null }>;
+export type McpBinding = Readonly<{ cwd: string; scope: McpScope; selectionDigest: string }>;
+export type McpTransaction = Readonly<{ locations: readonly McpLocationRequest[]; observations: readonly McpObservation[];
+  topology: readonly McpLocation[]; identityTargets: readonly string[]; changes: readonly FileChange[]; defaultProfileOnly: boolean }>;
 export type McpPlan = Readonly<{ schemaVersion: 1; owner: "modeck/mcp/1"; request: McpPlanRequest;
   targetPath: string; recordPath: string; observations: readonly McpObservation[];
   servers: readonly McpDecision[]; conflicts: readonly Diagnostic[]; warnings: readonly Diagnostic[]; planDigest: string }>;

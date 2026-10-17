@@ -14,6 +14,7 @@ import { manageConfig } from "./manage-config.js";
 import { manageMcp } from "./mcp.js";
 import { configRoots } from "../integration/registry.js";
 import { loadRecord } from "../integration/install.js";
+import { bindingMcpWarning } from "../integration/mcp.js";
 import { selectAgents } from "./bind.js";
 import { encodeHook, prepare, runAgent } from "../integration/index.js";
 import { imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
@@ -27,7 +28,7 @@ const help = "Usage: modeck <command> [options]\n\nCommands:\n"
   + "  render                 Render context\n  hook                   Handle agent session hooks\n"
   + "  register               Register a configuration\n  unregister             Unregister a configuration\n"
   + "  config                 Manage registered configurations\n  mcp <render|plan|apply|status>  Manage selected MCP servers\n"
-  + "  run                    Start one agent session with context and selected MCP servers\n\n"
+  + "  run                    Try an unbound agent with context and selected MCP servers\n\n"
   + "Options:\n  -h, --help              Show help\n  -v, --version           Show version\n";
 const commandHelp: Readonly<Record<string, string>> = {
   init: "Usage: modeck init [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
@@ -35,19 +36,20 @@ const commandHelp: Readonly<Record<string, string>> = {
   migrate: "Usage: modeck migrate [--config <dir>] [--mode <name>] [--list | --answers <file>] [-h|--help]\n",
   register: "Usage: modeck register [--config <dir>] [--role <personal|team|project>] [--namespace <id>] [--target-home <dir>] [-h|--help]\n",
   unregister: "Usage: modeck unregister [--config <dir>] [--target-home <dir>] [-h|--help]\n",
-  config: "Usage: modeck config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--dry-run] [--expect <digest>] [-h|--help]\n",
+  config: "Usage: modeck config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--scope <user|project>] [--dry-run] [--expect <digest>] [-h|--help]\n",
   resource: "Usage: modeck res <init|update> [--config <dir>] [-h|--help]\n",
   mcp: "Usage: modeck mcp <render|plan|apply|status> --agent <name> [--config <dir>] [--cwd <dir>] [--state <dir>] [--target-home <dir>] [--scope <user|project>] [--expect <digest>] [-h|--help]\n\n"
     + "Agents: claude, codex, codebuddy. Render only: cursor, copilot (VS Code), opencode.\n"
     + "render emits native server definitions with environment references; plan previews per-server ownership changes.\n"
     + "Render-only targets accept stdio and HTTP with basic command/args/env or url/headers fields; explicit SSE is rejected.\n"
     + "apply requires --expect from the current plan and rejects changed files or ownership drift.\n"
-    + "Native synchronization is explicit; run injects selected servers for a single session.\n"
+    + "Native synchronization is explicit and requires restarting the agent. Static scopes never switch automatically with cwd or mode.\n"
     + "status reports configuration and ownership only. Tool visibility, OAuth and approval remain native agent decisions.\n"
-    + "Scope defaults to project; Codex supports user scope only. Secrets are read from the agent environment.\n",
+    + "Defaults: Claude/CodeBuddy project; Codex user. Bound agents retain their recorded scope unless --scope is supplied.\n"
+    + "modeck synchronizes Codex user scope only; native --profile, -c/--config MCP overrides and trusted-project MCP are outside its supported binding scope. Secrets are read from the agent environment.\n",
   run: "Usage: modeck run --agent <claude|codex|codebuddy> [--config <dir>] [--cwd <dir>] [--state <dir>] [--executable <file>] [-h|--help] [-- <agent arguments>]\n\n"
     + "Prepare mode rules, skills and MCP servers for one agent session without creating a hook binding.\n"
-    + "Use this to try a configuration or launch a temporary/CI session. Bound agents can normally be started directly.\n\n"
+    + "Use this to try a configuration or launch a temporary/CI session. Bound agents reject run; start the native agent directly.\n\n"
     + "Options:\n"
     + "  --agent <name>         Required agent CLI: claude, codex or codebuddy\n"
     + "  --config <dir>         Configuration directory; defaults to registered/bound/current configuration\n"
@@ -70,7 +72,7 @@ const values: Readonly<Record<string, readonly string[]>> = {
   init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"],
   resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
   hook: ["config", "state", "agent"], register: ["config", "target-home", "role", "namespace"], unregister: ["config", "target-home"],
-  config: ["answers", "target-home", "state", "expect", "format"], run: ["config", "state", "cwd", "agent", "executable"],
+  config: ["answers", "target-home", "state", "expect", "format", "scope"], run: ["config", "state", "cwd", "agent", "executable"],
   mcp: ["config", "state", "cwd", "agent", "target-home", "scope", "expect"],
 };
 const booleans: Readonly<Record<string, readonly string[]>> = { init: ["list"], scan: ["list"], migrate: ["list"], config: ["list", "dry-run"] };
@@ -199,8 +201,7 @@ export const main = async (argv: string[]): Promise<number> => {
     }
     const configured = async (single = false, agent?: Agent) => {
       const record = agent === undefined ? null : await loadRecord(homedir(), agent);
-      // Until config migrates a legacy hook, its wrapper must use the same root.
-      const explicit = typeof opts.config === "string" ? opts.config : command === "run" ? record?.configRoot : undefined;
+      const explicit = typeof opts.config === "string" ? opts.config : command === "mcp" ? record?.configRoot : undefined;
       const configRoot = await (single ? projectRootFor : configRootFor)(homedir(), process.cwd(), explicit);
       const roots = command === "resolve" && !record ? await configRoots(configRoot) : [];
       const fallback = command === "resolve" && !record
@@ -237,21 +238,29 @@ export const main = async (argv: string[]): Promise<number> => {
     const selectedAgent = command === "resolve" ? "codex" : command === "mcp" ? (isAgent(opts.agent) ? opts.agent : undefined) : opts.agent !== undefined ? agentFor(opts)
       : command === "render" ? (await selectAgents("render", await pathFor(homedir())))[0] : undefined;
     if (command === "render" && !selectedAgent) return 0;
+    if (command === "run" && selectedAgent && await loadRecord(homedir(), selectedAgent)) {
+      throw modeError("E_WRAPPER_CONFLICT", `Agent is bound; start ${agentDefinitions[selectedAgent].executable} directly. Explicitly synchronize modeck config before restarting after a mode or cwd change.`);
+    }
     const { configRoot, stateRoot } = await configured(false, selectedAgent);
     if (command === "hook") {
       const agent = agentFor(opts);
       const event = parseEvent(await input(), agent);
       const normalized = { ...event, cwd: await realpath(event.cwd) };
-      const { rendered } = await prepare({ agent, configRoot, stateRoot, cwd: normalized.cwd });
+      const { rendered, mcp } = await prepare({ agent, configRoot, stateRoot, cwd: normalized.cwd });
+      const record = await loadRecord(homedir(), agent);
+      const warning = record || Object.keys(mcp.servers).length
+        ? await bindingMcpWarning(agent, homedir(), normalized.cwd, record?.mcp, mcp.servers) : null;
       const reply = encodeHook({ event: normalized, rendered, marker: runMarker(), configRoot, stateRoot });
-      if (reply) json(reply); return 0;
+      if (warning) process.stderr.write(`modeck: ${warning}\n`);
+      if (reply) json(warning ? { hookSpecificOutput: { ...reply.hookSpecificOutput,
+        additionalContext: `${reply.hookSpecificOutput.additionalContext}\n\n${warning}` } } : reply); return 0;
     }
     const cwd = await realpath(absolute(String(opts.cwd ?? process.cwd())));
     if (command === "mcp") {
       const agent = mcpAgentFor(opts, argv[1]!);
       const result = await manageMcp({ action: hasAction ? argv[1]! : "", agent, configRoot, stateRoot, cwd,
         targetHome: await pathFor(String(opts["target-home"] ?? homedir())),
-        scope: String(opts.scope ?? (agent === "codex" ? "user" : "project")),
+        ...(typeof opts.scope === "string" ? { scope: opts.scope } : {}),
         ...(typeof opts.expect === "string" ? { expectDigest: opts.expect } : {}) });
       json(result);
       return items(object(result).conflicts).length ? 4 : 0;

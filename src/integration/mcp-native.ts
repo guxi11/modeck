@@ -3,37 +3,61 @@ import { readdir } from "node:fs/promises";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { applyEdits, getNodeValue, modify, parseTree } from "jsonc-parser";
 import type { Node, ParseError } from "jsonc-parser";
-import { canonical, isAgent, modeError } from "../contracts/index.js";
-import type { Agent, FileImage, McpLocationRequest } from "../contracts/index.js";
+import { agentDefinitions, canonical, isAgent, modeError } from "../contracts/index.js";
+import type { Agent, FileImage, McpLocation, McpLocationRequest } from "../contracts/index.js";
 import { data, imageJson, jsonImage, missing, object, readImage, safeAbsolute } from "./fs.js";
 
-export type { McpLocationRequest } from "../contracts/index.js";
-export type McpLocation = Readonly<{ path: string; key: "mcpServers" | "mcp_servers";
-  checks: readonly string[]; active: readonly string[]; topLevel: readonly string[]; localStore: string | null }>;
+export type { McpLocation, McpLocationRequest } from "../contracts/index.js";
 const ancestorRoots = (cwd: string): readonly string[] => dirname(cwd) === cwd ? [cwd] : [cwd, ...ancestorRoots(dirname(cwd))];
 const firstFile = async (paths: readonly string[]): Promise<string> => {
   const found = await Promise.all(paths.map(async path => await readImage(path) ? path : null));
   return found.find(path => path !== null) ?? paths[0]!;
 };
-export const mcpLocation = async ({ agent, targetHome, cwd, scope = "user" }: McpLocationRequest): Promise<McpLocation> => {
+export const codebuddyMcpCandidates = (home: string, cwd: string) => ({
+  user: [join(home, ".codebuddy/.mcp.json"), join(home, ".codebuddy/mcp.json"), join(home, ".codebuddy.json")],
+  project: [join(cwd, ".mcp.json"), join(cwd, "mcp.json")],
+} as const);
+const agentConfigHome = (agent: Agent, home: string): string => {
+  const { configDirectory, configEnvironment } = agentDefinitions[agent];
+  const expected = join(home, configDirectory);
+  const configured = process.env[configEnvironment];
+  if (configured !== undefined && configured !== expected) {
+    throw modeError("E_CONFIG", "An alternate agent configuration home cannot be safely synchronized");
+  }
+  return expected;
+};
+export const mcpLocation = async ({ agent, targetHome, cwd, scope = agent === "codex" ? "user" : "project" }: McpLocationRequest): Promise<McpLocation> => {
   if (!isAgent(agent)) throw modeError("E_CONFIG", "Unsupported MCP agent");
   const home = await safeAbsolute(targetHome);
   const project = await safeAbsolute(cwd);
+  const configHome = agentConfigHome(agent, home);
+  const candidates = codebuddyMcpCandidates(home, project);
   if (scope !== "user" && scope !== "project") throw modeError("E_USAGE", "Unknown MCP scope");
-  if (agent === "codex" && scope === "project") throw modeError("E_CONFIG", "Codex MCP synchronization supports user scope only; project trust requires native configuration");
-  const user = agent === "claude" ? join(home, ".claude.json") : agent === "codex" ? join(home, ".codex/config.toml")
-    : await firstFile([join(home, ".codebuddy/.mcp.json"), join(home, ".codebuddy/mcp.json"), join(home, ".codebuddy.json")]);
+  if (agent === "codex" && scope === "project") throw modeError("E_CONFIG", "modeck supports Codex user scope only; native trusted-project MCP is outside this synchronization implementation");
+  // Explicit CLAUDE_CONFIG_DIR relocates the user/local MCP store, even at the default directory.
+  const user = agent === "claude" ? join(process.env.CLAUDE_CONFIG_DIR === undefined ? home : configHome, ".claude.json") : agent === "codex" ? join(home, ".codex/config.toml")
+    : await firstFile(candidates.user);
   const local = agent === "claude" ? join(project, ".mcp.json") : agent === "codex" ? join(project, ".codex/config.toml")
-    : await firstFile([join(project, ".mcp.json"), join(project, "mcp.json")]);
+    : await firstFile(candidates.project);
   const path = scope === "user" ? user : local;
   const checks = agent === "codex" ? [user, ...ancestorRoots(project).map(root => join(root, ".codex/config.toml"))]
-    : agent === "claude" ? [user, local] : [join(home, ".codebuddy.json"), join(home, ".codebuddy/.mcp.json"), join(home, ".codebuddy/mcp.json"), join(project, ".mcp.json"), join(project, "mcp.json")];
+    : agent === "claude" ? [user, local] : [join(home, ".codebuddy.json"), ...candidates.user, ...candidates.project];
   const topLevel = agent === "codebuddy" ? [...new Set([user, local])]
     : agent === "codex" ? [...new Set([user, ...ancestorRoots(project).toReversed().map(root => join(root, ".codex/config.toml"))])] : [...new Set(checks)];
   const active = agent === "codebuddy" ? [user, local, join(home, ".codebuddy.json")] : topLevel;
   return { path, key: agent === "codex" ? "mcp_servers" : "mcpServers", checks: [...new Set(checks)], active: [...new Set(active)],
     topLevel,
     localStore: agent === "codebuddy" ? join(home, ".codebuddy.json") : agent === "claude" ? user : null };
+};
+
+export const assertDefaultCodexProfile = async ({ agent, targetHome }: McpLocationRequest): Promise<void> => {
+  if (agent !== "codex") return;
+  const directory = agentConfigHome(agent, await safeAbsolute(targetHome));
+  await safeAbsolute(directory);
+  const names = await readdir(directory).catch(error => { if (missing(error)) return []; throw error; });
+  if (names.some(name => name.endsWith(".config.toml"))) {
+    throw modeError("E_CONFIG", "modeck synchronizes only the default Codex user snapshot; named *.config.toml profiles were found and native --profile is outside its synchronization contract");
+  }
 };
 
 const jsoncRoot = (text: string): Record<string, unknown> => {
@@ -89,11 +113,8 @@ export const checkMcpPolicy = async ({ agent, targetHome, cwd }: McpLocationRequ
   if (!isAgent(agent)) throw modeError("E_CONFIG", "Unsupported MCP agent");
   const home = await safeAbsolute(targetHome);
   const project = await safeAbsolute(cwd);
-  const configDir = agent === "claude" ? ".claude" : agent === "codex" ? ".codex" : ".codebuddy";
-  const environment = agent === "claude" ? "CLAUDE_CONFIG_DIR" : agent === "codex" ? "CODEX_HOME" : "CODEBUDDY_CONFIG_DIR";
-  if (process.env[environment] && process.env[environment] !== join(home, configDir)) {
-    throw modeError("E_CONFIG", "An alternate agent configuration home cannot be safely synchronized");
-  }
+  const configDir = agentDefinitions[agent].configDirectory;
+  agentConfigHome(agent, home);
   const system = process.platform === "darwin" ? agent === "claude" ? "/Library/Application Support/ClaudeCode" : agent === "codebuddy" ? "/Library/Application Support/CodeBuddy" : "/Library/Application Support/Codex"
     : agent === "claude" ? "/etc/claude-code" : agent === "codebuddy" ? "/etc/codebuddy" : "/etc/codex";
   const unixCodex = process.platform === "darwin" ? "/private/etc/codex" : "/etc/codex";

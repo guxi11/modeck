@@ -5,8 +5,9 @@ import { atomic, checkDirectory, ensureParents, missing, parentIdentity, safeAbs
 
 export const mcpLockPath = (path: string): string => join(dirname(path), `.modeck-mcp-${sha256(Buffer.from(path)).slice(0, 24)}.lock`);
 
-export const assertMcpUnlocked = async (paths: readonly string[], heldPath?: string): Promise<void> => {
-  await Promise.all([...new Set(paths)].filter(path => path !== heldPath).map(async path => {
+export const assertMcpUnlocked = async (paths: readonly string[], heldPath?: string | readonly string[]): Promise<void> => {
+  const held = typeof heldPath === "string" ? [heldPath] : heldPath ?? [];
+  await Promise.all([...new Set(paths)].filter(path => !held.includes(path)).map(async path => {
     try { await lstat(mcpLockPath(path)); }
     catch (error) { if (missing(error)) return; throw error; }
     throw modeError("E_BUSY", "MCP shared configuration is locked");
@@ -31,8 +32,10 @@ export const withMcpLock = async <T>(path: string, action: () => Promise<T>): Pr
     throw error;
   } finally {
     await handle.close().catch(() => undefined);
-    const current = await lstat(lockPath);
-    if (current.ino !== identity.ino || current.dev !== identity.dev) throw modeError("E_INSTALL_CONFLICT", "MCP lock ownership changed");
-    if (!retain) await atomic(lockPath, null, parent);
+    const current = await lstat(lockPath).catch(() => null);
+    if (!current || current.ino !== identity.ino || current.dev !== identity.dev) throw modeError("E_INSTALL_CONFLICT", "MCP lock ownership changed; inspect the binding transaction", { retainMcpLock: true, retainInstallLock: true });
+    if (!retain) await atomic(lockPath, null, parent).catch(() => {
+      throw modeError("E_INSTALL_CONFLICT", "MCP lock could not be released safely; inspect the binding transaction", { retainMcpLock: true, retainInstallLock: true });
+    });
   }
 };

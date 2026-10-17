@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { agentDefinitions, LIMITS, modeError } from "../contracts/index.js";
 import type { Agent, RunAgentRequest, RunResult } from "../contracts/index.js";
 import { codexConfig } from "./codex.js";
@@ -9,6 +10,7 @@ import { data, imageJson, object, readImage, safeAbsolute } from "./fs.js";
 import { markerText } from "./hooks.js";
 import { prepare } from "./prepare.js";
 import { prepareMcpLaunch } from "./mcp-launch.js";
+import { loadRecord } from "./install.js";
 
 type Parsed = { readonly rest: readonly string[]; readonly overrides: readonly string[];
   readonly cd: string | null; readonly append: string | null; readonly appendFile: string | null;
@@ -65,6 +67,7 @@ const parseArguments = (agent: Agent, argv: readonly string[]): Parsed => {
 export const runAgent = async (request: RunAgentRequest): Promise<RunResult> => {
   if (process.env.MODECK_RUN_V1 !== undefined) throw modeError("E_WRAPPER_CONFLICT", "Nested wrappers are not supported");
   const { agent } = request;
+  if (await loadRecord(homedir(), agent)) throw modeError("E_WRAPPER_CONFLICT", `Agent is bound; start ${agentDefinitions[agent].executable} directly. Stop the current session and explicitly synchronize modeck config before restarting after a mode or cwd change.`);
   const adapter = agentDefinitions[agent];
   const configRoot = await safeAbsolute(request.configRoot);
   const stateRoot = await safeAbsolute(request.stateRoot);
