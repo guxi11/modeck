@@ -134,6 +134,33 @@ modeck-lock.json
 
 会话启动时只读取并校验这些已安装资源，不自动下载或更新。修改资源来源后需再次运行 `res init`；已有 `.modeck/resources/` 安装会在校验后迁移到 `vendor/`，保留锁定版本，目标重名或本地修改会阻止迁移。移除声明不会删除本地目录。
 
+## 静态 MCP 集中管理
+
+MCP 使用独立的 `modeck-mcp.yaml`，与定义工作模式的 `modeck.yaml` / `modeck.yml` 分离。文件包含 `schemaVersion: 1` 和按服务名称组织的 `servers`；每项声明 `transport`，stdio 使用 `command`、可选 `args` / `env`，http / sse 使用 `url`、可选 `headers`。`env` 和 `headers` 的值只能是 `{ env: ENV_NAME }` 引用，modeck 不读取或写入对应环境变量的实际值。
+
+`modeck mcp <migrate|apply|status|recover>` 必须显式指定 `--agent` 和 `--scope`。`--config` 接受配置目录或名为 `modeck-mcp.yaml` 的文件路径，省略时使用当前目录；不接受 mode YAML。`--target-home` 默认是当前用户 home，`--cwd` 默认是当前目录；这些目录必须已存在。可用 `--format json` 输出结构化结果，完整参数见 `modeck mcp --help`。
+
+| 命令 | 用途与安全行为 |
+| --- | --- |
+| `mcp migrate` | 从指定原生 scope 迁入可无损表示的定义，并在同一事务中登记成功迁入或匹配项的管理权；不改变原生文件内容。逐项拒绝字面凭据、非空参数、可能含凭据的 URL 路径、不支持字段和受管项漂移，可部分成功。 |
+| `mcp status` | 只读检查当前配置并输出不含凭据值的 apply 计划；不写入文件。 |
+| `mcp apply` | 增量合并中央定义；保留未受管项和已从中央移除的原生项，不自动删除。同名冲突、受管项漂移或端点身份变化会拒绝整批写入。匹配的未受管项不会自动接管，需先显式 `migrate`。 |
+| `mcp recover` | 回滚中断且未提交的事务，或完成已提交事务的清理；必须使用原事务的 agent、scope、home、cwd 和配置路径。 |
+
+当前支持范围：
+
+| agent | scope 与原生目标 | 边界 |
+| --- | --- | --- |
+| Claude Code | `user`：`<home>/.claude.json`；`project`：`<cwd>/.mcp.json` | local 定义保留在原生配置。显式设置 `CLAUDE_CONFIG_DIR=<home>/.claude` 时，user 目标改为该目录内的 `.claude.json`。 |
+| Codex CLI | 仅 `user`：`<home>/.codex/config.toml` | 支持 stdio / http，拒绝 SSE 和环境变量重命名；原生 project 和独立 `*.config.toml` profile 能力存在，但此实现不写入它们。 |
+| CodeBuddy Code CLI | 暂不支持 | 候选文件优先级和共享项目文件需要独立适配。 |
+
+Codex 的原生可见性范围限于未使用 `--profile` 或 `-c` / `--config` 覆盖的默认用户配置；独立 profile 会参与同名冲突检查，但不会同步。非默认 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` 被拒绝。已有 `.mcp.json` 是共享原生文件；若新建它会遮蔽 CodeBuddy 已有的项目 `mcp.json`，操作会被拒绝。
+
+写入使用可恢复事务，日志与原生文件暂存位于 Git 工作树外的私有 modeck 状态目录；拒绝跨文件系统的原子写入。macOS / Linux 上使用内核文件锁协调 modeck 命令，不支持锁时拒绝操作。执行 `migrate` / `apply` / `recover` 时应暂停原生配置命令和编辑器写入：漂移检查不能保证与外部写入者之间的原子比较和替换。检测到受管策略或相关审批设置时会拒绝操作，交由原生工具处理。
+
+MCP 不参与 mode 选择、注册配置多源组合、`run` 或 SessionStart hook，也不会随它们自动同步。`apply` 后通过原生 MCP 列表命令检查，并重启会话加载；不承诺热更新、连接或认证成功，原生策略、审批和认证仍由 agent 负责。退出码：`0` 完成、`2` 用法或配置错误、`3` I/O 失败、`4` 冲突 / 忙 / 需恢复、`6` 部分迁入。
+
 ## 命令介绍
 
 运行 `modeck --help` 查看命令总览，当前输出如下：
@@ -146,6 +173,9 @@ Commands:
   init                   Initialize configuration
   scan                   Import resources from agent homes
   migrate                Migrate existing configuration
+  mcp <migrate|apply|status|recover>  Manage static native MCP configuration
+  eval                   Evaluate automatic modes
+  save                   Save automatic modes to .modes
   resolve                Resolve context
   render                 Render context
   hook                   Handle agent session hooks
