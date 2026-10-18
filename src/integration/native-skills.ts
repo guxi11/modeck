@@ -38,7 +38,7 @@ export const nativeSkillNames = async (cwd: string, agent: Agent = "codebuddy", 
     throw modeError("E_PATH", "Native skill boundary does not contain cwd");
   }
   const adapter = agentDefinitions[agent];
-  if (!adapter.skills) return [];
+  if (!adapter.nativeSkills || !adapter.skills) return [];
   const { skills } = adapter;
   const configHome = adapter.configEnvironment ? process.env[adapter.configEnvironment] : undefined;
   const user = resolve(project, configHome || join(homedir(), adapter.configDirectory));

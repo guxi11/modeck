@@ -231,8 +231,8 @@ export const planBind = async ({ agent, targetHome, configRoot, configRoots, sta
   await prepare({ agent, configRoot, ...(configRoots !== undefined ? { configRoots } : {}), stateRoot, cwd: await realpath(process.cwd()) });
   return basePlan(agent, targetHome, "bind", async (home, before, previous) => {
     if (agent === "copilot") await requireCopilot(home);
-    if (agent === "factorydroid") await requireFactoryDroid();
-    if (agent === "factorydroid") await requireFactoryTopology(home, before);
+    if (agent === "droid") await requireFactoryDroid();
+    if (agent === "droid") await requireFactoryTopology(home, before);
     const loc = locations(agent);
     const packagePaths = ["dist/bin/modeck.mjs", "package.json", "schemas/modes.schema.json", "schemas/manifest.schema.json"].sort();
     const packageFiles = await Promise.all(packagePaths.map(async path => {
@@ -295,7 +295,7 @@ export const applyBindPlan = async ({ plan, expectDigest }: ApplyBindPlanRequest
   const hookChange = plan.changes.find(change => change.path === loc.hook);
   if (plan.operation === "bind") {
     if (plan.agent === "copilot") await requireCopilot(home);
-    if (plan.agent === "factorydroid") {
+    if (plan.agent === "droid") {
       await requireFactoryDroid();
       if (hookChange?.beforeDigest === null) await requireFactoryTopology(home, await readImage(homePath(home, loc.hook), LIMITS.jsonBytes));
     }
