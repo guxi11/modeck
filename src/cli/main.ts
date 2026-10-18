@@ -37,6 +37,7 @@ const commandHelp: Readonly<Record<string, string>> = {
     + "Ignore existing .modes and evaluate configured auto selectors, defaults and inheritance.\n"
     + "Uses enabled registered configurations unless --config is supplied; --cwd defaults to the current directory.\n"
     + "Read-only: reports mode IDs, sources and reasons without installing resources or creating state.\n"
+    + "Compares the automatic result with the actual current .modes selection; a non-empty .modes disables auto-detected modes while defaults and inheritance still apply.\n"
     + "Auto selectors execute as trusted user code. --state only identifies a directory to exclude from project facts.\n",
   resolve: "Usage: modeck resolve [--config <dir>] [--cwd <dir>] [--state <dir>] [--format <text|json>] [-h|--help]\n\n"
     + "Explain the final modes, rules and skills selected for the current directory, including each mode's selection reason.\n"
@@ -255,12 +256,14 @@ export const main = async (argv: string[]): Promise<number> => {
         const labels = resolvedIdLabels([...plan.modeIds, ...plan.resources.map(resource => resource.id),
           ...plan.reasons.flatMap(reason => [reason.mode, ...(reason.from === null ? [] : [reason.from])])]);
         const label = (id: string): string => labels.get(id) ?? id;
-        const resources = plan.resources.reduce((groups, resource) => ({ ...groups, [resource.kind]: [...groups[resource.kind], resource.id] }),
-          { rule: [] as string[], skill: [] as string[] });
+        const ordered = (ids: readonly string[]): string => ids.length ? ids.map((id, index) => `${index + 1}. ${label(id)}`).join("\n") : "(none)";
+        const rules = plan.resources.filter(resource => resource.kind === "rule").map(resource => resource.id);
+        const skills = plan.resources.filter(resource => resource.kind === "skill").map(resource => resource.id);
         ui.section(`Resolved context · ${plan.modeIds.length} mode${plan.modeIds.length === 1 ? "" : "s"}`,
-          [`Directory: ${plan.cwd}`, `Boundary: ${plan.boundary}`, `Selector: ${plan.selectorPath ?? "(none; defaults and auto)"}`,
-            `Modes: ${plan.modeIds.map(label).join(", ") || "(none)"}`,
-            `Rules: ${resources.rule.map(label).join(", ") || "(none)"}`, `Skills: ${resources.skill.map(label).join(", ") || "(none)"}`].join("\n"));
+          [`Directory: ${plan.cwd}`, `Boundary: ${plan.boundary}`, `Selector: ${plan.selectorPath ?? "(none; defaults and auto)"}`].join("\n"));
+        ui.section(`Modes · ${plan.modeIds.length}`, ordered(plan.modeIds));
+        ui.section(`Rules · ${rules.length}`, ordered(rules));
+        ui.section(`Skills · ${skills.length}`, ordered(skills));
         if (plan.reasons.length) ui.section("Selection reasons", plan.reasons.map(reason =>
           `  ${label(reason.mode)}: ${reason.via}${reason.from === null ? "" : ` (${label(reason.from)})`}`).join("\n"));
         if (plan.diagnostics.length) ui.section("Diagnostics", plan.diagnostics.map(item =>
