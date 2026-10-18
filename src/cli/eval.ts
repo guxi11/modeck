@@ -108,27 +108,55 @@ export const evaluateModes = async ({ command, configRoot, stateRoot, cwd, forma
       ...(command === "eval" ? { actual: { selectorPath, selectorAuto, projects: actualProjects, ...(actualDiagnostic ? { diagnostic: actualDiagnostic } : {}) },
         comparison: { status: comparisonStatus, projects: comparisons } } : {}),
       ...(saved === undefined ? {} : { saved }) })}\n`);
-    else {
-      ui.section(`${command === "eval" ? "Computed" : "Selected"} modes · ${modeIds.length}`, modeIds.join(", ") || "(none)");
-      projects.forEach(project => {
+    else if (command === "eval") {
+      const status = comparisonStatus === "same" ? "Same" : comparisonStatus === "different" ? "Different"
+        : comparisonStatus === "order-changed" ? "Order differs" : "Unavailable";
+      const selector = actualProjects === null ? `${selectorPath ?? "(selector path unavailable)"} (invalid or unavailable)`
+        : selectorPath === null ? "(none)" : selectorAuto ? `${selectorPath} (empty)` : selectorPath;
+      const mechanism = actualProjects === null ? "The automatic calculation ignores .modes; the actual selection could not be resolved. Defaults and inheritance remain part of the calculation."
+        : selectorAuto === false ? "A non-empty .modes disables auto-detected modes; defaults and inherited modes still apply."
+          : selectorAuto === true ? "An empty .modes leaves auto-detected modes enabled; defaults and inheritance also apply."
+            : "No .modes selector; defaults, auto-detected modes, and inheritance apply.";
+      const tone = comparisonStatus === "same" ? "green" : comparisonStatus === "order-changed" ? "cyan" : "red";
+      ui.section("Evaluation result", [`Directory: ${facts.cwd}`, `Selector: ${selector}`,
+        `Comparison: ${ui.emphasize(status, process.stdout, tone)}`, mechanism].join("\n"));
+      const list = (values: readonly string[]): string => values.length
+        ? values.map((value, index) => `${index + 1}. ${value}`).join("\n") : "(none)";
+      if (!projects.length) ui.section("Configurations", "(none)");
+      projects.forEach((project, index) => {
         const actual = actualProjects?.find(item => item.configRoot === project.configRoot);
         const comparison = comparisons?.find(item => item.configRoot === project.configRoot);
-        const details = [`Defaults: ${project.defaults.join(", ") || "(none)"}`,
-          `Auto: ${project.autoModeIds.join(", ") || "(none)"}`];
-        if (command === "eval") details.push(`Computed modes: ${project.modeIds.join(", ") || "(none)"}`,
-          `Selector: ${selectorPath === null ? "(none; defaults and auto)" : selectorAuto === true
-            ? `${selectorPath} (empty; defaults and auto remain enabled)` : selectorPath}`,
-          ...(selectorAuto === false ? ["A non-empty .modes disables auto-detected modes; defaults and inheritance still apply."] : []),
-          `Actual modes: ${actual?.modeIds.join(", ") || (actual ? "(none)" : actualDiagnostic ? "(unavailable)" : "(none; defaults and auto)")}`,
-          ...(comparison ? [`Comparison: ${comparison.status === "same" ? "actual matches computed" : comparison.status === "order-changed"
-            ? "same modes, order differs" : `only actual: ${comparison.actualOnly.join(", ") || "(none)"}; only computed: ${comparison.computedOnly.join(", ") || "(none)"}`}`] : []));
-        details.push(...project.sources.map(source => `Source: ${source.path}`),
-          ...project.reasons.map(reason => `  ${reason.mode}: ${reason.via}${reason.from === null ? "" : ` (${reason.from})`}`),
-          ...project.diagnostics.map(diagnostic => `${diagnostic.code}: ${diagnostic.message}`));
-        ui.section(`Configuration · ${project.configRoot}`, details.join("\n"));
+        ui.section(`Configuration ${index + 1} · ${project.configRoot}`, "");
+        ui.section("Computed modes", list(project.modeIds));
+        ui.section("Actual modes", actual ? list(actual.modeIds) : "(unavailable)");
+        const difference = !comparison ? "(unavailable)"
+          : comparison.status === "same" ? "Same modes."
+            : comparison.status === "order-changed" ? "Same modes, different order."
+              : [`Actual only:\n${list(comparison.actualOnly)}`, `Computed only:\n${list(comparison.computedOnly)}`].join("\n");
+        ui.section("Difference", difference);
+        const reasons = project.reasons.map(reason =>
+          `${reason.mode}: ${reason.via}${reason.from === null ? "" : ` (from ${reason.from})`}`);
+        ui.section("Selection reasons", list(reasons));
+        const inputs = [`Defaults: ${project.defaults.join(", ") || "(none)"}`,
+          `Auto: ${project.autoModeIds.join(", ") || "(none)"}`,
+          ...project.sources.map(source => `Source: ${source.path}`)];
+        ui.section("Inputs", list(inputs));
       });
-      if (command === "eval" && actualDiagnostic) ui.section("Actual selector diagnostic",
-        `${actualDiagnostic.code}: ${actualDiagnostic.message}${actualDiagnostic.path ? ` (${actualDiagnostic.path})` : ""}`);
+      const diagnosticLines = [
+        ...(actualDiagnostic ? [`Actual selector: ${actualDiagnostic.code}: ${actualDiagnostic.message}${actualDiagnostic.path ? ` (${actualDiagnostic.path})` : ""}`] : []),
+        ...diagnostics.map(diagnostic => `${diagnostic.code}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`),
+        ...projects.flatMap(project => project.diagnostics.map(diagnostic => `${project.configRoot}: ${diagnostic.code}: ${diagnostic.message}`)),
+      ];
+      if (diagnosticLines.length) ui.section("Diagnostics", list(diagnosticLines));
+    } else {
+      ui.section(`Selected modes · ${modeIds.length}`, modeIds.join(", ") || "(none)");
+      projects.forEach(project => {
+        ui.section(`Configuration · ${project.configRoot}`, [`Defaults: ${project.defaults.join(", ") || "(none)"}`,
+          `Auto: ${project.autoModeIds.join(", ") || "(none)"}`,
+          ...project.sources.map(source => `Source: ${source.path}`),
+          ...project.reasons.map(reason => `  ${reason.mode}: ${reason.via}${reason.from === null ? "" : ` (${reason.from})`}`),
+          ...project.diagnostics.map(diagnostic => `${diagnostic.code}: ${diagnostic.message}`)].join("\n"));
+      });
       if (diagnostics.length) ui.section("Diagnostics", diagnostics.map(diagnostic => `${diagnostic.code}: ${diagnostic.message}`).join("\n"));
       if (saved !== undefined) ui.section("Result", saved ? `Saved: ${path}` : "No changes made.");
     }
