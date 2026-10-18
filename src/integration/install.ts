@@ -54,6 +54,7 @@ const requireQoderHome = (home: string): void => {
   }
 };
 const requireQwenHome = async (home: string): Promise<void> => {
+  const hasConfigured = Object.hasOwn(process.env, "QWEN_HOME");
   const configured = process.env.QWEN_HOME;
   const resolved = configured
     ? configured === "~" || configured.startsWith("~/") || configured.startsWith("~\\")
@@ -61,11 +62,11 @@ const requireQwenHome = async (home: string): Promise<void> => {
       : resolve(configured)
     : join(home, ".qwen");
   if (resolved !== join(home, ".qwen")) conflict("QWEN_HOME must resolve to <target-home>/.qwen for a safe binding");
-  if (configured) return;
+  if (hasConfigured) return;
   for (const path of [join(home, ".qwen", ".env"), join(home, ".env")]) {
     const image = await readImage(path, LIMITS.textFileBytes);
-    if (image && /(?:^|\n)\s*(?:export\s+)?QWEN_HOME\s*=/u.test(data(image).toString("utf8"))) {
-      conflict("Qwen user .env declares QWEN_HOME; remove the redirect before binding", path);
+    if (image && /(?:^|\n)\s*(?:export\s+)?QWEN_HOME\s*(?:=|:\s+)/u.test(data(image).toString("utf8"))) {
+      conflict("Qwen user .env declares QWEN_HOME; remove it or set QWEN_HOME explicitly to <target-home>/.qwen", path);
     }
   }
 };
