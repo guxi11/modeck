@@ -22,7 +22,7 @@ const diagnostic = (code: string, message: string, path: string | null = null): 
 const conflict = (message: string, path?: string): never => { throw modeError("E_INSTALL_CONFLICT", message, path ? { path } : {}); };
 const copilotVersion = async (): Promise<readonly number[]> => new Promise((resolveVersion, reject) => {
   execFile("copilot", ["--version"], { encoding: "utf8", timeout: 5_000, maxBuffer: 16_384 }, (error, stdout) => {
-    const match = /(?:^|\s)v?(\d+)\.(\d+)\.(\d+)(?:[-+][^\s]+)?(?:\s|$)/.exec(stdout);
+    const match = /(?:^|\s)v?(\d+)\.(\d+)\.(\d+)(?:[-+][^\s]+)?\.?(?:\s|$)/.exec(stdout);
     if (error || !match || /\d+\.\d+\.\d+-[^\s]+/.test(match[0])) {
       return reject(new Error("GitHub Copilot CLI version could not be verified; Copilot binding requires copilot --version >= 1.0.89"));
     }
