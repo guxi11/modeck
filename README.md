@@ -25,7 +25,7 @@ modeck --version
 | --- | --- |
 | Qwen Code CLI | [Hooks 文档](https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/)；项目设置位于 `.qwen/settings.json`。核验基线：v0.25.2（[官方发布](https://github.com/QwenLM/qwen-code/releases/tag/v0.25.2)）；不据此保证所有旧版兼容，旧版本的 hook timeout 行为也有差异。 |
 | Qoder CLI | [Hooks 文档](https://docs.qoder.com/cli/hooks)；项目设置位于 `.qoder/settings.json`。核验基线：官方发行版 1.1.73（[发行说明](https://docs.qoder.com/release-notes/qoder-cli)）；不据此保证所有旧版兼容。 |
-| Factory Droid | [Hooks 文档](https://docs.factory.ai/reference/hooks-reference)；需 CLI 0.196.0+，此版本修复 `SessionStart` 上下文丢弃；写入 `~/.factory/hooks.json` 的原生顶层事件映射。若该文件不存在但检测到 `settings.json` fallback 或 legacy hook，绑定会拒绝以避免遮蔽；先用 Droid 原生 `/hooks` 迁移。 |
+| Factory Droid | [Hooks 文档](https://docs.factory.ai/reference/hooks-reference)；需 CLI 0.196.0+，此版本修复 `SessionStart` 上下文丢弃；写入 `~/.factory/hooks.json` 的原生顶层事件映射。可能遮蔽原有声明的混合配置会被拒绝；请先整合到原生 `hooks.json` 再绑定。 |
 | GitHub Copilot CLI | [Hooks 文档](https://docs.github.com/en/copilot/reference/hooks-reference)；本项目要求 CLI 1.0.89+。1.0.88 已合并多个 hook 的 `additionalContext` 修复，本项目采用更保守的版本下限；使用独立 `~/.copilot/hooks/modeck.json`，hook 输出顶层 `additionalContext`。[官方 changelog](https://github.com/github/copilot-cli/blob/main/changelog.md) |
 
 Qwen、Qoder、Factory Droid 和 Copilot 的绑定仅支持默认用户配置位置（相对于 `--target-home` 的 `.qwen`、`.qoder`、`.factory` 和 `.copilot`）。Qwen 的 `QWEN_HOME` 可重定向 settings，且可能由用户 `.env` 在启动时引导；设置了重定向或无法确认仍使用默认位置时，不在支持范围内。Qoder 的 `QODER_CONFIG_DIR` 或 Copilot 的 `COPILOT_HOME` 指向其他目录时也不受支持。Droid 的 `FACTORY_HOME_OVERRIDE` 会替换 HOME 基础目录，再由 CLI 在其下拼接 `.factory`；非默认 override 不受支持。请恢复默认目录，或按 agent 的原生机制在实际生效的配置位置另行配置 hook。

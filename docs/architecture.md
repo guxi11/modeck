@@ -133,7 +133,7 @@ flowchart TB
 | CodeBuddy Code CLI | `.codebuddy/settings.json` | 使用 CLI hook 协议；加载行为还受其运行时控制 |
 | Qwen Code CLI | `.qwen/settings.json` | 使用原生 `SessionStart` command hook |
 | Qoder CLI | `.qoder/settings.json` | 使用原生 `SessionStart` command hook |
-| Factory Droid | `~/.factory/hooks.json` | 需 CLI 0.196.0+（修复 `SessionStart` 上下文丢弃）；使用原生顶层事件映射；若文件缺失但存在 `settings.json` fallback 或 legacy hook，绑定拒绝遮蔽，须先用原生 `/hooks` 迁移 |
+| Factory Droid | `~/.factory/hooks.json` | 需 CLI 0.196.0+（修复 `SessionStart` 上下文丢弃）；使用原生顶层事件映射；可能遮蔽原有声明的混合配置会被拒绝，须先整合到原生 `hooks.json` |
 | GitHub Copilot CLI | `~/.copilot/hooks/modeck.json` | 需 CLI 1.0.89+（1.0.88 已合并 `additionalContext` 修复，本项目保守提高下限）；使用独立配置文件，输出顶层 `additionalContext` |
 
 这些是 modeck 实现的写入位置，不代表所有 agent 自定义配置目录布局都可由绑定命令自动发现。hook 被禁用、策略阻止、未触发、命令失败或超时时，原生会话仍可能继续且缺少 mode 内容，因此不保证 fail-closed。成功输出 hook JSON 也不等同于真实模型已采纳上下文；尚无登录状态下的真实模型请求验证。
