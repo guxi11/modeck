@@ -51,7 +51,9 @@ export const readHookGroups = (root: Record<string, unknown>, agent: Agent): rea
   if (adapter.nativeEntries === "groups") return entries;
   return entries.map(item => {
     const entry = object(item);
-    const group = entry.type !== undefined && entry.type !== "command" ? { hooks: [entry] }
+    const group = entry.type !== undefined && entry.type !== "command"
+      || ["bash", "exec", "powershell"].some(key => Object.hasOwn(entry, key))
+      ? { hooks: [entry] }
       : (() => {
         const { timeoutSec, timeout, ...handler } = entry;
         return { ...(typeof entry.matcher === "string" ? { matcher: entry.matcher } : {}),

@@ -70,8 +70,9 @@ const requireQwenHome = async (home: string): Promise<void> => {
   // Even an explicitly empty process value can be filled by loadEnvironment after bootstrap.
   for (const path of [join(home, ".qwen", ".env"), join(home, ".env")]) {
     const image = await readImage(path, LIMITS.textFileBytes);
-    if (image && /(?:^|\n)\s*(?:export\s+)?QWEN_HOME\s*(?:=|:\s+)/u.test(data(image).toString("utf8"))) {
-      conflict("Qwen user .env declares QWEN_HOME; remove it or set QWEN_HOME explicitly to <target-home>/.qwen", path);
+    const content = image ? data(image).toString("utf8").replace(/\r\n?/gu, "\n") : "";
+    if (image && /(?:^|\n)\s*(?:export\s+)?QWEN_HOME\s*(?:=|:\s+)/u.test(content)) {
+      conflict("Remove the QWEN_HOME declaration from this user .env file before binding", path);
     }
   }
 };
@@ -86,11 +87,22 @@ const requireCopilot = async (home: string): Promise<void> => {
   }
 };
 const requireFactoryTopology = async (home: string, hookImage: FileImage | null): Promise<void> => {
-  if (hookImage) return;
   const directory = ".factory";
+  const settings = await Promise.all(["settings.json", "settings.local.json"].map(file => readImage(homePath(home, `${directory}/${file}`), LIMITS.jsonBytes)));
+  if (hookImage) {
+    const hooks = object(imageJson(hookImage));
+    if (Object.hasOwn(hooks, "SessionStart")) return;
+    settings.forEach((image, index) => {
+      if (!image) return;
+      const root = object(imageJson(image));
+      const configured = root.hooks === undefined ? {} : object(root.hooks);
+      if (Object.hasOwn(configured, "SessionStart")) conflict("Factory Droid settings define SessionStart, which would be shadowed by adding it to hooks.json; migrate it with the native /hooks manager before binding",
+        `${directory}/${["settings.json", "settings.local.json"][index]}`);
+    });
+    return;
+  }
   const legacy = await readImage(homePath(home, `${directory}/hooks/hooks.json`), LIMITS.jsonBytes);
   if (legacy) conflict("Factory Droid has legacy hooks; migrate them with the native /hooks manager before binding", `${directory}/hooks/hooks.json`);
-  const settings = await Promise.all(["settings.json", "settings.local.json"].map(file => readImage(homePath(home, `${directory}/${file}`), LIMITS.jsonBytes)));
   settings.forEach((image, index) => {
     if (!image) return;
     const root = object(imageJson(image));
@@ -135,7 +147,10 @@ const shared = (image: FileImage | null, agent: Agent): { readonly root: Record<
     return record.matcher !== undefined && typeof record.matcher !== "string" || !Array.isArray(record.hooks)
       || record.hooks.some(handler => {
         const entry = object(handler);
-        return typeof entry.type !== "string" || entry.type === "command" && typeof entry.command !== "string";
+        const copilotAlternate = agent === "copilot"
+          && [entry.bash, entry.exec, entry.powershell].some(value => typeof value === "string");
+        return typeof entry.type !== "string" && !copilotAlternate
+          || entry.type === "command" && typeof entry.command !== "string" && !copilotAlternate;
       });
   })) return conflict("Invalid SessionStart settings");
   return { root, groups };
@@ -326,17 +341,14 @@ export const applyBindPlan = async ({ plan, expectDigest }: ApplyBindPlanRequest
   if (plan.operation === "bind" && plan.agent === "qwen") await requireQwenHome(await safeAbsolute(plan.targetHome));
   if (plan.operation === "bind" && plan.agent === "qoder") requireQoderHome(await safeAbsolute(plan.targetHome));
   if (plan.operation === "bind" && plan.agent === "droid") requireFactoryHome(await safeAbsolute(plan.targetHome));
-  if (!plan.changes.length) return;
   const home = await safeAbsolute(plan.targetHome);
   const loc = locations(plan.agent);
-  const hookChange = plan.changes.find(change => change.path === loc.hook);
-  if (plan.operation === "bind") {
-    if (plan.agent === "copilot") await requireCopilot(home);
-    if (plan.agent === "droid") {
-      await requireFactoryDroid();
-      if (hookChange?.beforeDigest === null) await requireFactoryTopology(home, await readImage(homePath(home, loc.hook), LIMITS.jsonBytes));
-    }
+  if (plan.operation === "bind" && plan.agent === "droid") {
+    await requireFactoryDroid();
+    await requireFactoryTopology(home, await readImage(homePath(home, loc.hook), LIMITS.jsonBytes));
   }
+  if (plan.operation === "bind" && plan.agent === "copilot") await requireCopilot(home);
+  if (!plan.changes.length) return;
   plan.changes.forEach(change => {
     if (change.path !== loc.hook && change.path !== loc.record && !allowedOwned(plan.agent, change.path)) conflict("Plan contains an unowned path", change.path);
     if (change.after && (!Number.isInteger(change.after.mode) || change.after.mode < 0 || change.after.mode > 0o777)) conflict("Plan has invalid file permissions");
