@@ -51,5 +51,5 @@ export type ModeErrorCode = DeepReadonly<"E_CONFIG" | "E_SELECTOR" | "E_MODE_CON
   | "E_PATH" | "E_MANIFEST_MISSING" | "E_MANIFEST_MISMATCH" | "E_RESOURCE_MISSING"
   | "E_INTEGRITY" | "E_GIT" | "E_GIT_COMMIT_UNAVAILABLE" | "E_LIMIT" | "E_CONTEXT_SIZE"
   | "E_INSTALL_CONFLICT" | "E_PLAN_STALE" | "E_BUSY"
-  | "E_CODEX_CONFIG" | "E_HOOK_INPUT" | "E_PLATFORM" | "E_USAGE" | "E_IO">;
+  | "E_HOOK_INPUT" | "E_PLATFORM" | "E_USAGE" | "E_IO">;
 export type ModeError = DeepReadonly<Error & { code: ModeErrorCode; details: Readonly<Record<string, unknown>> }>;

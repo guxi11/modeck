@@ -161,7 +161,7 @@ const input = async (): Promise<unknown> => {
 const exitFor = (error: ModeError, hook: boolean): number => {
   if (hook) return 1;
   if (["E_INSTALL_CONFLICT", "E_PLAN_STALE", "E_BUSY"].includes(error.code)) return 4;
-  if (["E_CODEX_CONFIG", "E_HOOK_INPUT"].includes(error.code)) return 5;
+  if (error.code === "E_HOOK_INPUT") return 5;
   return ["E_USAGE", "E_CONFIG", "E_SELECTOR", "E_MODE_CONFLICT", "E_SCAN_LIMIT", "E_CONTEXT_SIZE", "E_LIMIT"].includes(error.code) ? 2 : 3;
 };
 
