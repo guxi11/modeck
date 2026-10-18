@@ -47,6 +47,12 @@ const requireFactoryDroid = async (): Promise<void> => {
     conflict(`Factory Droid ${version.join(".")} is too old; binding requires >= 0.196.0`);
   }
 };
+const requireFactoryHome = (home: string): void => {
+  const configured = process.env.FACTORY_HOME_OVERRIDE;
+  if (configured && resolve(configured) !== home) {
+    conflict("FACTORY_HOME_OVERRIDE must resolve to <target-home> for a safe binding");
+  }
+};
 const requireQoderHome = (home: string): void => {
   const configured = process.env.QODER_CONFIG_DIR;
   if (configured && resolve(configured) !== join(home, ".qoder")) {
@@ -256,7 +262,10 @@ export const planBind = async ({ agent, targetHome, configRoot, configRoots, sta
     if (agent === "qwen") await requireQwenHome(home);
     if (agent === "qoder") requireQoderHome(home);
     if (agent === "copilot") await requireCopilot(home);
-    if (agent === "droid") await requireFactoryDroid();
+    if (agent === "droid") {
+      requireFactoryHome(home);
+      await requireFactoryDroid();
+    }
     if (agent === "droid") await requireFactoryTopology(home, before);
     const loc = locations(agent);
     const packagePaths = ["dist/bin/modeck.mjs", "package.json", "schemas/modes.schema.json", "schemas/manifest.schema.json"].sort();
@@ -316,6 +325,7 @@ export const applyBindPlan = async ({ plan, expectDigest }: ApplyBindPlanRequest
   if (hashPlan(payload).planDigest !== planDigest || expectDigest !== undefined && expectDigest !== planDigest) throw modeError("E_PLAN_STALE", "Installation plan digest changed");
   if (plan.operation === "bind" && plan.agent === "qwen") await requireQwenHome(await safeAbsolute(plan.targetHome));
   if (plan.operation === "bind" && plan.agent === "qoder") requireQoderHome(await safeAbsolute(plan.targetHome));
+  if (plan.operation === "bind" && plan.agent === "droid") requireFactoryHome(await safeAbsolute(plan.targetHome));
   if (!plan.changes.length) return;
   const home = await safeAbsolute(plan.targetHome);
   const loc = locations(plan.agent);
