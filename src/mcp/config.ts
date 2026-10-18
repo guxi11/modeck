@@ -27,6 +27,68 @@ export const references = (value: unknown): Readonly<Record<string, StaticMcpRef
 };
 export const checkedServer = (value: unknown): StaticMcpServer => {
   const server = object(value);
+  if (server.transport === "native") {
+    keys(server, ["transport", "agent", "definition"], ["transport", "agent", "definition"]);
+    if (server.agent !== "claude" && server.agent !== "codex") fail("Invalid native MCP agent");
+    const agent = server.agent as "claude" | "codex";
+    const definition = object(server.definition);
+    const check = (item: unknown, depth: number): void => {
+      if (depth > 16) fail("Native MCP definition is too deeply nested");
+      if (typeof item === "string") { if (item.length > 16_384) fail("Native MCP string is too long"); return; }
+      if (item === null || typeof item === "boolean" || typeof item === "number" && Number.isFinite(item)) return;
+      if (Array.isArray(item)) {
+        if (item.length > 512) fail("Native MCP array is too large");
+        item.forEach(child => check(child, depth + 1)); return;
+      }
+      if (item && typeof item === "object") {
+        const entries = Object.entries(item);
+        if (entries.length > 512) fail("Native MCP object is too large");
+        entries.forEach(([key, child]) => { if (key.length > 256) fail("Native MCP field name is too long"); check(child, depth + 1); });
+        return;
+      }
+      fail("Native MCP definition must contain only finite JSON values");
+    };
+    canonical(definition);
+    check(definition, 0);
+    const strings = (key: string): void => {
+      const value = definition[key];
+      if (value !== undefined && typeof value !== "string") fail(`Invalid native MCP ${key} field`);
+      if (["command", "url", "transport", "type", "cwd"].includes(key) && value === "") fail(`Invalid native MCP ${key} field`);
+    };
+    const stringList = (key: string): void => {
+      const value = definition[key];
+      if (value !== undefined && (!Array.isArray(value) || value.length > 512 || value.some(item => typeof item !== "string"))) fail(`Invalid native MCP ${key} field`);
+    };
+    const envVars = definition.env_vars;
+    if (envVars !== undefined && (!Array.isArray(envVars) || envVars.length > 512 || envVars.some(item => {
+      if (typeof item === "string") return false;
+      const entry = object(item);
+      return typeof entry.name !== "string" || !entry.name
+        || entry.source !== undefined && entry.source !== "local" && entry.source !== "remote";
+    }))) fail("Invalid native MCP env_vars field");
+    const stringMap = (key: string): void => {
+      const value = definition[key];
+      if (value !== undefined && Object.values(object(value)).some(item => typeof item !== "string")) fail(`Invalid native MCP ${key} field`);
+    };
+    for (const key of ["command", "url", "transport", "type", "cwd", "bearer_token_env_var"]) strings(key);
+    stringList("args");
+    for (const key of ["env", "headers", "http_headers", "env_http_headers"]) stringMap(key);
+    for (const key of ["disabled", "enabled", "required"]) {
+      if (definition[key] !== undefined && typeof definition[key] !== "boolean") fail(`Invalid native MCP ${key} field`);
+    }
+    for (const key of ["timeout", "startup_timeout_sec", "tool_timeout_sec"]) {
+      if (definition[key] !== undefined && (typeof definition[key] !== "number" || !Number.isFinite(definition[key]))) fail(`Invalid native MCP ${key} field`);
+    }
+    if (agent === "claude") {
+      if (definition.type !== undefined && !["stdio", "http", "sse"].includes(String(definition.type))) fail("Unsupported Claude MCP transport");
+      const type = definition.type ?? (Object.hasOwn(definition, "command") ? "stdio" : "http");
+      if (type === "stdio" && typeof definition.command !== "string" || type !== "stdio" && typeof definition.url !== "string") fail("Native Claude MCP definition is missing its transport endpoint");
+    } else if (typeof definition.command !== "string" && typeof definition.url !== "string") {
+      fail("Native Codex MCP definition requires command or url");
+    }
+    // Validate the preserved core shape; the native agent remains authoritative for its full schema and authentication.
+    return { transport: "native", agent, definition };
+  }
   if (server.transport === "stdio") {
     keys(server, ["transport", "command", "args", "env"], ["transport", "command"]);
     const command = text(server.command);

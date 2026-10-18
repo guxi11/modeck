@@ -66,63 +66,37 @@ export const nativeRoot = (agent: StaticMcpAgent, image: FileImage | null): Reco
 };
 export const nativeServers = (root: Readonly<Record<string, unknown>>, key: string): Readonly<Record<string, unknown>> =>
   Object.hasOwn(root, key) ? object(root[key]) : {};
-const exactFields = (server: Record<string, unknown>, allowed: readonly string[]): void => {
-  if (Object.keys(server).some(key => !allowed.includes(key))) fail("Native definition contains fields that cannot be migrated without loss");
-};
-const importedRefs = (raw: unknown): Record<string, { env: string }> => Object.fromEntries(Object.entries(object(raw)).map(([key, value]) => {
-  if (typeof value !== "string") fail("Native credential fields must be pure environment references");
-  const match = /^\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}$/u.exec(value as string);
-  if (!match) fail("Literal or composite credentials are preserved only in native configuration; use pure environment references before migrating");
-  return [key, { env: match![1]! }];
-}));
 const assertClaudeRemoteReferences = (server: StaticMcpServer): void => {
+  if (server.transport === "native") return fail("Native definitions do not use portable Claude credential checks");
   if (server.transport === "stdio") return;
   const blocked = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_BEARER_TOKEN_BEDROCK", "NPM_TOKEN", "HTTPS_PROXY"];
   if (Object.values(server.headers ?? {}).some(ref => blocked.includes(ref.env))) {
     fail("Claude reads this credential reference as empty in remote headers; use a dedicated variable name and verify authentication natively");
   }
 };
-export const decodeServer = (agent: StaticMcpAgent, raw: unknown, migration = false): StaticMcpServer => {
-  const value = object(raw);
-  if (agent === "claude") {
-    const transport = value.type ?? (Object.hasOwn(value, "command") ? "stdio" : undefined);
-    if (transport === "stdio") {
-      exactFields(value, ["type", "command", "args", "env"]);
-      const server = checkedServer({ transport, command: value.command,
-        ...(value.args !== undefined ? { args: value.args } : {}),
-        ...(value.env !== undefined ? { env: importedRefs(value.env) } : {}) });
-      if (migration && server.transport === "stdio" && !/^[a-zA-Z0-9_./@+:-]+$/u.test(server.command)) fail("Command text may contain credentials or shell syntax; review and configure it centrally");
-      if (migration && server.transport === "stdio" && server.args?.length) fail("Arguments may contain credentials; migrate only argument-free definitions, then configure reviewed arguments centrally");
-      return server;
-    }
-    if (transport !== "http" && transport !== "sse") return fail("Native transport is outside the supported migration contract");
-    exactFields(value, ["type", "url", "headers"]);
-    const server = checkedServer({ transport, url: value.url,
-      ...(value.headers !== undefined ? { headers: importedRefs(value.headers) } : {}) });
-    assertClaudeRemoteReferences(server);
-    if (migration && server.transport !== "stdio" && !["", "/", "/mcp", "/sse"].includes(new URL(server.url).pathname)) fail("URL path may contain credentials; review and configure this endpoint centrally");
-    return server;
-  }
-  if (Object.hasOwn(value, "command")) {
-    exactFields(value, ["command", "args", "env_vars"]);
-    if (value.env_vars !== undefined && (!Array.isArray(value.env_vars) || value.env_vars.some(item => typeof item !== "string")
-      || new Set(value.env_vars).size !== value.env_vars.length)) fail("Invalid native environment allowlist");
-    const server = checkedServer({ transport: "stdio", command: value.command,
-      ...(value.args !== undefined ? { args: value.args } : {}),
-      ...(Array.isArray(value.env_vars) ? { env: Object.fromEntries(value.env_vars.map(name => [name, { env: name }])) } : {}) });
-    if (migration && server.transport === "stdio" && !/^[a-zA-Z0-9_./@+:-]+$/u.test(server.command)) fail("Command text may contain credentials or shell syntax; review and configure it centrally");
-    if (migration && server.transport === "stdio" && server.args?.length) fail("Arguments may contain credentials; migrate only argument-free definitions, then configure reviewed arguments centrally");
-    return server;
-  }
-  exactFields(value, ["url", "env_http_headers", "bearer_token_env_var"]);
-  const headers = value.env_http_headers === undefined ? {} : Object.fromEntries(Object.entries(object(value.env_http_headers)).map(([key, ref]) => [key, { env: ref }]));
-  // bearer_token_env_var adds a Bearer prefix, which a pure-reference header cannot represent losslessly.
-  if (value.bearer_token_env_var !== undefined) fail("Native bearer-token authentication cannot be migrated losslessly into pure-reference headers; keep it native");
-  const server = checkedServer({ transport: "http", url: value.url, ...(Object.keys(headers).length ? { headers } : {}) });
-  if (migration && server.transport !== "stdio" && !["", "/", "/mcp", "/sse"].includes(new URL(server.url).pathname)) fail("URL path may contain credentials; review and configure this endpoint centrally");
+export const decodeServer = (agent: StaticMcpAgent, raw: unknown, _migration = false): StaticMcpServer => {
+  const server = checkedServer({ transport: "native", agent, definition: object(raw) });
+  if (server.transport !== "native") return fail("Native MCP definition changed during validation");
+  if (canonical(server.definition) !== canonical(raw)) fail("Native MCP definition changed during validation");
   return server;
 };
 export const encodeServer = (agent: StaticMcpAgent, server: StaticMcpServer): Readonly<Record<string, unknown>> => {
+  if (server.transport === "native") {
+    if (server.agent !== agent) fail("Native MCP definition belongs to a different agent");
+    const validated = checkedServer(server);
+    if (validated.transport !== "native") return fail("Native MCP definition changed during encoding");
+    if (canonical(validated.definition) !== canonical(server.definition)) fail("Native MCP definition changed during encoding");
+    if (agent === "codex") {
+      try {
+        if (canonical(parseToml(stringifyToml(validated.definition))) !== canonical(validated.definition)) {
+          return fail("Codex native MCP definition cannot be represented losslessly in TOML");
+        }
+      } catch {
+        return fail("Codex native MCP definition cannot be represented losslessly in TOML");
+      }
+    }
+    return validated.definition;
+  }
   if (agent === "claude") assertClaudeRemoteReferences(server);
   if (agent === "claude") return server.transport === "stdio"
     ? { type: "stdio", command: server.command, ...(server.args?.length ? { args: server.args } : {}),
@@ -137,9 +111,23 @@ export const encodeServer = (agent: StaticMcpAgent, server: StaticMcpServer): Re
   }
   return { url: server.url, ...(Object.keys(server.headers ?? {}).length ? { env_http_headers: Object.fromEntries(Object.entries(server.headers!).map(([key, ref]) => [key, ref.env])) } : {}) };
 };
+const normalizedNative = (agent: StaticMcpAgent, raw: unknown): Readonly<Record<string, unknown>> => {
+  const value = { ...object(raw) };
+  if (agent === "claude" && Object.hasOwn(value, "command") && value.type === undefined) value.type = "stdio";
+  const emptyDefaults = agent === "codex" ? ["args", "env_vars", "env_http_headers"] : ["args", "env", "headers"];
+  for (const key of emptyDefaults) {
+    const field = value[key];
+    if (Array.isArray(field) && field.length === 0 || field && typeof field === "object" && !Array.isArray(field) && Object.keys(field).length === 0) delete value[key];
+  }
+  return value;
+};
 export const equivalent = (agent: StaticMcpAgent, left: unknown, right: unknown): boolean => {
-  if (canonical(left) === canonical(right)) return true;
-  try { return canonical(decodeServer(agent, left)) === canonical(decodeServer(agent, right)); } catch { return false; }
+  try {
+    const leftNative = decodeServer(agent, left);
+    const rightNative = decodeServer(agent, right);
+    if (leftNative.transport !== "native" || rightNative.transport !== "native") return false;
+    return canonical(normalizedNative(agent, leftNative.definition)) === canonical(normalizedNative(agent, rightNative.definition));
+  } catch { return false; }
 };
 
 type Section = { start: number; end: number; path: readonly string[] };

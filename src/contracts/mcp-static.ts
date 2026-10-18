@@ -7,6 +7,8 @@ export type StaticMcpServer = Readonly<{
 } | {
   transport: "http" | "sse"; url: string;
   headers?: Readonly<Record<string, StaticMcpReference>>;
+} | {
+  transport: "native"; agent: StaticMcpAgent; definition: Readonly<Record<string, unknown>>;
 }>;
 export type StaticMcpConfig = Readonly<{ schemaVersion: 1; servers: Readonly<Record<string, StaticMcpServer>> }>;
 export type StaticMcpRequest = Readonly<{

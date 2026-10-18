@@ -14,10 +14,39 @@ type Ownership = Readonly<{ schemaVersion: 1; owner: "modeck/static-mcp/1"; targ
   servers: Readonly<Record<string, Owned>> }>;
 type Observed = Readonly<{ path: string; image: FileImage | null }>;
 const hash = (value: unknown): string => sha256(Buffer.from(canonical(value)));
-const endpoint = (server: unknown): string => {
+const legacyEndpoint = (server: unknown): string => {
   const value = object(server);
   return hash(Object.hasOwn(value, "command") ? { command: value.command, args: value.args ?? [] }
-    : { transport: value.type ?? "http", url: value.url });
+    : { transport: value.type ?? value.transport ?? "http", url: value.url });
+};
+const priorEndpoint = (server: unknown): string => {
+  const value = object(server);
+  const identity = Object.hasOwn(value, "command")
+    ? { command: value.command, args: value.args ?? [], ...(Object.hasOwn(value, "cwd") ? { cwd: value.cwd } : {}) }
+    : { transport: value.type ?? value.transport ?? "http", url: value.url };
+  return hash({ ...identity, ...(Object.hasOwn(value, "http_headers_helper") ? { http_headers_helper: value.http_headers_helper } : {}) });
+};
+const legacyEndpoints = (server: unknown): readonly string[] => {
+  const value = object(server);
+  const candidates = [() => legacyEndpoint(value), () => priorEndpoint(value),
+    ...(Object.hasOwn(value, "url") ? [() => hash({ transport: value.type ?? "http", url: value.url })] : [])];
+  return candidates.flatMap(candidate => { try { return [candidate()]; } catch { return []; } });
+};
+const endpoint = (server: unknown): string => {
+  const value = object(server);
+  const identity: Record<string, unknown> = {};
+  for (const key of ["command", "args", "url", "type", "transport", "cwd", "http_headers_helper"] as const) {
+    if (Object.hasOwn(value, key)) identity[key] = value[key];
+  }
+  if (Object.hasOwn(value, "command")) {
+    identity.args = value.args ?? [];
+    if ((value.type === undefined || value.type === "stdio")
+      && (value.transport === undefined || value.transport === "stdio")) {
+      identity.type = "stdio";
+      delete identity.transport;
+    }
+  }
+  return hash(identity);
 };
 const observe = (paths: readonly string[]): Promise<readonly Observed[]> => Promise.all([...new Set(paths)].sort().map(async path => ({ path, image: await readImage(path) })));
 const verifyObserved = async (expected: readonly Observed[], written: readonly Change[] = []): Promise<void> => {
@@ -95,17 +124,27 @@ export const manageStaticMcp = async (action: "migrate" | "apply" | "status" | "
       try {
         if (!serverName(name) || request.agent === "claude" && ["workspace", "claude-in-chrome", "computer-use"].includes(name)) throw modeError("E_CONFIG", "Native server name is outside the migration contract");
         const previous = Object.hasOwn(owned.servers, name) ? owned.servers[name] : undefined;
-        if (previous && (hash(raw) !== previous.digest || endpoint(raw) !== previous.endpoint)) {
+        if (previous && (hash(raw) !== previous.digest || endpoint(raw) !== previous.endpoint && !legacyEndpoints(raw).includes(previous.endpoint))) {
           throw modeError("E_CONFIG", "Owned native definition drifted or changed endpoint; migrate cannot reset its ownership baseline. Restore it or use a new server name");
         }
         const server = decodeServer(request.agent, raw, true);
+        const encoded = encodeServer(request.agent, server);
+        if (canonical(encoded) !== canonical(raw)) throw modeError("E_CONFIG", "Native definition cannot be represented without loss; native source preserved");
         if (Object.hasOwn(config.servers, name)) {
-          if (canonical(config.servers[name]) !== canonical(server)) {
+          const existing = config.servers[name]!;
+          const alreadyNative = canonical(existing) === canonical(server);
+          let portableMatch = false;
+          if (!alreadyNative && existing.transport !== "native") {
+            try { portableMatch = equivalent(request.agent, raw, encodeServer(request.agent, existing)); } catch { portableMatch = false; }
+          }
+          if (!alreadyNative && !portableMatch) {
             decisions.push({ name, action: "rejected", reason: "Central name is already occupied by a different definition; both definitions were preserved" });
             return;
           }
+          if (portableMatch) imported[name] = server;
           decisions.push({ name, action: "matched", reason: previous ? "Central definition matches; ownership verified and native bytes preserved"
-            : "Central definition matches; explicit migration enrolled the source for management without changing native bytes" });
+            : portableMatch ? "Legacy portable definition matches the native adapter; upgraded to a lossless agent-specific definition and enrolled without changing native bytes"
+              : "Central definition matches; explicit migration enrolled the source for management without changing native bytes" });
         } else {
           imported[name] = server;
           decisions.push({ name, action: "added", reason: "Imported a losslessly representable definition and enrolled its native source for management; native bytes preserved" });
@@ -122,7 +161,8 @@ export const manageStaticMcp = async (action: "migrate" | "apply" | "status" | "
       .forEach(name => decisions.push({ name, action: "preserved", reason: "Existing central definition preserved" }));
     const desired: StaticMcpConfig = checkedConfig({ schemaVersion: 1, servers: { ...config.servers, ...imported } });
     const nextOwned: Ownership = { ...owned, servers: enrolled };
-    const changes: Change[] = Object.keys(imported).length ? [{ path: central, before: sourceImage, after: centralImage(desired, sourceImage?.mode ?? 0o600) }] : [];
+    // Native definitions may contain literal credentials; keep this file private, including when tightening an existing file.
+    const changes: Change[] = Object.keys(imported).length ? [{ path: central, before: sourceImage, after: centralImage(desired, 0o600) }] : [];
     if (canonical(nextOwned) !== canonical(owned)) changes.push({ path: state, before: imageAt(state), after: jsonImage(nextOwned) });
     await transact(request, central, location.path, changes, verify);
     return summary(action, request, decisions, changes.length ? "Safe entries migrated/enrolled for management; native source unchanged"
@@ -166,7 +206,9 @@ export const manageStaticMcp = async (action: "migrate" | "apply" | "status" | "
       decisions.push({ name, action: "rejected", reason: "Owned native definition drifted or was removed; refusing to overwrite. Restore the original native definition or choose a new server name" });
       continue;
     }
-    if (previous && endpoint(next) !== previous.endpoint) {
+    const endpointBaseline = previous && present !== undefined && hash(present) === previous.digest
+      && legacyEndpoints(present).includes(previous.endpoint) ? endpoint(present) : previous?.endpoint;
+    if (previous && endpoint(next) !== endpointBaseline) {
       decisions.push({ name, action: "rejected", reason: "Owned endpoint identity changed; use a new server name to keep native credentials isolated" });
       continue;
     }
@@ -174,7 +216,9 @@ export const manageStaticMcp = async (action: "migrate" | "apply" | "status" | "
       decisions.push({ name, action: "rejected", reason: "Another native project/local/profile scope defines this name differently; resolve the native scope conflict first" });
       continue;
     }
-    if (present !== undefined && equivalent(request.agent, present, next)) {
+    const exactMatch = present !== undefined && canonical(present) === canonical(next);
+    const portableMatch = present !== undefined && config.servers[name]?.transport !== "native" && equivalent(request.agent, present, next);
+    if (exactMatch || portableMatch) {
       decisions.push({ name, action: "matched", reason: previous ? "Managed definition already matches" : "Existing unmanaged definition already matches; ownership was not adopted" });
     } else if (!previous && present !== undefined) {
       decisions.push({ name, action: "rejected", reason: "Unmanaged native name is occupied by a different definition; preserve it or choose a new central name" });
@@ -192,7 +236,10 @@ export const manageStaticMcp = async (action: "migrate" | "apply" | "status" | "
     return summary(action, request, refused, "Conflicts found; no native or ownership changes made", location.path, "failed");
   }
   if (action === "apply" && Object.keys(updates).length) {
-    const nextNative = mergeImage(request.agent, nativeImage, updates);
+    const merged = mergeImage(request.agent, nativeImage, updates);
+    const includesNative = Object.keys(updates).some(name => config.servers[name]?.transport === "native");
+    // Native MCP definitions may contain literal credentials; do not add them to a broadly readable file.
+    const nextNative = includesNative ? { ...merged, mode: 0o600 } : merged;
     const nextState = jsonImage({ ...owned, servers: nextOwned });
     await transact(request, central, location.path, [
       { path: location.path, before: nativeImage, after: nextNative },
