@@ -22,6 +22,7 @@ import { createUi, UiCancelled } from "./ui.js";
 import type { Ui } from "./ui.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
+const agentChoices = agents.join("|");
 const help = "Usage: modeck <command> [options]\n\nCommands:\n"
   + "  Setup and migration\n  init                   Initialize configuration\n  scan                   Import resources from agent homes\n"
   + "  migrate                Migrate existing configuration\n  res <init|update>       Manage external resources\n"
@@ -50,8 +51,8 @@ const commandHelp: Readonly<Record<string, string>> = {
     + "or explicit --yes to overwrite, including in non-TTY use. Missing files can be created without a TTY.\n"
     + "Empty results, nearer .modes overrides and selections that cannot be faithfully fixed are refused without writing.\n"
     + "--format selects text or JSON output; --config, --cwd and --state have the same meaning as eval.\n",
-  init: "Usage: modeck init [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
-  scan: "Usage: modeck scan [--agent <claude|codex|codebuddy>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n",
+  init: `Usage: modeck init [--agent <${agentChoices}>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n`,
+  scan: `Usage: modeck scan [--agent <${agentChoices}>] [--home <dir>] [--config <dir>] [--list | --answers <file>] [-h|--help]\n`,
   migrate: "Usage: modeck migrate [--config <dir>] [--mode <name>] [--list | --answers <file>] [-h|--help]\n",
   register: "Usage: modeck register [--config <dir>] [--target-home <dir>] [-h|--help]\n",
   unregister: "Usage: modeck unregister [--config <dir>] [--target-home <dir>] [-h|--help]\n",
@@ -92,7 +93,7 @@ const required = (opts: Readonly<Record<string, string | boolean>>, name: string
 };
 const agentFor = (opts: Readonly<Record<string, string | boolean>>): Agent => {
   const value = required(opts, "agent");
-  if (!isAgent(value)) throw modeError("E_USAGE", "Unknown agent");
+  if (!isAgent(value)) throw modeError("E_USAGE", `Unknown agent; choose ${agentChoices}`);
   return value;
 };
 const pathFor = async (value: string): Promise<string> => safeAbsolute(absolute(value));
@@ -232,7 +233,7 @@ export const main = async (argv: string[]): Promise<number> => {
       if (opts.list || opts["dry-run"] || format === "json") json(result); else reportConfig(command, result, ui);
       return result.conflicts ? 4 : 0;
     }
-    if (command === "render" && format === "json" && opts.agent === undefined) throw modeError("E_USAGE", "Choose an agent with --agent claude|codex|codebuddy; JSON output cannot prompt");
+    if (command === "render" && format === "json" && opts.agent === undefined) throw modeError("E_USAGE", `Choose an agent with --agent ${agentChoices}; JSON output cannot prompt`);
     const selectedAgent = command === "resolve" ? "codex" : opts.agent !== undefined ? agentFor(opts)
       : command === "render" ? (await selectAgents("render", await pathFor(homedir()), ui))[0] : undefined;
     if (command === "render" && !selectedAgent) return 0;

@@ -25,14 +25,14 @@ const installed = async (home: string, agent: Agent): Promise<boolean> => {
 };
 
 export const selectAgents = async (operation: "bind" | "unbind" | "render", home: string, ui: Ui = createUi()): Promise<readonly Agent[]> => {
-  if (!process.stdin.isTTY || !process.stderr.isTTY) throw modeError("E_USAGE", `${operation} requires a TTY for selection; use --agent <claude|codex|codebuddy>`);
+  if (!process.stdin.isTTY || !process.stderr.isTTY) throw modeError("E_USAGE", `${operation} requires a TTY for selection; use --agent <${agents.join("|")}>`);
   const candidates = (await Promise.all(agents.map(async agent => {
     const record = await loadRecord(home, agent);
     if (operation === "unbind" ? !record : !record && !await installed(home, agent)) return [];
     return [{ value: agent, name: `${agent} — ${record ? `bound to ${record.configRoot}` : "not bound"}`, checked: false }];
   }))).flat();
   if (!candidates.length) {
-    if (operation === "render") throw modeError("E_USAGE", "No installed or bound agents found; use --agent <claude|codex|codebuddy>");
+    if (operation === "render") throw modeError("E_USAGE", `No installed or bound agents found; use --agent <${agents.join("|")}>`);
     ui.printError(`No ${operation === "bind" ? "installed agents" : "modeck bindings"} found in ${home}; no changes made.`);
     return [];
   }

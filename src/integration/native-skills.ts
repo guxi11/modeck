@@ -7,7 +7,8 @@ import type { Agent } from "../contracts/index.js";
 import { data, missing, readImage } from "./fs.js";
 
 const skillName = async (directory: string, fallback: string, agent: Agent): Promise<string | null> => {
-  const { skills } = agentDefinitions[agent];
+  const skills = agentDefinitions[agent].skills;
+  if (!skills) return null;
   const path = await realpath(join(directory, "SKILL.md")).catch(error => {
     if (missing(error)) return null;
     throw error;
@@ -37,8 +38,9 @@ export const nativeSkillNames = async (cwd: string, agent: Agent = "codebuddy", 
     throw modeError("E_PATH", "Native skill boundary does not contain cwd");
   }
   const adapter = agentDefinitions[agent];
+  if (!adapter.skills) return [];
   const { skills } = adapter;
-  const configHome = process.env[adapter.configEnvironment];
+  const configHome = adapter.configEnvironment ? process.env[adapter.configEnvironment] : undefined;
   const user = resolve(project, configHome || join(homedir(), adapter.configDirectory));
   const roots = [...new Set([
     ...(skills.ancestors ? projectDirectories(project, root) : [project]).map(path => join(path, skills.projectDirectory)),

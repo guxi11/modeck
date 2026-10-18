@@ -1,5 +1,6 @@
 import { lstat, open, readdir, rmdir } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { execFile } from "node:child_process";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
 import { agentDefinitions, canonical, checkRelativePath, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { Agent, ApplyBindPlanRequest, Diagnostic, FileChange, FileImage, BindPlan, BindRecord,
@@ -7,7 +8,7 @@ import type { Agent, ApplyBindPlanRequest, Diagnostic, FileChange, FileImage, Bi
 import { atomic, checkDirectory, data, digest, ensureParents, homePath, imageJson, jsonImage, missing,
   object, parentIdentity, readImage, safeAbsolute, same, treeFiles } from "./fs.js";
 import type { ParentIdentity } from "./fs.js";
-import { hookGroup } from "./hooks.js";
+import { hookGroup, readHookGroups, writeHookGroups } from "./hooks.js";
 import { prepare } from "./prepare.js";
 import { convertHookGroup } from "./formats.js";
 
@@ -19,6 +20,41 @@ const locations = (agent: Agent) => ({
 });
 const diagnostic = (code: string, message: string, path: string | null = null): Diagnostic => ({ code, message, path });
 const conflict = (message: string, path?: string): never => { throw modeError("E_INSTALL_CONFLICT", message, path ? { path } : {}); };
+const copilotVersion = async (): Promise<readonly number[]> => new Promise((resolveVersion, reject) => {
+  execFile("copilot", ["--version"], { encoding: "utf8", timeout: 5_000, maxBuffer: 16_384 }, (error, stdout) => {
+    const match = /(?:^|\s)v?(\d+)\.(\d+)\.(\d+)(?:[-+][^\s]+)?(?:\s|$)/.exec(stdout);
+    if (error || !match || /\d+\.\d+\.\d+-[^\s]+/.test(match[0])) {
+      return reject(new Error("GitHub Copilot CLI version could not be verified; Copilot binding requires copilot --version >= 1.0.89"));
+    }
+    resolveVersion(match.slice(1, 4).map(Number));
+  });
+});
+const requireCopilot = async (home: string): Promise<void> => {
+  const configured = process.env.COPILOT_HOME;
+  if (configured && resolve(configured) !== join(home, ".copilot")) conflict("COPILOT_HOME must resolve to <target-home>/.copilot for a safe binding");
+  let version: readonly number[];
+  try { version = await copilotVersion(); }
+  catch (error) { return conflict(error instanceof Error ? error.message : String(error)); }
+  if (version[0]! < 1 || version[0] === 1 && (version[1]! < 0 || version[1] === 0 && version[2]! < 89)) {
+    conflict(`GitHub Copilot CLI ${version.join(".")} is too old; Copilot binding requires >= 1.0.89`);
+  }
+};
+const requireFactoryTopology = async (home: string, hookImage: FileImage | null): Promise<void> => {
+  if (hookImage) return;
+  const directory = ".factory";
+  const legacy = await readImage(homePath(home, `${directory}/hooks/hooks.json`), LIMITS.jsonBytes);
+  if (legacy) conflict("Factory Droid has legacy hooks; migrate them with the native /hooks manager before binding", `${directory}/hooks/hooks.json`);
+  const settings = await Promise.all(["settings.json", "settings.local.json"].map(file => readImage(homePath(home, `${directory}/${file}`), LIMITS.jsonBytes)));
+  settings.forEach((image, index) => {
+    if (!image) return;
+    const root = object(imageJson(image));
+    if (Object.hasOwn(root, "hooks")) {
+      const hooks = object(root.hooks);
+      if (Object.keys(hooks).length) conflict("Factory Droid settings contain hooks that would be shadowed; migrate them with the native /hooks manager before binding",
+        `${directory}/${["settings.json", "settings.local.json"][index]}`);
+    }
+  });
+};
 const allowedOwned = (agent: Agent, path: string): boolean => {
   checkRelativePath(path, false);
   const loc = locations(agent);
@@ -43,10 +79,11 @@ const changesFor = async (home: string, paths: readonly { readonly path: string;
     return same(before, change.after) ? null : { ...change, beforeDigest: before ? digest(before) : null, beforeMode: before?.mode ?? null };
   }))).filter((value): value is FileChange => value !== null).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 
-const shared = (image: FileImage | null): { readonly root: Record<string, unknown>; readonly groups: readonly unknown[] } => {
+const shared = (image: FileImage | null, agent: Agent): { readonly root: Record<string, unknown>; readonly groups: readonly unknown[] } => {
   const root = image ? object(imageJson(image)) : {};
-  const hooks = root.hooks === undefined ? {} : object(root.hooks);
-  const groups = hooks.SessionStart ?? [];
+  const adapter = agentDefinitions[agent].hook;
+  if (image && adapter.nativeContainer === "versioned-hooks" && root.version !== 1) return conflict("Invalid native hook file version");
+  const groups = readHookGroups(root, agent);
   if (!Array.isArray(groups) || groups.some(group => {
     const record = object(group);
     return record.matcher !== undefined && typeof record.matcher !== "string" || !Array.isArray(record.hooks)
@@ -57,14 +94,8 @@ const shared = (image: FileImage | null): { readonly root: Record<string, unknow
   })) return conflict("Invalid SessionStart settings");
   return { root, groups };
 };
-const replaceGroups = (root: Record<string, unknown>, groups: readonly unknown[], beforeRoot?: Record<string, unknown>): Record<string, unknown> => {
-  const hooks = root.hooks === undefined ? {} : object(root.hooks);
-  const priorHooks = beforeRoot?.hooks === undefined ? {} : object(beforeRoot.hooks);
-  const nextHooks = groups.length || Object.hasOwn(priorHooks, "SessionStart")
-    ? { ...hooks, SessionStart: groups } : Object.fromEntries(Object.entries(hooks).filter(([key]) => key !== "SessionStart"));
-  if (!Object.keys(nextHooks).length && !beforeRoot?.hooks) return Object.fromEntries(Object.entries(root).filter(([key]) => key !== "hooks"));
-  return { ...root, hooks: nextHooks };
-};
+const replaceGroups = (root: Record<string, unknown>, groups: readonly unknown[], agent: Agent,
+  beforeRoot?: Record<string, unknown>): Record<string, unknown> => writeHookGroups(root, groups, agent, beforeRoot);
 
 const lockCheck = async (home: string, agent: Agent): Promise<void> => {
   const path = homePath(home, locations(agent).lock);
@@ -122,7 +153,7 @@ export const loadRecord = async (home: string, agent: Agent): Promise<BindRecord
     const before = object(value.beforeHookFile);
     if (typeof before.data !== "string" || !["utf8", "base64"].includes(String(before.encoding))
       || typeof before.mode !== "number" || !Number.isInteger(before.mode) || before.mode < 0 || before.mode > 0o777) return conflict("Invalid saved shared configuration");
-    shared(before as unknown as FileImage);
+    shared(before as unknown as FileImage, agent);
   }
   return { ...value, files } as unknown as BindRecord;
 };
@@ -157,7 +188,11 @@ const basePlan = async (agent: Agent, targetHome: string, operation: BindPlan["o
   const warnings = agent === "codex" ? [diagnostic("CODEX_HOOK_TRUST", "Review and trust the installed definition in Codex /hooks; installation does not grant trust."),
     ...(inline && /\[\[?\s*hooks(?:\s*\.|\s*\])/.test(data(inline).toString("utf8"))
       ? [diagnostic("CODEX_INLINE_HOOKS", "Inline Codex hooks also load; review all sources to avoid duplicated modeck hooks.")] : [])]
-    : [diagnostic("HOOK_FAILURE_NONBLOCKING", "Claude waits for SessionStart, but hook failures do not guarantee blocking the first request.")];
+    : [diagnostic("HOOK_FAILURE_NONBLOCKING", agent === "claude"
+      ? "Claude waits for SessionStart, but hook failures do not guarantee blocking the first request."
+      : agent === "qoder" ? "Qoder SessionStart hooks do not block session startup; verify the CLI received the injected context."
+        : agent === "qwen" ? "Qwen Code controls hook failure handling; installation does not change its error policy."
+          : "SessionStart hook failures do not guarantee blocking the first request.")];
   try {
     await checkDirectory(home); await lockCheck(home, agent);
     const loc = locations(agent);
@@ -165,7 +200,7 @@ const basePlan = async (agent: Agent, targetHome: string, operation: BindPlan["o
     const image = await readImage(homePath(home, loc.hook), LIMITS.jsonBytes);
     if (image && data(image).includes(Buffer.from("GENERATED by evoloop"))) return conflict("evoloop owns the destination", loc.hook);
     const record = await loadRecord(home, agent);
-    await verifyOwned(home, agent, record, shared(image).groups);
+    await verifyOwned(home, agent, record, shared(image, agent).groups);
     const changes = await build(home, image, record);
     return hashPlan({ schemaVersion: 1, operation, agent, targetHome: home, owner, changes, conflicts: [], warnings });
   } catch (error) {
@@ -178,6 +213,8 @@ const basePlan = async (agent: Agent, targetHome: string, operation: BindPlan["o
 export const planBind = async ({ agent, targetHome, configRoot, configRoots, stateRoot, runtimeRoot }: PlanBindRequest): Promise<BindPlan> => {
   await prepare({ agent, configRoot, ...(configRoots !== undefined ? { configRoots } : {}), stateRoot, cwd: await realpath(process.cwd()) });
   return basePlan(agent, targetHome, "bind", async (home, before, previous) => {
+    if (agent === "copilot") await requireCopilot(home);
+    if (agent === "factorydroid") await requireFactoryTopology(home, before);
     const loc = locations(agent);
     const packagePaths = ["dist/bin/modeck.mjs", "package.json", "schemas/modes.schema.json", "schemas/manifest.schema.json"].sort();
     const packageFiles = await Promise.all(packagePaths.map(async path => {
@@ -189,16 +226,16 @@ export const planBind = async ({ agent, targetHome, configRoot, configRoots, sta
     const runtime = `${loc.private}/runtime/${runtimeDigest}`;
     const owned = packageFiles.map(file => ({ path: `${runtime}/${file.path}`, image: file.image }));
     const group = await convertHookGroup(agent, hookGroup(agent, homePath(home, `${runtime}/dist/bin/modeck.mjs`), configRoot, stateRoot));
-    const { root, groups } = shared(before);
+    const { root, groups } = shared(before, agent);
     if (previous && previous.runtimeDigest === runtimeDigest && canonical(previous.hookGroup) === canonical(group)
       && canonical(previous.files.map(file => file.path).sort()) === canonical(owned.map(file => file.path).sort())) return [];
     const nextGroups = previous ? groups.map(item => canonical(item) === canonical(previous.hookGroup) ? group : item) : [...groups, group];
-    const nextRoot = replaceGroups(root, nextGroups);
+    const nextRoot = replaceGroups(root, nextGroups, agent);
     const hookImage = before && canonical(nextRoot) === canonical(root) ? before : jsonImage(nextRoot, before?.mode ?? 0o600);
     const beforeHookFile = previous ? before && (digest(before) !== previous.afterHookFileDigest
       || before.mode !== (previous.beforeHookFile?.mode ?? 0o600))
-      ? jsonImage(replaceGroups(root, groups.filter(item => canonical(item) !== canonical(previous.hookGroup)),
-        previous.beforeHookFile ? shared(previous.beforeHookFile).root : {}), before.mode)
+      ? jsonImage(replaceGroups(root, groups.filter(item => canonical(item) !== canonical(previous.hookGroup)), agent,
+        previous.beforeHookFile ? shared(previous.beforeHookFile, agent).root : {}), before.mode)
       : previous.beforeHookFile : before;
     const record: BindRecord = { schemaVersion: 1, owner, agent, configRoot, stateRoot, runtimeDigest,
       files: owned.map(file => ({ path: file.path, digest: digest(file.image), mode: file.image.mode })).sort((a, b) => a.path < b.path ? -1 : 1),
@@ -214,10 +251,11 @@ export const planBind = async ({ agent, targetHome, configRoot, configRoots, sta
 export const planUnbind = async ({ agent, targetHome }: PlanUnbindRequest): Promise<BindPlan> => basePlan(agent, targetHome, "unbind", async (home, current, record) => {
   if (!record) return [];
   const loc = locations(agent);
-  const { root, groups } = shared(current);
+  const { root, groups } = shared(current, agent);
   const remaining = groups.filter(group => canonical(group) !== canonical(record.hookGroup));
   const image = current && digest(current) === record.afterHookFileDigest && current.mode === (record.beforeHookFile?.mode ?? 0o600) ? record.beforeHookFile
-    : jsonImage(replaceGroups(root, remaining, record.beforeHookFile ? shared(record.beforeHookFile).root : {}), current?.mode ?? 0o600);
+    : jsonImage(replaceGroups(root, remaining, agent,
+      record.beforeHookFile ? shared(record.beforeHookFile, agent).root : {}), current?.mode ?? 0o600);
   return changesFor(home, [{ path: loc.hook, category: "shared-json", after: image },
     ...record.files.map(file => ({ path: file.path, category: "owned" as const, after: null })),
     { path: loc.record, category: "owned", after: null }]);
@@ -236,6 +274,11 @@ export const applyBindPlan = async ({ plan, expectDigest }: ApplyBindPlanRequest
   if (!plan.changes.length) return;
   const home = await safeAbsolute(plan.targetHome);
   const loc = locations(plan.agent);
+  const hookChange = plan.changes.find(change => change.path === loc.hook);
+  if (plan.operation === "bind" && hookChange?.beforeDigest === null) {
+    if (plan.agent === "copilot") await requireCopilot(home);
+    if (plan.agent === "factorydroid") await requireFactoryTopology(home, await readImage(homePath(home, loc.hook), LIMITS.jsonBytes));
+  }
   plan.changes.forEach(change => {
     if (change.path !== loc.hook && change.path !== loc.record && !allowedOwned(plan.agent, change.path)) conflict("Plan contains an unowned path", change.path);
     if (change.after && (!Number.isInteger(change.after.mode) || change.after.mode < 0 || change.after.mode > 0o777)) conflict("Plan has invalid file permissions");

@@ -20,9 +20,9 @@ export type ScanResult = {
   readonly scanDigest: string;
 };
 type Candidate = Omit<ScannedResource, "id" | "sources" | "aliases" | "origins"> & { readonly source: string; readonly alias: string; readonly origin: ScannedResource["origins"][number] };
-const targets = [".claude", ".codex", ".agents", ".codebuddy", ".codebuddy-cli", ".gemini"];
-const markdownRuleTargets = new Set([".claude", ".codebuddy"]);
-const ruleNames: Readonly<Record<string, string>> = { ".claude": "CLAUDE.md", ".codex": "AGENTS.md", ".codebuddy": "CODEBUDDY.md", ".codebuddy-cli": "CODEBUDDY.md", ".gemini": "GEMINI.md" };
+const targets = [".claude", ".codex", ".agents", ".codebuddy", ".codebuddy-cli", ".gemini", ".qwen", ".qoder"];
+const markdownRuleTargets = new Set([".claude", ".codebuddy", ".qwen", ".qoder"]);
+const ruleNames: Readonly<Record<string, string>> = { ".claude": "CLAUDE.md", ".codex": "AGENTS.md", ".codebuddy": "CODEBUDDY.md", ".codebuddy-cli": "CODEBUDDY.md", ".gemini": "GEMINI.md", ".qwen": "QWEN.md", ".qoder": "AGENTS.md" };
 export type CatalogReferenceScan = {
   readonly references: readonly { readonly path: string; readonly source: string | null; readonly link: string;
     readonly ino: number; readonly dev: number; readonly mtime: number; readonly ctime: number }[];
@@ -90,7 +90,7 @@ const resourceId = (name: string): string => {
 };
 
 const scanCatalog = async (home: string, project: boolean, agents?: readonly Agent[]): Promise<ScanResult> => {
-  const catalogs = project ? [".claude", ".agents", ".codebuddy"]
+  const catalogs = project ? [".claude", ".agents", ".codebuddy", ".qwen", ".qoder"]
     : agents ? [...new Set(agents.flatMap(agent => agentDefinitions[agent].scanDirectories))] : targets;
   const root = await safePath(home);
   requireValue((await lstat(root)).isDirectory(), "E_PATH", "HOME must be a directory");

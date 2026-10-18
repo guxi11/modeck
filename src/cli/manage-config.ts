@@ -80,7 +80,7 @@ const answersFor = async (answers: string | undefined, before: Snapshot, ui: Ui)
       || !value.configs.every(root => typeof root === "string" && before.registry.projects.some(project => project.root === root))
       || !value.agents.every(agent => agents.includes(agent as Agent))
       || new Set(value.configs).size !== value.configs.length || new Set(value.agents).size !== value.agents.length) {
-      throw modeError("E_USAGE", "Answers must be {configs:[registered absolute paths],agents:[claude|codex|codebuddy]} without duplicates");
+      throw modeError("E_USAGE", `Answers must be {configs:[registered absolute paths],agents:[${agents.join("|")}]} without duplicates`);
     }
     return { configs: value.configs as string[], agents: value.agents as Agent[] };
   }
