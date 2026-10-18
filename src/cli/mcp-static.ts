@@ -57,9 +57,8 @@ const report = (summary: StaticMcpSummary, json: boolean): void => {
   const { counts } = summary;
   const outcome = ui.emphasize(summary.outcome, stream, summary.outcome === "success" ? "green" : "red");
   ui.section(`modeck mcp ${summary.action}  ${outcome}`, "");
-  ui.section("Changes", `  Added ${counts.added} · Updated ${counts.updated} · Matched ${counts.matched} · Preserved ${counts.preserved} · Rejected ${counts.rejected}`);
-  ui.section("Result", summary.message);
-  if (summary.target) ui.section("Target", `  Native: ${summary.target}\n  Central: ${summary.configuration}`);
+  ui.section("Summary", [`Added ${counts.added} · Updated ${counts.updated} · Matched ${counts.matched} · Preserved ${counts.preserved} · Rejected ${counts.rejected}`,
+    summary.message, ...(summary.target ? [`Native: ${summary.target}`, `Central: ${summary.configuration}`] : [])].join("\n"));
   const ordered = [...summary.decisions].sort((left, right) => Number(right.action === "rejected") - Number(left.action === "rejected"));
   if (ordered.length) ui.section("Servers", ordered.map(decision => {
     const state = decision.action === "rejected" ? ui.emphasize(decision.action, stream, "red") : decision.action;

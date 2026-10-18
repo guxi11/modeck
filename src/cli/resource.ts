@@ -96,7 +96,7 @@ export const manageResources = async (root: string, action: string): Promise<Loc
     const ignore = ignorePresent ? utf8((await regularBytes(ignoreFile, LIMITS.jsonBytes)).bytes) : "";
     const staging = await mkdtemp(join(mutex, "stage-"));
     const progress = (index: number, phase: string): void => {
-      process.stderr.write(`modeck res ${action}: [${index + 1}/${declarations.length}] ${declarations[index]!.id}: ${phase}\n`);
+      if (phase === "downloading") process.stderr.write(`modeck res ${action}: [${index + 1}/${declarations.length}] fetching ${declarations[index]!.id}\n`);
     };
     try {
       const prepared = await declarations.reduce(async (pending, declaration, index) => {

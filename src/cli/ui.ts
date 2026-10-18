@@ -23,7 +23,7 @@ export const createUi = ({ format = "text" }: UiOptions = {}) => {
   };
   const emphasize = (value: string, stream: NodeJS.WriteStream, style: Style = "bold"): string => styles(stream)[style](value);
   const section = (title: string, content: string, stream: NodeJS.WriteStream = process.stdout): void => {
-    stream.write(`${emphasize(title, stream)}\n${content}\n`);
+    stream.write(`${emphasize(title, stream)}\n${content}\n\n`);
   };
   const prompt = async <T>(run: (context: PromptContext) => Promise<T>, missingMessage?: string): Promise<T> => {
     const isTty = process.stdin.isTTY && process.stderr.isTTY;

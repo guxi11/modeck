@@ -19,19 +19,19 @@ import { selectAgents } from "./bind.js";
 import { encodeHook, prepare, runAgent } from "../integration/index.js";
 import { imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
 import { parseEvent, runMarker } from "../integration/hooks.js";
-import { createUi } from "./ui.js";
+import { createUi, UiCancelled } from "./ui.js";
 import type { Ui } from "./ui.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
 const help = "Usage: modeck <command> [options]\n\nCommands:\n"
-  + "  res <init|update>  Manage external resources\n  init                   Initialize configuration\n"
-  + "  scan                   Import resources from agent homes\n  migrate                Migrate existing configuration\n"
-  + "  mcp <migrate|apply|status|recover>  Manage static native MCP configuration\n"
-  + "  eval                   Evaluate automatic modes\n  save                   Save automatic modes to .modes\n"
-  + "  resolve                Resolve context\n"
-  + "  render                 Render context\n  hook                   Handle agent session hooks\n"
-  + "  register               Register a configuration\n  unregister             Unregister a configuration\n"
-  + "  config                 Manage registered configurations\n  run                    Start one agent session with context, without hook binding\n\n"
+  + "  Setup and migration\n  init                   Initialize configuration\n  scan                   Import resources from agent homes\n"
+  + "  migrate                Migrate existing configuration\n  res <init|update>       Manage external resources\n"
+  + "\n  Inspect and select context\n  eval                   Evaluate automatic modes\n  save                   Save automatic modes to .modes\n"
+  + "  resolve                Explain resolved modes, rules and skills\n  render                 Render context\n"
+  + "\n  Configuration and sessions\n  register               Register a configuration\n  unregister             Unregister a configuration\n"
+  + "  config                 Manage registered configurations\n  run                    Start one agent session with context\n"
+  + "  mcp <migrate|apply|status|recover>\n    Manage static native MCP configuration\n"
+  + "\n  Agent protocol (internal)\n  hook                   Handle agent session hook input/output\n\n"
   + "Options:\n  -h, --help              Show help\n  -v, --version           Show version\n";
 const commandHelp: Readonly<Record<string, string>> = {
   eval: "Usage: modeck eval [--config <dir>] [--cwd <dir>] [--state <dir>] [--format <text|json>] [-h|--help]\n\n"
@@ -39,6 +39,10 @@ const commandHelp: Readonly<Record<string, string>> = {
     + "Uses enabled registered configurations unless --config is supplied; --cwd defaults to the current directory.\n"
     + "Read-only: reports mode IDs, sources and reasons without installing resources or creating state.\n"
     + "Auto selectors execute as trusted user code. --state only identifies a directory to exclude from project facts.\n",
+  resolve: "Usage: modeck resolve [--config <dir>] [--cwd <dir>] [--state <dir>] [--format <text|json>] [-h|--help]\n\n"
+    + "Explain the final modes, rules and skills selected for the current directory, including each mode's selection reason.\n"
+    + "Prepares and compiles context, validating installed resources and using the configured state/cache directory; run modeck res init if a declared resource is missing. This is not a pure parse-only operation.\n"
+    + "Text output is concise. JSON returns the complete resolved plan. In non-TTY use without --format, JSON is retained for compatibility; pass --format text to request text.\n",
   save: "Usage: modeck save [--config <dir>] [--cwd <dir>] [--state <dir>] [--format <text|json>] [--yes] [-h|--help]\n\n"
     + "Evaluate as eval does, then atomically save the fixed mode IDs to the Git repository root .modes.\n"
     + "Outside Git, the destination is --cwd (default: current directory). Defaults still apply when resolving.\n"
@@ -72,7 +76,7 @@ const values: Readonly<Record<string, readonly string[]>> = {
   eval: ["config", "cwd", "state", "format"], save: ["config", "cwd", "state", "format"],
   resource: ["config"],
   init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"],
-  resolve: ["config", "state", "cwd"], render: ["config", "state", "cwd", "agent", "format"],
+  resolve: ["config", "state", "cwd", "format"], render: ["config", "state", "cwd", "agent", "format"],
   hook: ["config", "state", "agent"], register: ["config", "target-home"], unregister: ["config", "target-home"],
   config: ["answers", "target-home", "state", "expect", "format"], run: ["config", "state", "cwd", "agent", "executable"],
 };
@@ -108,31 +112,48 @@ const agentFor = (opts: Readonly<Record<string, string | boolean>>): Agent => {
 const pathFor = async (value: string): Promise<string> => safeAbsolute(absolute(value));
 const json = (value: unknown): void => { process.stdout.write(`${JSON.stringify(value)}\n`); };
 const items = (value: unknown): readonly unknown[] => Array.isArray(value) ? value : [];
+const resolvedIdLabels = (ids: readonly string[]): ReadonlyMap<string, string> => {
+  const hashes = [...new Set(ids.flatMap(id => {
+    const match = /^([0-9a-f]{64}):/u.exec(id);
+    return match ? [match[1]!] : [];
+  }))];
+  const lengths = new Map(hashes.map(hash => [hash, 8]));
+  while (hashes.some(hash => hashes.some(other => hash !== other
+    && hash.slice(0, lengths.get(hash)!) === other.slice(0, lengths.get(hash)!)))) {
+    hashes.forEach(hash => lengths.set(hash, Math.min(64, lengths.get(hash)! + 4)));
+  }
+  return new Map(ids.flatMap(id => {
+    const match = /^([0-9a-f]{64}):(.*)$/u.exec(id);
+    return match ? [[id, `${match[2]} [${match[1]!.slice(0, lengths.get(match[1]!)!)}]`] as const] : [];
+  }));
+};
 const reportImport = (command: string, value: unknown, ui: Ui): void => {
   const result = object(value);
   if (typeof result.message === "string") { process.stdout.write(`${result.message}\n`); return; }
   const count = items(result.resources).length;
-  if (command !== "init" && count === 0) { process.stdout.write("No resources selected; no changes made.\n"); return; }
-  const lines = [`Configuration: ${result.configRoot}`];
-  if (typeof result.backupDirectory === "string") lines.push(`Backups: ${result.backupDirectory}`);
+  const unchanged = command !== "init" && count === 0;
+  const lines = [unchanged ? "No resources selected; no changes made." : `Configuration:\n  ${result.configRoot}`];
+  if (typeof result.backupDirectory === "string") lines.push(`Backups:\n  ${result.backupDirectory}`);
   if (items(result.retained).length) lines.push(`Retained ${items(result.retained).length} managed/shared entries.`);
-  ui.section(`modeck ${command}: ${command === "init" ? "initialized" : "imported"} (${count} resources)`, lines.join("\n"));
+  ui.section(`modeck ${command}: ${unchanged ? "no changes" : command === "init" ? "initialized" : "imported"} · ${count} resources`, lines.join("\n"));
 };
 const reportConfig = (command: string, result: Readonly<Record<string, unknown>>, ui: Ui): void => {
   if (command !== "config") {
-    ui.section(`modeck ${command}: ${result.changed ? "complete" : "no changes"}`, "");
+    ui.section(`modeck ${command}`, result.changed ? "Configuration updated." : "No changes made.");
     return;
   }
-  ui.section(result.conflicts ? "modeck config: conflicts found; no changes made."
-    : `modeck config: complete (${items(result.projects).filter(project => object(project).enabled).length} configurations enabled)`, "");
+  const enabled = items(result.projects).filter(project => object(project).enabled).length;
+  const operations: string[] = [];
   for (const value of items(result.plans)) {
     const plan = object(value);
-    if (!result.conflicts) process.stdout.write(`  ${plan.agent}: ${plan.operation === "bind" ? "bound" : "unbound"}\n`);
+    if (!result.conflicts) operations.push(`  ${plan.agent}: ${plan.operation === "bind" ? "bound" : "unbound"}`);
     for (const value of [...items(plan.conflicts), ...items(plan.warnings)]) {
       const diagnostic = object(value);
       ui.printError(`${plan.agent}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`);
     }
   }
+  ui.section("Configuration result", result.conflicts ? "Conflicts found; no changes made."
+    : [`${enabled} configuration${enabled === 1 ? "" : "s"} enabled.`, ...operations].join("\n"));
 };
 const packageVersion = async (): Promise<string> => {
   const image = await readImage(join(runtimeRoot, "package.json"), LIMITS.jsonBytes);
@@ -202,7 +223,7 @@ export const main = async (argv: string[]): Promise<number> => {
         : record;
       return { configRoot, stateRoot: await pathFor(String(opts.state ?? process.env.MODECK_STATE ?? fallback?.stateRoot ?? join(homedir(), ".local/share/modeck/v1"))) };
     };
-    const format = String(opts.format ?? "text");
+    const format = String(opts.format ?? (command === "resolve" && !process.stdout.isTTY ? "json" : "text"));
     if (!["text", "json"].includes(format)) throw modeError("E_USAGE", "Unknown output format");
     const ui = createUi({ format: format === "json" || opts.list === true ? "json" : "text" });
     if (command === "eval" || command === "save") {
@@ -264,7 +285,25 @@ export const main = async (argv: string[]): Promise<number> => {
     const agent = selectedAgent;
     if (!agent) return 0;
     const prepared = await prepare({ agent, configRoot, stateRoot, cwd });
-    if (command === "resolve") json(prepared.plan);
+    if (command === "resolve") {
+      if (format === "json") json(prepared.plan);
+      else {
+        const plan = prepared.plan;
+        const labels = resolvedIdLabels([...plan.modeIds, ...plan.resources.map(resource => resource.id),
+          ...plan.reasons.flatMap(reason => [reason.mode, ...(reason.from === null ? [] : [reason.from])])]);
+        const label = (id: string): string => labels.get(id) ?? id;
+        const resources = plan.resources.reduce((groups, resource) => ({ ...groups, [resource.kind]: [...groups[resource.kind], resource.id] }),
+          { rule: [] as string[], skill: [] as string[] });
+        ui.section(`Resolved context · ${plan.modeIds.length} mode${plan.modeIds.length === 1 ? "" : "s"}`,
+          [`Directory: ${plan.cwd}`, `Boundary: ${plan.boundary}`, `Selector: ${plan.selectorPath ?? "(none; defaults and auto)"}`,
+            `Modes: ${plan.modeIds.map(label).join(", ") || "(none)"}`,
+            `Rules: ${resources.rule.map(label).join(", ") || "(none)"}`, `Skills: ${resources.skill.map(label).join(", ") || "(none)"}`].join("\n"));
+        if (plan.reasons.length) ui.section("Selection reasons", plan.reasons.map(reason =>
+          `  ${label(reason.mode)}: ${reason.via}${reason.from === null ? "" : ` (${label(reason.from)})`}`).join("\n"));
+        if (plan.diagnostics.length) ui.section("Diagnostics", plan.diagnostics.map(item =>
+          `  ${item.code}: ${item.message}${item.path ? ` (${item.path})` : ""}`).join("\n"));
+      }
+    }
     else if (format === "json") {
       const { modeIds: _modeIds, ...rendered } = prepared.rendered;
       json(rendered);
@@ -272,9 +311,14 @@ export const main = async (argv: string[]): Promise<number> => {
     else process.stdout.write(prepared.rendered.text);
     return 0;
   } catch (caught) {
+    if (caught instanceof UiCancelled) return 130;
     const error = caught instanceof Error && "code" in caught && String(caught.code).startsWith("E_") ? caught as ModeError
-      : modeError("E_IO", "Operation failed", { cause: String(caught) });
-    process.stderr.write(`modeck: ${error.message} [${error.code}]\n`);
+      : modeError("E_IO", "Operation failed");
+    const safeDetails = ["agent", "configRoot", "cwd", "path", "target", "name", "key"].flatMap(key => {
+      const value = error.details[key];
+      return typeof value === "string" && value.length <= 500 && !/[\r\n]/u.test(value) ? [`${key}: ${value}`] : [];
+    });
+    process.stderr.write(`modeck: ${error.message} [${error.code}]${safeDetails.length ? `\n${safeDetails.map(value => `  ${value}`).join("\n")}` : ""}\n`);
     return exitFor(error, command === "hook");
   }
 };

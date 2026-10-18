@@ -62,15 +62,16 @@ export const evaluateModes = async ({ command, configRoot, stateRoot, cwd, forma
   const report = (saved?: boolean): void => {
     if (format === "json") process.stdout.write(`${JSON.stringify({ ...result, ...(saved === undefined ? {} : { saved }) })}\n`);
     else {
-      process.stdout.write(`Modes: ${modeIds.join(", ") || "(none)"}\n`);
+      ui.section(`Selected modes · ${modeIds.length}`, modeIds.join(", ") || "(none)");
       projects.forEach(project => {
-        process.stdout.write(`Configuration: ${project.configRoot}\nDefaults: ${project.defaults.join(", ") || "(none)"}\nAuto: ${project.autoModeIds.join(", ") || "(none)"}\n`);
-        project.sources.forEach(source => process.stdout.write(`Source: ${source.path}\n`));
-        project.reasons.forEach(reason => process.stdout.write(`  ${reason.mode}: ${reason.via}${reason.from === null ? "" : ` (${reason.from})`}\n`));
-        project.diagnostics.forEach(diagnostic => process.stdout.write(`${diagnostic.code}: ${diagnostic.message}\n`));
+        ui.section(`Configuration · ${project.configRoot}`, [`Defaults: ${project.defaults.join(", ") || "(none)"}`,
+          `Auto: ${project.autoModeIds.join(", ") || "(none)"}`,
+          ...project.sources.map(source => `Source: ${source.path}`),
+          ...project.reasons.map(reason => `  ${reason.mode}: ${reason.via}${reason.from === null ? "" : ` (${reason.from})`}`),
+          ...project.diagnostics.map(diagnostic => `${diagnostic.code}: ${diagnostic.message}`)].join("\n"));
       });
-      diagnostics.forEach(diagnostic => process.stdout.write(`${diagnostic.code}: ${diagnostic.message}\n`));
-      if (saved !== undefined) process.stdout.write(saved ? `Saved: ${path}\n` : "No changes made.\n");
+      if (diagnostics.length) ui.section("Diagnostics", diagnostics.map(diagnostic => `${diagnostic.code}: ${diagnostic.message}`).join("\n"));
+      if (saved !== undefined) ui.section("Result", saved ? `Saved: ${path}` : "No changes made.");
     }
   };
   if (command === "eval") { report(); return; }
