@@ -3,8 +3,6 @@ import { pathToFileURL } from "node:url";
 import { LIMITS, modeError } from "../contracts/index.js";
 import type { ProjectFacts } from "../contracts/index.js";
 
-const selectorTimeoutMs = 10_000;
-
 // The worker isolates module caches, not permissions: this is trusted user code.
 const loader = `
 import { createHash } from 'node:crypto';
@@ -63,7 +61,7 @@ export const automaticModes = async (path: string, facts?: ProjectFacts): Promis
     const timer = setTimeout(() => {
       void thread.terminate();
       reject(modeError("E_CONFIG", "Trusted automatic mode selector exceeded its execution timeout", { path }));
-    }, selectorTimeoutMs);
+    }, LIMITS.probeTimeoutMs);
     thread.once("message", (result: AutoSelection) => {
       clearTimeout(timer);
       void thread.terminate();

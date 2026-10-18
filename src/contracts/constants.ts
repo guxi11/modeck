@@ -25,4 +25,5 @@ export const LIMITS = Object.freeze({
   hookInputBytes: 1_048_576,
   sessionIdChars: 256,
   gitTimeoutMs: 120_000,
+  probeTimeoutMs: 10_000,
 });
