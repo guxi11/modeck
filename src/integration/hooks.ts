@@ -42,6 +42,7 @@ const hooksAt = (root: Record<string, unknown>, agent: Agent): Record<string, un
   if (adapter.nativeContainer === "events") return root;
   return root.hooks === undefined ? {} : object(root.hooks);
 };
+const rawCopilotEntries = new WeakMap<object, unknown>();
 export const readHookGroups = (root: Record<string, unknown>, agent: Agent): readonly unknown[] => {
   const adapter = agentDefinitions[agent].hook;
   const hooks = hooksAt(root, agent);
@@ -50,10 +51,18 @@ export const readHookGroups = (root: Record<string, unknown>, agent: Agent): rea
   if (adapter.nativeEntries === "groups") return entries;
   return entries.map(item => {
     const entry = object(item);
-    if (entry.type !== undefined && entry.type !== "command") return { hooks: [entry] };
-    const { timeoutSec, timeout, ...handler } = entry;
-    return { ...(typeof entry.matcher === "string" ? { matcher: entry.matcher } : {}),
-      hooks: [{ ...handler, type: "command", ...((timeoutSec ?? timeout) === undefined ? {} : { timeout: timeoutSec ?? timeout }) }] };
+    const group = entry.type !== undefined && entry.type !== "command" ? { hooks: [entry] }
+      : (() => {
+        const { timeoutSec, timeout, ...handler } = entry;
+        return { ...(typeof entry.matcher === "string" ? { matcher: entry.matcher } : {}),
+          hooks: [{ ...handler, type: "command", ...((timeoutSec ?? timeout) === undefined ? {} : { timeout: timeoutSec ?? timeout }) }] };
+      })();
+    if (entry.type !== "command" || !Object.hasOwn(entry, "timeoutSec") || Object.hasOwn(entry, "timeout")
+      || (adapter.matcher ? typeof entry.matcher !== "string" : Object.hasOwn(entry, "matcher"))) {
+      Object.assign(group, { __modeckNativeShapeMismatch: true });
+    }
+    rawCopilotEntries.set(group, item);
+    return group;
   });
 };
 export const writeHookGroups = (root: Record<string, unknown>, groups: readonly unknown[], agent: Agent,
@@ -63,6 +72,8 @@ export const writeHookGroups = (root: Record<string, unknown>, groups: readonly 
   const previous = beforeRoot ? hooksAt(beforeRoot, agent) : {};
   const entries = adapter.nativeEntries === "groups" ? groups : groups.flatMap(item => {
     const group = object(item);
+    const raw = rawCopilotEntries.get(item as object);
+    if (raw !== undefined) return [raw];
     if (!Array.isArray(group.hooks)) return [];
     return group.hooks.map(value => {
       const handler = object(value);
