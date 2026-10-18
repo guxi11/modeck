@@ -29,6 +29,23 @@ const copilotVersion = async (): Promise<readonly number[]> => new Promise((reso
     resolveVersion(match.slice(1, 4).map(Number));
   });
 });
+const factoryDroidVersion = async (): Promise<readonly number[]> => new Promise((resolveVersion, reject) => {
+  execFile("droid", ["--version"], { encoding: "utf8", timeout: 5_000, maxBuffer: 16_384 }, (error, stdout) => {
+    const match = /(?:^|\s)v?(\d+)\.(\d+)\.(\d+)(?:[-+][^\s]+)?(?:\s|$)/.exec(stdout);
+    if (error || !match || /\d+\.\d+\.\d+-[^\s]+/.test(match[0])) {
+      return reject(new Error("Factory Droid version could not be verified; binding requires droid --version >= 0.196.0"));
+    }
+    resolveVersion(match.slice(1, 4).map(Number));
+  });
+});
+const requireFactoryDroid = async (): Promise<void> => {
+  let version: readonly number[];
+  try { version = await factoryDroidVersion(); }
+  catch (error) { return conflict(error instanceof Error ? error.message : String(error)); }
+  if (version[0]! < 0 || version[0] === 0 && (version[1]! < 196 || version[1] === 196 && version[2]! < 0)) {
+    conflict(`Factory Droid ${version.join(".")} is too old; binding requires >= 0.196.0`);
+  }
+};
 const requireCopilot = async (home: string): Promise<void> => {
   const configured = process.env.COPILOT_HOME;
   if (configured && resolve(configured) !== join(home, ".copilot")) conflict("COPILOT_HOME must resolve to <target-home>/.copilot for a safe binding");
@@ -214,6 +231,7 @@ export const planBind = async ({ agent, targetHome, configRoot, configRoots, sta
   await prepare({ agent, configRoot, ...(configRoots !== undefined ? { configRoots } : {}), stateRoot, cwd: await realpath(process.cwd()) });
   return basePlan(agent, targetHome, "bind", async (home, before, previous) => {
     if (agent === "copilot") await requireCopilot(home);
+    if (agent === "factorydroid") await requireFactoryDroid();
     if (agent === "factorydroid") await requireFactoryTopology(home, before);
     const loc = locations(agent);
     const packagePaths = ["dist/bin/modeck.mjs", "package.json", "schemas/modes.schema.json", "schemas/manifest.schema.json"].sort();
@@ -275,9 +293,12 @@ export const applyBindPlan = async ({ plan, expectDigest }: ApplyBindPlanRequest
   const home = await safeAbsolute(plan.targetHome);
   const loc = locations(plan.agent);
   const hookChange = plan.changes.find(change => change.path === loc.hook);
-  if (plan.operation === "bind" && hookChange?.beforeDigest === null) {
+  if (plan.operation === "bind") {
     if (plan.agent === "copilot") await requireCopilot(home);
-    if (plan.agent === "factorydroid") await requireFactoryTopology(home, await readImage(homePath(home, loc.hook), LIMITS.jsonBytes));
+    if (plan.agent === "factorydroid") {
+      await requireFactoryDroid();
+      if (hookChange?.beforeDigest === null) await requireFactoryTopology(home, await readImage(homePath(home, loc.hook), LIMITS.jsonBytes));
+    }
   }
   plan.changes.forEach(change => {
     if (change.path !== loc.hook && change.path !== loc.record && !allowedOwned(plan.agent, change.path)) conflict("Plan contains an unowned path", change.path);
