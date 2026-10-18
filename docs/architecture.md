@@ -120,6 +120,14 @@ flowchart TB
 
 同一安装、相同输入及原生技能名称集合可得到稳定文本。技能索引包含绝对存储路径，因此不能保证跨机器字节相同；agent 自身指令、工具定义和模型服务也不在这些摘要的控制范围内。
 
+### 决定：不实现 Claude 专属路径延迟注入
+
+modeck 不实现 Claude 专属 `PreToolUse` path-scoped 延迟注入，继续使用跨 agent 的 `SessionStart` 编译正文。[Claude hooks 协议](https://code.claude.com/docs/en/hooks#pretooluse)允许从 `Read|Write|Edit` 的 `tool_input.file_path` 匹配规则并返回 `hookSpecificOutput.additionalContext`，所以最小实现可行；但上下文随工具结果进入下一次模型请求，不能让模型在当前写入或同批并行调用执行前依据新规则重新决策，不能作为写入前的规则执行保证。
+
+其收益主要是减少启动正文；当前编译器直接拼接规则原文，frontmatter 仅作为文本保留，没有规则路径元数据或会话注入状态。完整支持还需定义业务路径相对基准、YAML/glob（含 brace expansion）及符号链接语义，从启动正文移除延迟规则，并扩展绑定所有权与恢复。只监听 Read 会漏掉直接 Write/Edit；Bash 只有命令文本，任意脚本的文件访问无法据此可靠枚举；`@file` 的上下文展开也不能假设会触发 Read hook。按次注入会重复消耗上下文，去重则需隔离主会话和 subagent，处理并发、规则摘要更新、compact/clear/resume/fork 后的失效与重注入；每次工具调用启动进程、重新校验资源或维护可信快照又增加延迟和失败分支。hook 禁用、失败或超时仍可能漏注入。这些成本集中于单一 agent，现阶段不足以支持复刻其原生加载器。
+
+需要路径语义的规则保留在原生项目 `.claude/rules/`，避免同时选入 modeck 导致全量加载或重复；扫描迁移时应保留相应原生入口。[原生 rules 协议](https://code.claude.com/docs/en/memory#path-specific-rules)已覆盖 Read/Write/Edit、部分可识别为读取的 Bash 命令及路径匹配；[subagent](https://code.claude.com/docs/en/sub-agents#what-loads-at-startup)也有自身的按路径加载。规则 frontmatter 中仅 `paths` 被 Claude 解释，`name` 等其他字段被忽略；modeck 不承诺重现原生规则的匹配、加载时序或去重语义。
+
 ## Hook 与启动适配
 
 [hook 适配](../src/integration/hooks.ts)按 agent 校验 `SessionStart` 输入，并以各 CLI 原生格式返回上下文。七种适配都使用同步 command hook；hook 启用且成功时，在主会话首轮推理前返回上下文，不承诺屏障覆盖启动阶段的 auxiliary、鉴权或其他网络请求。CodeBuddy 事件缺少 `cwd` 时使用 hook 进程的工作目录。
