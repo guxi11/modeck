@@ -156,7 +156,7 @@
 <text x="2085.5" y="1365" font-family="Georgia" font-size="29" font-weight="700" text-anchor="middle" letter-spacing="0" fill="#493E32">CodeBuddy</text>
 <text x="1250" y="1424" font-family="PingFang SC" font-size="24" font-weight="400" text-anchor="start" letter-spacing="0" fill="#64785E">技能按需读取 · 外部资源手动安装 / 更新</text>
 <text x="1250" y="1456" font-family="PingFang SC" font-size="24" font-weight="400" text-anchor="start" letter-spacing="0" fill="#796D5A">Codex hook 需在 /hooks 中审查并信任</text>
-<text x="1250" y="1490" font-family="PingFang SC" font-size="22" font-weight="400" text-anchor="start" letter-spacing="0" fill="#64785E">支持：Claude Code · Codex · CodeBuddy · Qwen · Qoder · Factory Droid 0.196.0+ · Copilot CLI 1.0.89+</text>
+<text x="1250" y="1490" font-family="PingFang SC" font-size="22" font-weight="400" text-anchor="start" letter-spacing="0" fill="#64785E">支持：Claude Code · Codex · CodeBuddy · Qwen · Qoder · Factory Droid · Copilot CLI 1.0.89+</text>
 <path d="M88 1551H2312" fill="none" stroke="#CDBD9F" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
 <text x="95" y="1620" font-family="Georgia" font-size="32" font-weight="400" text-anchor="start" letter-spacing="0" fill="#B96E50">I</text>
 <text x="170" y="1618" font-family="Songti SC" font-size="34" font-weight="600" text-anchor="start" letter-spacing="0" fill="#493E32">资源集中声明</text>

@@ -19,7 +19,7 @@ npm install -g modeck
 modeck --version
 ```
 
-当前支持 **Claude Code**（`claude`）、**Codex CLI**（`codex`）、**CodeBuddy Code CLI**（`codebuddy`）、**Qwen Code CLI**（`qwen`）、**Qoder CLI**（`qoder`）、**Factory Droid**（`droid`）和 **GitHub Copilot CLI**（`copilot`，需 1.0.89 或更新版本）。绑定时通过原生同步 `SessionStart` command hook 注入上下文；Rulesync 只用于转换部分 agent 的 hook 配置。
+当前支持 **Claude Code**（`claude`）、**Codex CLI**（`codex`）、**CodeBuddy Code CLI**（`codebuddy`）、**Qwen Code CLI**（`qwen`）、**Qoder CLI**（`qoder`）、**Factory Droid**（`droid`）和 **GitHub Copilot CLI**（`copilot`，需 1.0.89 或更新版本）。七种 agent 绑定时均通过原生同步 `SessionStart` command hook 注入上下文；Rulesync 在隔离目录转换 hook 配置，并校验合并结果。
 
 | Agent | 原生 hook 接入 |
 | --- | --- |
