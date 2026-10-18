@@ -28,7 +28,7 @@ modeck --version
 | Factory Droid | [Hooks 文档](https://docs.factory.ai/reference/hooks-reference)；需 CLI 0.196.0+，此版本修复 `SessionStart` 上下文丢弃；写入 `~/.factory/hooks.json` 的原生顶层事件映射。若该文件不存在但检测到 `settings.json` fallback 或 legacy hook，绑定会拒绝以避免遮蔽；先用 Droid 原生 `/hooks` 迁移。 |
 | GitHub Copilot CLI | [Hooks 文档](https://docs.github.com/en/copilot/reference/hooks-reference)；本项目要求 CLI 1.0.89+。1.0.88 已合并多个 hook 的 `additionalContext` 修复，本项目采用更保守的版本下限；使用独立 `~/.copilot/hooks/modeck.json`，hook 输出顶层 `additionalContext`。[官方 changelog](https://github.com/github/copilot-cli/blob/main/changelog.md) |
 
-Qwen、Qoder 和 Copilot 的绑定仅支持默认用户配置位置（相对于 `--target-home` 的 `.qwen`、`.qoder` 和 `.copilot`）。Qwen 的 `QWEN_HOME` 可重定向 settings，且可能由用户 `.env` 在启动时引导；设置了重定向或无法确认仍使用默认位置时，不在支持范围内。Qoder 的 `QODER_CONFIG_DIR` 或 Copilot 的 `COPILOT_HOME` 指向其他目录时也不受支持。请恢复默认目录，或按 agent 的原生机制在实际生效的配置位置另行配置 hook。
+Qwen、Qoder、Factory Droid 和 Copilot 的绑定仅支持默认用户配置位置（相对于 `--target-home` 的 `.qwen`、`.qoder`、`.factory` 和 `.copilot`）。Qwen 的 `QWEN_HOME` 可重定向 settings，且可能由用户 `.env` 在启动时引导；设置了重定向或无法确认仍使用默认位置时，不在支持范围内。Qoder 的 `QODER_CONFIG_DIR` 或 Copilot 的 `COPILOT_HOME` 指向其他目录时也不受支持。Droid 的 `FACTORY_HOME_OVERRIDE` 会替换 HOME 基础目录，再由 CLI 在其下拼接 `.factory`；非默认 override 不受支持。请恢复默认目录，或按 agent 的原生机制在实际生效的配置位置另行配置 hook。
 
 这条注入路径在同步 `SessionStart` hook 启用并成功执行时，会在主会话首轮推理前返回上下文；不承诺屏障覆盖启动阶段的辅助模型、鉴权或其他网络请求。agent 设置禁用 hook、策略阻止执行、hook 未触发、命令失败或超时时，原生会话仍可能继续而没有 mode 内容；modeck 不承诺 fail-closed。我们尚未进行登录状态下的真实模型请求验证，因此不保证模型实际采纳内容。
 
