@@ -1,5 +1,6 @@
 import { lstat, open, readdir, rmdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
 import { agentDefinitions, canonical, checkRelativePath, LIMITS, modeError, sha256 } from "../contracts/index.js";
@@ -50,6 +51,22 @@ const requireQoderHome = (home: string): void => {
   const configured = process.env.QODER_CONFIG_DIR;
   if (configured && resolve(configured) !== join(home, ".qoder")) {
     conflict("QODER_CONFIG_DIR must resolve to <target-home>/.qoder for a safe binding");
+  }
+};
+const requireQwenHome = async (home: string): Promise<void> => {
+  const configured = process.env.QWEN_HOME;
+  const resolved = configured
+    ? configured === "~" || configured.startsWith("~/") || configured.startsWith("~\\")
+      ? join(homedir(), ...(configured === "~" ? [] : configured.slice(2).split(/[/\\]+/u).filter(Boolean)))
+      : resolve(configured)
+    : join(home, ".qwen");
+  if (resolved !== join(home, ".qwen")) conflict("QWEN_HOME must resolve to <target-home>/.qwen for a safe binding");
+  if (configured) return;
+  for (const path of [join(home, ".qwen", ".env"), join(home, ".env")]) {
+    const image = await readImage(path, LIMITS.textFileBytes);
+    if (image && /(?:^|\n)\s*(?:export\s+)?QWEN_HOME\s*=/u.test(data(image).toString("utf8"))) {
+      conflict("Qwen user .env declares QWEN_HOME; remove the redirect before binding", path);
+    }
   }
 };
 const requireCopilot = async (home: string): Promise<void> => {
@@ -236,6 +253,7 @@ const basePlan = async (agent: Agent, targetHome: string, operation: BindPlan["o
 export const planBind = async ({ agent, targetHome, configRoot, configRoots, stateRoot, runtimeRoot }: PlanBindRequest): Promise<BindPlan> => {
   await prepare({ agent, configRoot, ...(configRoots !== undefined ? { configRoots } : {}), stateRoot, cwd: await realpath(process.cwd()) });
   return basePlan(agent, targetHome, "bind", async (home, before, previous) => {
+    if (agent === "qwen") await requireQwenHome(home);
     if (agent === "qoder") requireQoderHome(home);
     if (agent === "copilot") await requireCopilot(home);
     if (agent === "droid") await requireFactoryDroid();
@@ -296,6 +314,7 @@ export const applyBindPlan = async ({ plan, expectDigest }: ApplyBindPlanRequest
   const { planDigest, ...payload } = plan;
   if (plan.conflicts.length) return conflict("Installation plan contains conflicts");
   if (hashPlan(payload).planDigest !== planDigest || expectDigest !== undefined && expectDigest !== planDigest) throw modeError("E_PLAN_STALE", "Installation plan digest changed");
+  if (plan.operation === "bind" && plan.agent === "qwen") await requireQwenHome(await safeAbsolute(plan.targetHome));
   if (plan.operation === "bind" && plan.agent === "qoder") requireQoderHome(await safeAbsolute(plan.targetHome));
   if (!plan.changes.length) return;
   const home = await safeAbsolute(plan.targetHome);

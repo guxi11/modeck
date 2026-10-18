@@ -70,7 +70,7 @@ export const agentDefinitions = {
   qwen: {
     scanDirectories: [".qwen"],
     nativeSkills: false,
-    executable: "qwen", rulesyncTarget: "qwencode", configDirectory: ".qwen", configEnvironment: null,
+    executable: "qwen", rulesyncTarget: "qwencode", configDirectory: ".qwen", configEnvironment: "QWEN_HOME",
     hook: { file: ".qwen/settings.json", event: "SessionStart", canonicalEvent: "sessionStart", sources: qwenSources,
       cwdFallback: false, commandOptions: {}, nativeContainer: "hooks", nativeEntries: "groups", output: "hookSpecificOutput",
       input: "standard", matcher: true, timeoutField: "timeout" },
