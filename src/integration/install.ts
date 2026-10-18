@@ -46,6 +46,12 @@ const requireFactoryDroid = async (): Promise<void> => {
     conflict(`Factory Droid ${version.join(".")} is too old; binding requires >= 0.196.0`);
   }
 };
+const requireQoderHome = (home: string): void => {
+  const configured = process.env.QODER_CONFIG_DIR;
+  if (configured && resolve(configured) !== join(home, ".qoder")) {
+    conflict("QODER_CONFIG_DIR must resolve to <target-home>/.qoder for a safe binding");
+  }
+};
 const requireCopilot = async (home: string): Promise<void> => {
   const configured = process.env.COPILOT_HOME;
   if (configured && resolve(configured) !== join(home, ".copilot")) conflict("COPILOT_HOME must resolve to <target-home>/.copilot for a safe binding");
@@ -230,6 +236,7 @@ const basePlan = async (agent: Agent, targetHome: string, operation: BindPlan["o
 export const planBind = async ({ agent, targetHome, configRoot, configRoots, stateRoot, runtimeRoot }: PlanBindRequest): Promise<BindPlan> => {
   await prepare({ agent, configRoot, ...(configRoots !== undefined ? { configRoots } : {}), stateRoot, cwd: await realpath(process.cwd()) });
   return basePlan(agent, targetHome, "bind", async (home, before, previous) => {
+    if (agent === "qoder") requireQoderHome(home);
     if (agent === "copilot") await requireCopilot(home);
     if (agent === "droid") await requireFactoryDroid();
     if (agent === "droid") await requireFactoryTopology(home, before);
@@ -289,6 +296,7 @@ export const applyBindPlan = async ({ plan, expectDigest }: ApplyBindPlanRequest
   const { planDigest, ...payload } = plan;
   if (plan.conflicts.length) return conflict("Installation plan contains conflicts");
   if (hashPlan(payload).planDigest !== planDigest || expectDigest !== undefined && expectDigest !== planDigest) throw modeError("E_PLAN_STALE", "Installation plan digest changed");
+  if (plan.operation === "bind" && plan.agent === "qoder") requireQoderHome(await safeAbsolute(plan.targetHome));
   if (!plan.changes.length) return;
   const home = await safeAbsolute(plan.targetHome);
   const loc = locations(plan.agent);
