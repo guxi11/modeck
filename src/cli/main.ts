@@ -32,6 +32,8 @@ const help = "Usage: modeck <command> [options]\n\nCommands:\n"
   + "  config                 Manage registered configurations\n"
   + "  mcp <migrate|apply|status|recover>\n    Manage static native MCP configuration\n"
   + "\n  Agent protocol (internal)\n  hook                   Handle agent session hook input/output\n\n"
+  + "Native SessionStart adapters are verified with Qwen Code >= 0.25.2 and Qoder CLI >= 1.1.73.\n"
+  + "Older versions are not covered by this compatibility baseline.\n\n"
   + "Options:\n  -h, --help              Show help\n  -v, --version           Show version\n";
 const commandHelp: Readonly<Record<string, string>> = {
   eval: "Usage: modeck eval [--config <dir>] [--cwd <dir>] [--state <dir>] [--format <text|json>] [-h|--help]\n\n"
