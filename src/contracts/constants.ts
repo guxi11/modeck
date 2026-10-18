@@ -26,5 +26,4 @@ export const LIMITS = Object.freeze({
   sessionIdChars: 256,
   gitTimeoutMs: 120_000,
   probeTimeoutMs: 10_000,
-  wrapperInstructionBytes: 65_536,
 });

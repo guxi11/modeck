@@ -29,8 +29,7 @@ export type VerifiedResource = DeepReadonly<{ id: Id; kind: Kind; treeDigest: Sh
 export type VerifiedResourceSet = DeepReadonly<{ schemaVersion: 1; configDigest: Sha256; manifest: ResourceManifest; resourceDigest: Sha256; resources: VerifiedResource[] }>;
 export type RenderedContext = DeepReadonly<{ schemaVersion: 1; protocol: "modeck-context/1"; agent: Agent; configDigest: Sha256; resourceDigest: Sha256; selectionDigest: Sha256; modeIds: Id[]; text: string; contentDigest: Sha256; byteLength: number }>;
 export type HookEvent = DeepReadonly<{ hook_event_name: "SessionStart"; cwd: string; session_id: string; source: "startup" | "resume" | "clear" | "compact" | "fork" }>;
-export type HookReply = DeepReadonly<{ hookSpecificOutput: { hookEventName: "SessionStart"; additionalContext: string } } | null>;
-export type RunMarker = DeepReadonly<{ version: 1; agent: Agent; configRoot: string; stateRoot: string; cwd: string; contentDigest: Sha256; ownerPid: number }>;
+export type HookReply = DeepReadonly<{ hookSpecificOutput: { hookEventName: "SessionStart"; additionalContext: string } }>;
 export type FileImage = DeepReadonly<{ data: string; encoding: "utf8" | "base64"; mode: number }>;
 export type FileChange = DeepReadonly<{ path: string; category: "shared-json" | "owned"; beforeDigest: Sha256 | null; beforeMode: number | null; after: FileImage | null }>;
 export type BindPlan = DeepReadonly<{ schemaVersion: 1; operation: "bind" | "unbind"; agent: Agent; targetHome: string; owner: "modeck/v1"; changes: FileChange[]; conflicts: Diagnostic[]; warnings: Diagnostic[]; planDigest: Sha256 }>;
@@ -44,15 +43,13 @@ export type CompileRequest = DeepReadonly<{ plan: ResolvedPlan; resources: Verif
 export type ReadResourcesRequest = DeepReadonly<{ context: ConfigContext; stateRoot: string; parseManifest: ManifestParser; resourceIds?: Id[] }>;
 export type PrepareRequest = DeepReadonly<{ configRoot: string; configRoots?: string[]; stateRoot: string; cwd: string; agent: Agent }>;
 export type PreparedContext = DeepReadonly<{ plan: ResolvedPlan; rendered: RenderedContext }>;
-export type EncodeHookRequest = DeepReadonly<{ event: HookEvent; rendered: RenderedContext; marker: RunMarker | null; configRoot: string; stateRoot: string }>;
+export type EncodeHookRequest = DeepReadonly<{ rendered: RenderedContext }>;
 export type PlanBindRequest = DeepReadonly<{ agent: Agent; targetHome: string; configRoot: string; configRoots?: string[]; stateRoot: string; runtimeRoot: string }>;
 export type PlanUnbindRequest = DeepReadonly<{ agent: Agent; targetHome: string }>;
 export type ApplyBindPlanRequest = DeepReadonly<{ plan: BindPlan; expectDigest?: Sha256 }>;
-export type RunAgentRequest = DeepReadonly<PrepareRequest & { argv: string[]; executable: string }>;
-export type RunResult = DeepReadonly<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
 export type ModeErrorCode = DeepReadonly<"E_CONFIG" | "E_SELECTOR" | "E_MODE_CONFLICT" | "E_SCAN_LIMIT"
   | "E_PATH" | "E_MANIFEST_MISSING" | "E_MANIFEST_MISMATCH" | "E_RESOURCE_MISSING"
   | "E_INTEGRITY" | "E_GIT" | "E_GIT_COMMIT_UNAVAILABLE" | "E_LIMIT" | "E_CONTEXT_SIZE"
-  | "E_INSTALL_CONFLICT" | "E_PLAN_STALE" | "E_BUSY" | "E_WRAPPER_CONFLICT"
+  | "E_INSTALL_CONFLICT" | "E_PLAN_STALE" | "E_BUSY"
   | "E_CODEX_CONFIG" | "E_HOOK_INPUT" | "E_PLATFORM" | "E_USAGE" | "E_IO">;
 export type ModeError = DeepReadonly<Error & { code: ModeErrorCode; details: Readonly<Record<string, unknown>> }>;

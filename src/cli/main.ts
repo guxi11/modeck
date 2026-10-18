@@ -1,7 +1,6 @@
-import { constants } from "node:fs";
-import { access, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, join, resolve as absolute } from "node:path";
+import { join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentDefinitions, agents, isAgent, LIMITS, modeError, parseJson } from "../contracts/index.js";
 import type { Agent, ModeError } from "../contracts/index.js";
@@ -16,9 +15,9 @@ import { manageConfig } from "./manage-config.js";
 import { configRoots } from "../integration/registry.js";
 import { loadRecord } from "../integration/install.js";
 import { selectAgents } from "./bind.js";
-import { encodeHook, prepare, runAgent } from "../integration/index.js";
+import { encodeHook, prepare } from "../integration/index.js";
 import { imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
-import { parseEvent, runMarker } from "../integration/hooks.js";
+import { parseEvent } from "../integration/hooks.js";
 import { createUi, UiCancelled } from "./ui.js";
 import type { Ui } from "./ui.js";
 
@@ -29,7 +28,7 @@ const help = "Usage: modeck <command> [options]\n\nCommands:\n"
   + "\n  Inspect and select context\n  eval                   Evaluate automatic modes\n  save                   Save automatic modes to .modes\n"
   + "  resolve                Explain resolved modes, rules and skills\n  render                 Render context\n"
   + "\n  Configuration and sessions\n  register               Register a configuration\n  unregister             Unregister a configuration\n"
-  + "  config                 Manage registered configurations\n  run                    Start one agent session with context\n"
+  + "  config                 Manage registered configurations\n"
   + "  mcp <migrate|apply|status|recover>\n    Manage static native MCP configuration\n"
   + "\n  Agent protocol (internal)\n  hook                   Handle agent session hook input/output\n\n"
   + "Options:\n  -h, --help              Show help\n  -v, --version           Show version\n";
@@ -57,20 +56,6 @@ const commandHelp: Readonly<Record<string, string>> = {
   unregister: "Usage: modeck unregister [--config <dir>] [--target-home <dir>] [-h|--help]\n",
   config: "Usage: modeck config [--list | --answers <file>] [--target-home <dir>] [--state <dir>] [--dry-run] [--expect <digest>] [-h|--help]\n",
   resource: "Usage: modeck res <init|update> [--config <dir>] [-h|--help]\n",
-  run: "Usage: modeck run --agent <claude|codex|codebuddy> [--config <dir>] [--cwd <dir>] [--state <dir>] [--executable <file>] [-h|--help] [-- <agent arguments>]\n\n"
-    + "Prepare mode rules and skills for one agent session without creating a hook binding.\n"
-    + "Use this to try a configuration or launch a temporary/CI session. Bound agents can normally be started directly.\n\n"
-    + "Options:\n"
-    + "  --agent <name>         Required agent CLI: claude, codex or codebuddy\n"
-    + "  --config <dir>         Configuration directory; defaults to registered/bound/current configuration\n"
-    + "  --cwd <dir>            Agent working directory and mode selection; defaults to current directory\n"
-    + "  --state <dir>          Resource cache outside the configuration directory\n"
-    + "  --executable <file>    Agent CLI executable; defaults to its name on PATH\n"
-    + "  -- <agent arguments>   Supported session flags and prompt; not arbitrary native subcommands\n\n"
-    + "Install declared external resources with modeck res init before launching.\n"
-    + "Context stays fixed for the session; restart after changing modes or working directory.\n"
-    + "Existing hooks skip duplicate injection only when their context matches; mismatches fail.\n"
-    + "The agent inherits terminal I/O, and its exit status and signals are forwarded.\n",
 };
 const values: Readonly<Record<string, readonly string[]>> = {
   eval: ["config", "cwd", "state", "format"], save: ["config", "cwd", "state", "format"],
@@ -78,7 +63,7 @@ const values: Readonly<Record<string, readonly string[]>> = {
   init: ["home", "answers", "agent", "config"], scan: ["home", "answers", "agent", "config"], migrate: ["config", "state", "answers", "mode"],
   resolve: ["config", "state", "cwd", "format"], render: ["config", "state", "cwd", "agent", "format"],
   hook: ["config", "state", "agent"], register: ["config", "target-home"], unregister: ["config", "target-home"],
-  config: ["answers", "target-home", "state", "expect", "format"], run: ["config", "state", "cwd", "agent", "executable"],
+  config: ["answers", "target-home", "state", "expect", "format"],
 };
 const booleans: Readonly<Record<string, readonly string[]>> = { save: ["yes"], init: ["list"], scan: ["list"], migrate: ["list"], config: ["list", "dry-run"] };
 const options = (command: string, argv: readonly string[]): Readonly<Record<string, string | boolean>> => {
@@ -173,22 +158,10 @@ const input = async (): Promise<unknown> => {
   try { return parseJson(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks))); }
   catch { throw modeError("E_HOOK_INPUT", "Hook input must be valid JSON"); }
 };
-const executableFor = async (agent: Agent, supplied?: string): Promise<string> => {
-  const candidates = supplied ? [absolute(supplied)] : (process.env.PATH ?? "").split(delimiter).map(path => join(path, agentDefinitions[agent].executable));
-  const found = await candidates.reduce(async (pending, candidate) => {
-    const previous = await pending;
-    if (previous) return previous;
-    try { await access(candidate, constants.X_OK); return await realpath(candidate); } catch { return null; }
-  }, Promise.resolve<string | null>(null));
-  if (!found) throw modeError("E_IO", "Agent executable not found", { agent });
-  const self = process.argv[1] ? await realpath(process.argv[1]).catch(() => "") : "";
-  if (found === self) throw modeError("E_WRAPPER_CONFLICT", "Wrapper cannot launch itself");
-  return found;
-};
 const exitFor = (error: ModeError, hook: boolean): number => {
   if (hook) return 1;
   if (["E_INSTALL_CONFLICT", "E_PLAN_STALE", "E_BUSY"].includes(error.code)) return 4;
-  if (["E_WRAPPER_CONFLICT", "E_CODEX_CONFIG", "E_HOOK_INPUT"].includes(error.code)) return 5;
+  if (["E_CODEX_CONFIG", "E_HOOK_INPUT"].includes(error.code)) return 5;
   return ["E_USAGE", "E_CONFIG", "E_SELECTOR", "E_MODE_CONFLICT", "E_SCAN_LIMIT", "E_CONTEXT_SIZE", "E_LIMIT"].includes(error.code) ? 2 : 3;
 };
 
@@ -203,18 +176,15 @@ export const main = async (argv: string[]): Promise<number> => {
     }
     if (command === "mcp") return mcpStaticCommand(argv.slice(1));
     if (!Object.hasOwn(values, command)) throw modeError("E_USAGE", "Unknown command", { command });
-    const separator = argv.indexOf("--", 1);
-    if (separator >= 0 && command !== "run") throw modeError("E_USAGE", "Only run accepts agent arguments");
     const hasAction = command === "resource" && argv[1] !== undefined && !argv[1].startsWith("-");
-    const opts = options(command, argv.slice(hasAction ? 2 : 1, separator < 0 ? undefined : separator));
+    const opts = options(command, argv.slice(hasAction ? 2 : 1));
     if (opts.help) { process.stdout.write(commandHelp[command] ?? help); return 0; }
     if (command === "resource") {
       await manageResources(await pathFor(String(opts.config ?? process.cwd())), argv[1] ?? ""); return 0;
     }
     const configured = async (single = false, agent?: Agent) => {
       const record = agent === undefined ? null : await loadRecord(homedir(), agent);
-      // Until config migrates a legacy hook, its wrapper must use the same root.
-      const explicit = typeof opts.config === "string" ? opts.config : command === "run" ? record?.configRoot : undefined;
+      const explicit = typeof opts.config === "string" ? opts.config : undefined;
       const configRoot = await (single ? projectRootFor : configRootFor)(homedir(), process.cwd(), explicit);
       const roots = command === "resolve" && !record ? await configRoots(configRoot) : [];
       const fallback = command === "resolve" && !record
@@ -271,17 +241,10 @@ export const main = async (argv: string[]): Promise<number> => {
       const event = parseEvent(await input(), agent);
       const normalized = { ...event, cwd: await realpath(event.cwd) };
       const { rendered } = await prepare({ agent, configRoot, stateRoot, cwd: normalized.cwd });
-      const reply = encodeHook({ event: normalized, rendered, marker: runMarker(), configRoot, stateRoot });
-      if (reply) json(reply); return 0;
+      const reply = encodeHook({ rendered });
+      json(reply); return 0;
     }
     const cwd = await realpath(absolute(String(opts.cwd ?? process.cwd())));
-    if (command === "run") {
-      const agent = agentFor(opts);
-      const result = await runAgent({ agent, configRoot, stateRoot, cwd,
-        argv: separator < 0 ? [] : argv.slice(separator + 1), executable: await executableFor(agent, typeof opts.executable === "string" ? opts.executable : undefined) });
-      if (result.signal) { process.kill(process.pid, result.signal); return 1; }
-      return result.exitCode ?? 1;
-    }
     const agent = selectedAgent;
     if (!agent) return 0;
     const prepared = await prepare({ agent, configRoot, stateRoot, cwd });
