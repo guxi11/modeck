@@ -54,7 +54,6 @@ const requireQoderHome = (home: string): void => {
   }
 };
 const requireQwenHome = async (home: string): Promise<void> => {
-  const hasConfigured = Object.hasOwn(process.env, "QWEN_HOME");
   const configured = process.env.QWEN_HOME;
   const resolved = configured
     ? configured === "~" || configured.startsWith("~/") || configured.startsWith("~\\")
@@ -62,7 +61,7 @@ const requireQwenHome = async (home: string): Promise<void> => {
       : resolve(configured)
     : join(home, ".qwen");
   if (resolved !== join(home, ".qwen")) conflict("QWEN_HOME must resolve to <target-home>/.qwen for a safe binding");
-  if (hasConfigured) return;
+  // Even an explicitly empty process value can be filled by loadEnvironment after bootstrap.
   for (const path of [join(home, ".qwen", ".env"), join(home, ".env")]) {
     const image = await readImage(path, LIMITS.textFileBytes);
     if (image && /(?:^|\n)\s*(?:export\s+)?QWEN_HOME\s*(?:=|:\s+)/u.test(data(image).toString("utf8"))) {
