@@ -159,7 +159,7 @@ Codex 的原生可见性范围限于未使用 `--profile` 或 `-c` / `--config` 
 
 写入使用可恢复事务，日志与原生文件暂存位于 Git 工作树外的私有 modeck 状态目录；拒绝跨文件系统的原子写入。macOS / Linux 上使用内核文件锁协调 modeck 命令，不支持锁时拒绝操作。执行 `migrate` / `apply` / `recover` 时应暂停原生配置命令和编辑器写入：漂移检查不能保证与外部写入者之间的原子比较和替换。检测到受管策略或相关审批设置时会拒绝操作，交由原生工具处理。
 
-MCP 不参与 mode 选择、注册配置多源组合、`run` 或 SessionStart hook，也不会随它们自动同步。`apply` 后通过原生 MCP 列表命令检查，并重启会话加载；不承诺热更新、连接或认证成功，原生策略、审批和认证仍由 agent 负责。退出码：`0` 完成、`2` 用法或配置错误、`3` I/O 失败、`4` 冲突 / 忙 / 需恢复、`6` 部分迁入。
+MCP 不参与 mode 选择、注册配置多源组合或 SessionStart hook，也不会随它们自动同步。`apply` 后通过原生 MCP 列表命令检查，并重启会话加载；不承诺热更新、连接或认证成功，原生策略、审批和认证仍由 agent 负责。退出码：`0` 完成、`2` 用法或配置错误、`3` I/O 失败、`4` 冲突 / 忙 / 需恢复、`6` 部分迁入。
 
 ## 命令介绍
 
@@ -182,7 +182,6 @@ Commands:
   register               Register a configuration
   unregister             Unregister a configuration
   config                 Manage registered configurations
-  run                    Start one agent session with context, without hook binding
 
 Options:
   -h, --help              Show help
@@ -244,22 +243,6 @@ modeck resolve --config CONFIG_DIR --cwd PROJECT_DIR
 ```
 
 省略 `--config` 时优先使用注册配置集合；尚未注册时回退到已有绑定，再尝试当前目录的配置。`resolve` 会准备并校验上下文，也会执行配置中的自动选择脚本；缺失外部资源需先运行 `res init`。
-
-### 直接启动会话
-
-`run` 为单次 agent 启动选择 mode、校验资源并注入规则和技能索引，不创建 hook 绑定，也不修改 agent 配置。适合试用一份配置，或在临时环境、CI 中执行一次任务。已经绑定 hook 的日常会话直接启动原生 agent 即可。
-
-`--agent` 必填；`--config` 指定配置目录，省略时使用已注册或已绑定配置，再回退到当前目录。`--cwd` 指定 agent 工作目录，并决定项目事实和 `.modes` 的选择，默认使用当前目录。`--` 后传递受支持的 agent 会话参数或提示词：
-
-```sh
-modeck run --agent codex
-modeck run --agent claude -- "检查当前项目的代码结构"
-modeck run --agent codebuddy -- "检查当前项目的代码结构"
-```
-
-需要先安装对应 CLI，并为声明的外部资源执行 `res init`。`run` 默认从 `PATH` 查找 CLI，`--executable` 可指定可执行文件，`--state` 可指定配置目录之外的资源缓存。完整参数见 `modeck run --help`。它继承终端输入输出，并传递 agent 的退出码和终止信号。
-
-上下文在启动时确定，切换 mode 或工作目录后应重新启动。已有 hook 只有在配置、目录和上下文一致时才跳过重复注入，不一致会报错。`run` 只接受实现支持的会话参数，不能任意转发所有原生子命令；账号登录等操作直接运行原生 CLI。`hook` 是绑定后的 SessionStart 内部入口，日常无需手动调用。
 
 ## 调整或移除绑定
 

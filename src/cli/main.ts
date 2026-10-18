@@ -2,7 +2,7 @@ import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
-import { agentDefinitions, agents, isAgent, LIMITS, modeError, parseJson } from "../contracts/index.js";
+import { agents, isAgent, LIMITS, modeError, parseJson } from "../contracts/index.js";
 import type { Agent, ModeError } from "../contracts/index.js";
 import { evaluateModes } from "./eval.js";
 import { manageResources } from "./resource.js";
