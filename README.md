@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="assets/comparison.png"><img src="assets/comparison-share.svg" width="100%" alt="modeck 工作方式对比：原生 CC/Codex 的全局和项目资源分别维护；个人与团队配置统一组织规则、技能、外部资源和工作模式，经 agent 适配层与 Rulesync hook 转换，供 Claude Code、Codex 和 CodeBuddy 共用。"></a>
+  <a href="assets/comparison.png"><img src="assets/comparison-share.svg" width="100%" alt="modeck 工作方式对比：原生 CC/Codex 的全局和项目资源分别维护；个人与团队配置统一组织规则、技能、外部资源和工作模式，通过原生 SessionStart hook 为七种 agent 注入上下文。"></a>
 </p>
 
 ## 安装
@@ -19,9 +19,18 @@ npm install -g modeck
 modeck --version
 ```
 
-当前支持 **Claude Code、Codex CLI 和 CodeBuddy Code CLI**。modeck 通过统一的 agent 适配层处理原生路径和会话 hook；绑定时使用 [Rulesync](https://github.com/dyoshikawa/rulesync) 转换 hook 配置，再校验并合并，保留已有 hook。
+当前支持 **Claude Code**（`claude`）、**Codex CLI**（`codex`）、**CodeBuddy Code CLI**（`codebuddy`）、**Qwen Code CLI**（`qwen`）、**Qoder CLI**（`qoder`）、**Factory Droid**（`droid`）和 **GitHub Copilot CLI**（`copilot`，需 1.0.89 或更新版本）。绑定时通过原生同步 `SessionStart` command hook 注入上下文；Rulesync 只用于转换部分 agent 的 hook 配置。
 
-工作模式仍按项目动态选择，会话加载规则正文和按需读取的技能索引。Rulesync 当前用于 hook 格式转换，更多 agent 尚未接入。
+| Agent | 原生 hook 接入 |
+| --- | --- |
+| Qwen Code CLI | [Hooks 文档](https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/)；项目设置位于 `.qwen/settings.json`。 |
+| Qoder CLI | [Hooks 文档](https://docs.qoder.com/cli/hooks)；项目设置位于 `.qoder/settings.json`。 |
+| Factory Droid | [Hooks 文档](https://docs.factory.ai/reference/hooks-reference)；写入 `~/.factory/hooks.json` 的原生顶层事件映射。若该文件不存在但检测到 `settings.json` fallback 或 legacy hook，绑定会拒绝以避免遮蔽；先用 Droid 原生 `/hooks` 迁移。 |
+| GitHub Copilot CLI | [Hooks 文档](https://docs.github.com/en/copilot/reference/hooks-reference)；需 CLI 1.0.89+，包含多个 hook 合并 `additionalContext` 的修复；使用独立 `~/.copilot/hooks/modeck.json`，hook 输出顶层 `additionalContext`。[官方 changelog](https://github.com/github/copilot-cli/blob/main/changelog.md) |
+
+这条注入路径在 hook 启用并成功执行时，会在首个模型请求前返回上下文。agent 设置禁用 hook、策略阻止执行、hook 未触发、命令失败或超时时，原生会话仍可能继续而没有 mode 内容；modeck 不承诺 fail-closed。我们尚未进行登录状态下的真实模型请求验证，因此不保证模型实际采纳内容。
+
+工作模式仍按项目动态选择，会话加载规则正文和按需读取的技能索引。配置格式与原生 hook 接入方式因 agent 而异。
 
 ## 初始化并启用配置
 
@@ -56,7 +65,7 @@ modeck --version
    modeck render
    ```
 
-   选择一个 agent 后输出规则正文和技能索引，不附带内部 ID。非交互调用需指定 `--agent <claude|codex|codebuddy>`。三种 agent 共用模板，按各自原生技能扫描规则发现的同名技能会从索引中省略，因此输出可能不同。之后在该目录启动所选 agent，会话通过 hook 加载相同内容。
+   选择一个 agent 后输出规则正文和技能索引，不附带内部 ID。非交互调用需指定 `--agent <claude|codex|codebuddy|qwen|qoder|droid|copilot>`。各 agent 共用上下文模板，但原生技能扫描范围不同，因此输出可能不同。之后在该目录启动所选 agent，会话通过 hook 加载上下文。
 
 ## 组合工作模式
 
@@ -188,7 +197,7 @@ Options:
   -v, --version           Show version
 ```
 
-以下命令中的 `CONFIG_DIR` 是配置目录，`PROJECT_DIR` 是业务项目目录，运行前替换为实际路径。agent 标识为 `claude`、`codex` 或 `codebuddy`。
+以下命令中的 `CONFIG_DIR` 是配置目录，`PROJECT_DIR` 是业务项目目录，运行前替换为实际路径。agent 标识为 `claude`、`codex`、`codebuddy`、`qwen`、`qoder`、`droid` 或 `copilot`。
 
 ### 初始化与导入
 

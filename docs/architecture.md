@@ -4,7 +4,7 @@
 
 ## 设计目标与边界
 
-modeck 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Claude Code、Codex 和 CodeBuddy Code CLI。业务目录提供工作区事实及可选 `.modes`，配置目录保存资源与选择逻辑，两者独立。
+modeck 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Claude Code、Codex、CodeBuddy Code CLI、Qwen Code CLI、Qoder CLI、Factory Droid 和 GitHub Copilot CLI。业务目录提供工作区事实及可选 `.modes`，配置目录保存资源与选择逻辑，两者独立。
 
 工具负责选择、校验、编译和接入上下文，不替代 agent 原生指令加载、工具权限或模型服务。它不改写业务项目的 `AGENTS.md` / `CLAUDE.md`，也不提供模型缓存命中保证。
 
@@ -105,7 +105,7 @@ flowchart TB
 
 索引不是原生 skill 注册，不保证 agent 必然调用技能。modeck 不自动执行 skill 脚本；脚本执行仍服从 agent 的工具权限。[原生技能扫描](../src/integration/native-skills.ts)按目标 agent 的扫描规则收集名称，编译时跳过同名技能索引以减少重复；去重依据是名称，不是内容比较。
 
-`render` 的三个 agent 共用同一正文模板，规则不会按 agent 转换。原生技能过滤因 agent 而异：Claude 扫描当前目录到工作区边界的 `.claude/skills` 及用户配置的 skills，单层读取，缺少名称时使用目录名；Codex 扫描相同目录范围的 `.agents/skills`、用户 `.agents/skills`、Codex 用户配置及 `/etc/codex/skills`，递归寻找含有效名称和描述的技能；CodeBuddy 扫描当前目录 `.codebuddy/skills` 和用户配置的 skills，递归读取并支持以冒号分隔的目录名作为回退。用户配置位置分别受 `CLAUDE_CONFIG_DIR`、`CODEX_HOME`、`CODEBUDDY_CONFIG_DIR` 影响。未指定 `--state` 或 `MODECK_STATE` 时，`render` 还会优先使用所选 agent 绑定的状态目录，不同目录会改变索引中的技能绝对路径。配置、工作目录、状态目录及原生技能过滤结果相同时正文相同，但 JSON 中的 `agent` 和包含 agent 的 `selectionDigest` 仍不同。未指定 `--agent` 时交互选择一个 agent，非交互调用必须显式指定。
+`render` 的所有 agent 共用同一正文模板，规则不会按 agent 转换。原生技能过滤因 agent 而异：Claude 扫描当前目录到工作区边界的 `.claude/skills` 及用户配置的 skills，单层读取，缺少名称时使用目录名；Codex 扫描相同目录范围的 `.agents/skills`、用户 `.agents/skills`、Codex 用户配置及 `/etc/codex/skills`，递归寻找含有效名称和描述的技能；CodeBuddy 扫描当前目录 `.codebuddy/skills` 和用户配置的 skills，递归读取并支持以冒号分隔的目录名作为回退。Qwen、Qoder、Factory Droid 与 Copilot CLI 使用各自适配器配置的原生技能目录和元数据要求。用户配置位置受对应 agent 的原生配置设置影响。未指定 `--state` 或 `MODECK_STATE` 时，`render` 还会优先使用所选 agent 绑定的状态目录，不同目录会改变索引中的技能绝对路径。配置、工作目录、状态目录及原生技能过滤结果相同时正文相同，但 JSON 中的 `agent` 和包含 agent 的 `selectionDigest` 仍不同。未指定 `--agent` 时交互选择一个 agent，非交互调用必须显式指定。
 
 正文同时受 9,000 字符和 32,768 字节上限约束，超过任一上限会报 `E_CONTEXT_SIZE`，不会静默截断。完整阈值见 [LIMITS](../src/contracts/constants.ts)。
 
@@ -122,7 +122,7 @@ flowchart TB
 
 ## Hook 与启动适配
 
-[hook 适配](../src/integration/hooks.ts)校验 `SessionStart` 的 JSON stdin，通过 `hookSpecificOutput.additionalContext` 返回上下文。接受的 source 包括 `startup`、`resume`、`clear`、`compact` 和 `fork`。CodeBuddy 事件缺少 `cwd` 时使用 hook 进程的工作目录。
+[hook 适配](../src/integration/hooks.ts)按 agent 校验 `SessionStart` 输入，并以各 CLI 原生格式返回上下文。七种适配都使用同步 command hook；hook 启用且成功时，在首个模型请求前完成注入。CodeBuddy 事件缺少 `cwd` 时使用 hook 进程的工作目录。
 
 绑定写入的默认位置如下，路径相对于 `--target-home`，默认是本机 home：
 
@@ -131,8 +131,12 @@ flowchart TB
 | Claude Code | `.claude/settings.json` | 合并 `SessionStart` 组；hook 失败不能保证阻止首个模型请求 |
 | Codex | `.codex/hooks.json` | 安装不授予信任，需要在 `/hooks` 审阅并信任定义 |
 | CodeBuddy Code CLI | `.codebuddy/settings.json` | 使用 CLI hook 协议；加载行为还受其运行时控制 |
+| Qwen Code CLI | `.qwen/settings.json` | 使用原生 `SessionStart` command hook |
+| Qoder CLI | `.qoder/settings.json` | 使用原生 `SessionStart` command hook |
+| Factory Droid | `~/.factory/hooks.json` | 使用原生顶层事件映射；若文件缺失但存在 `settings.json` fallback 或 legacy hook，绑定拒绝遮蔽，须先用原生 `/hooks` 迁移 |
+| GitHub Copilot CLI | `~/.copilot/hooks/modeck.json` | 需 CLI 1.0.89+；使用独立配置文件，输出顶层 `additionalContext` |
 
-这些是 modeck 实现的写入位置，不代表所有 agent 自定义配置目录布局都可由绑定命令自动发现。成功输出 hook JSON 也不等同于真实模型已采纳上下文。
+这些是 modeck 实现的写入位置，不代表所有 agent 自定义配置目录布局都可由绑定命令自动发现。hook 被禁用、策略阻止、未触发、命令失败或超时时，原生会话仍可能继续且缺少 mode 内容，因此不保证 fail-closed。成功输出 hook JSON 也不等同于真实模型已采纳上下文；尚无登录状态下的真实模型请求验证。
 
 ## 绑定计划、应用与恢复
 

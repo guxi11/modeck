@@ -1,13 +1,13 @@
 # modeck
 
-将配置目录中的 rules、skills 和 modes 编译为 Claude Code、Codex、CodeBuddy Code CLI 的会话上下文，通过原生 SessionStart hook 接入。
+将配置目录中的 rules、skills 和 modes 编译为 Claude Code、Codex、CodeBuddy Code CLI、Qwen Code CLI、Qoder CLI、Factory Droid 和 GitHub Copilot CLI 的会话上下文，通过原生 SessionStart hook 接入。
 
 ## 项目结构
 
 - `src/contracts/`：共享类型、协议常量、错误和摘要工具；公共类型从此处维护。
 - `src/core/`：配置加载与校验、工作区事实收集、mode 解析和上下文编译；`resolve`、`compile` 保持纯函数。
 - `src/resources/`：本地及 Git 资源读取、内容寻址存储、manifest 和完整性验证。
-- `src/integration/`：上下文准备、各 agent hook、绑定计划与应用、进程启动。
+- `src/integration/`：上下文准备、各 agent hook、原生协议适配、绑定计划与应用。
 - `src/cli/`：命令入口、交互、初始化和迁移；将文件系统与终端副作用留在边界。
 - `schemas/`：配置和资源 manifest 的 JSON Schema；变更数据契约时同步检查 `src/contracts/types.ts` 和校验逻辑。
 
