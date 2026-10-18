@@ -23,8 +23,8 @@ modeck --version
 
 | Agent | 原生 hook 接入 |
 | --- | --- |
-| Qwen Code CLI | [Hooks 文档](https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/)；项目设置位于 `.qwen/settings.json`。核验版本：v0.25.2（[官方发布](https://github.com/QwenLM/qwen-code/releases/tag/v0.25.2)）。 |
-| Qoder CLI | [Hooks 文档](https://docs.qoder.com/cli/hooks)；项目设置位于 `.qoder/settings.json`。核验官方发行版本：1.1.73（[发行说明](https://docs.qoder.com/release-notes/qoder-cli)）。 |
+| Qwen Code CLI | [Hooks 文档](https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/)；项目设置位于 `.qwen/settings.json`。核验基线：v0.25.2（[官方发布](https://github.com/QwenLM/qwen-code/releases/tag/v0.25.2)）；不据此保证所有旧版兼容，旧版本的 hook timeout 行为也有差异。 |
+| Qoder CLI | [Hooks 文档](https://docs.qoder.com/cli/hooks)；项目设置位于 `.qoder/settings.json`。核验基线：官方发行版 1.1.73（[发行说明](https://docs.qoder.com/release-notes/qoder-cli)）；不据此保证所有旧版兼容。 |
 | Factory Droid | [Hooks 文档](https://docs.factory.ai/reference/hooks-reference)；需 CLI 0.196.0+，此版本修复 `SessionStart` 上下文丢弃；写入 `~/.factory/hooks.json` 的原生顶层事件映射。若该文件不存在但检测到 `settings.json` fallback 或 legacy hook，绑定会拒绝以避免遮蔽；先用 Droid 原生 `/hooks` 迁移。 |
 | GitHub Copilot CLI | [Hooks 文档](https://docs.github.com/en/copilot/reference/hooks-reference)；本项目要求 CLI 1.0.89+。1.0.88 已合并多个 hook 的 `additionalContext` 修复，本项目采用更保守的版本下限；使用独立 `~/.copilot/hooks/modeck.json`，hook 输出顶层 `additionalContext`。[官方 changelog](https://github.com/github/copilot-cli/blob/main/changelog.md) |
 
@@ -65,7 +65,7 @@ modeck --version
    modeck render
    ```
 
-   选择一个 agent 后输出规则正文和技能索引，不附带内部 ID。非交互调用需指定 `--agent <claude|codex|codebuddy|qwen|qoder|droid|copilot>`。各 agent 共用上下文模板，但原生技能扫描范围不同，因此输出可能不同。之后在该目录启动所选 agent，会话通过 hook 加载上下文。
+   选择一个 agent 后输出规则正文和技能索引，不附带内部 ID。非交互调用需指定 `--agent <claude|codex|codebuddy|qwen|qoder|droid|copilot>`。Claude Code、Codex 和 CodeBuddy 按各自原生扫描结果省略同名技能；新增的 Qwen、Qoder、Factory Droid 和 Copilot CLI 保留完整技能索引，避免原生扫描差异造成漏注入。之后在该目录启动所选 agent，会话通过 hook 加载上下文。
 
 ## 组合工作模式
 
