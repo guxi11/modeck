@@ -39,7 +39,8 @@ export const resolve = ({ context, facts, resourceDigest }: ResolveRequest): Res
     }
     return old ? ordered : [...ordered, binding];
   }, []);
+  const pluginIds = [...new Set(selected.modes.flatMap(id => config.modes[id]!.plugins))];
   return immutable({ schemaVersion: 1 as const, configDigest: context.configDigest, resourceDigest,
     cwd: facts.cwd, boundary: facts.boundary, selectorPath: facts.selector?.path ?? null,
-    modeIds: selected.modes, resources, reasons: selected.reasons, diagnostics: [] });
+    modeIds: selected.modes, pluginIds, resources, reasons: selected.reasons, diagnostics: [] });
 };

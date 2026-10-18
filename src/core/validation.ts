@@ -6,15 +6,16 @@ import {
   canonical, checkRelativePath, LIMITS, modeError, parseJson, sha256,
 } from "../contracts/index.js";
 import type {
-  Config, Mode, ResourceManifest, ResourceSpec, Selector, Source, ModeErrorCode,
+  Config, Mode, PluginSpec, ResourceManifest, ResourceSpec, Selector, Source, ModeErrorCode,
 } from "../contracts/index.js";
 import { compare, copyJson, immutable, requireValue } from "./values.js";
 
 type ModeInput = { readonly extends?: readonly string[];
-  readonly rules?: readonly string[]; readonly skills?: readonly string[] };
+  readonly rules?: readonly string[]; readonly skills?: readonly string[]; readonly plugins?: readonly string[] };
 type ConfigInput = { readonly defaults?: readonly string[]; readonly modes: Readonly<Record<string, ModeInput>>;
   readonly resources: { readonly rules?: Readonly<Record<string, string | Exclude<Source, { type: "use" }>>>;
-    readonly skills?: Readonly<Record<string, string | Exclude<Source, { type: "use" }>>> } };
+    readonly skills?: Readonly<Record<string, string | Exclude<Source, { type: "use" }>>> };
+  readonly plugins?: Readonly<Record<string, PluginSpec>> };
 const ajv = new Ajv2020({ strict: true, allErrors: true });
 const schema = <T>(name: string): ValidateFunction<T> => ajv.compile<T>(parseJson(
   readFileSync(new URL(`../../schemas/${name}.schema.json`, import.meta.url), "utf8"),
@@ -47,6 +48,19 @@ const checkSource = (spec: ResourceSpec): void => {
   }
 };
 
+const checkPlugin = (spec: PluginSpec): void => {
+  requireValue(/^[0-9a-f]{40}$/.test(spec.source.commit), "E_CONFIG", "Plugin source requires a full pinned Git commit");
+  checkRelativePath(spec.source.path ?? ".", true);
+  const { url } = spec.source;
+  requireValue(url.length <= LIMITS.urlLength, "E_CONFIG", "Plugin Git URL exceeds length limit");
+  if (url.startsWith("./")) { checkRelativePath(url.slice(2), false); return; }
+  let parsed: URL;
+  try { parsed = new URL(url); }
+  catch { throw modeError("E_CONFIG", "Invalid plugin Git URL"); }
+  requireValue(["https:", "ssh:"].includes(parsed.protocol) && parsed.hostname && !parsed.password
+    && !parsed.search && !parsed.hash && !/\p{Cc}/u.test(url), "E_CONFIG", "Unsupported plugin Git URL");
+};
+
 const parseSource = (value: string | Exclude<Source, { type: "use" }>): Source => {
   if (typeof value !== "string") return value;
   if (!value.trimStart().toLowerCase().startsWith("(use")) return { type: "local", path: value };
@@ -59,9 +73,13 @@ const checkGraph = (config: Config): void => {
   const ids = Object.keys(config.modes).sort(compare);
   const known = (id: string): void => requireValue(Object.hasOwn(config.modes, id), "E_CONFIG", "Unknown mode", { id });
   config.defaults.forEach(known);
+  Object.entries(config.plugins).forEach(([id]) => requireValue(/^[a-z][a-z0-9-]{0,63}$/.test(id),
+    "E_CONFIG", "Invalid plugin ID", { id }));
   ids.forEach(id => {
     const mode = config.modes[id]!;
     mode.extends.forEach(known);
+    mode.plugins.forEach(plugin => requireValue(Object.hasOwn(config.plugins, plugin),
+      "E_CONFIG", "Mode references an unknown plugin", { mode: id, plugin }));
     requireValue(new Set(mode.skills).size === mode.skills.length,
       "E_CONFIG", "Duplicate skill binding", { mode: id });
     [...mode.rules.map(resource => ({ id: resource, kind: "rule" })),
@@ -94,9 +112,15 @@ export const parseConfig = (value: unknown): Config => {
       extends: [...mode.extends ?? []],
       rules: [...mode.rules ?? []],
       skills: [...mode.skills ?? []],
+      plugins: [...mode.plugins ?? []],
+    }])),
+    plugins: Object.fromEntries(Object.entries(input.plugins ?? {}).map(([id, spec]) => [id, {
+      source: { ...spec.source, path: spec.source.path ?? "." },
+      ...(spec.agents ? { agents: [...spec.agents] } : {}),
     }])),
   };
   Object.values(config.resources).forEach(checkSource);
+  Object.values(config.plugins).forEach(checkPlugin);
   checkGraph(config);
   return immutable(config);
 };

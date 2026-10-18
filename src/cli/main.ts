@@ -19,6 +19,7 @@ import { encodeHook, prepare } from "../integration/index.js";
 import { imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
 import { parseEvent } from "../integration/hooks.js";
 import { createUi, UiCancelled } from "./ui.js";
+import { pluginCommand } from "./plugin.js";
 import type { Ui } from "./ui.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -27,10 +28,11 @@ const help = "Usage: modeck <command> [options]\n\nCommands:\n"
   + "  Setup and migration\n  init                   Initialize configuration\n  scan                   Import resources from agent homes\n"
   + "  migrate                Migrate existing configuration\n  res <init|update>       Manage external resources\n"
   + "\n  Inspect and select context\n  eval                   Evaluate automatic modes\n  save                   Save automatic modes to .modes\n"
-  + "  resolve                Explain resolved modes, rules and skills\n  render                 Render context\n"
+  + "  resolve                Explain resolved modes, plugins, rules and skills\n  render                 Render context\n"
   + "\n  Configuration and sessions\n  register               Register a configuration\n  unregister             Unregister a configuration\n"
   + "  config                 Manage registered configurations\n"
   + "  mcp <migrate|apply|status|recover>\n    Manage static native MCP configuration\n"
+  + "  plugin <init|status|apply|remove|recover>\n    Manage pinned native plugins\n"
   + "\n  Agent protocol (internal)\n  hook                   Handle agent session hook input/output\n\n"
   + "Native SessionStart adapters are verified with Qwen Code >= 0.25.2 and Qoder CLI >= 1.1.73.\n"
   + "Older versions are not covered by this compatibility baseline.\n\n"
@@ -43,7 +45,7 @@ const commandHelp: Readonly<Record<string, string>> = {
     + "Compares the automatic result with the actual current .modes selection; a non-empty .modes disables auto-detected modes while defaults and inheritance still apply.\n"
     + "Auto selectors execute as trusted user code. --state only identifies a directory to exclude from project facts.\n",
   resolve: "Usage: modeck resolve [--config <dir>] [--cwd <dir>] [--state <dir>] [--format <text|json>] [-h|--help]\n\n"
-    + "Explain the final modes, rules and skills selected for the current directory, including each mode's selection reason.\n"
+    + "Explain the final modes, plugins, rules and skills selected for the current directory, including each mode's selection reason.\n"
     + "Prepares and compiles context, validating installed resources and using the configured state/cache directory; run modeck res init if a declared resource is missing. This is not a pure parse-only operation.\n"
     + "Text output is concise. JSON returns the complete resolved plan. In non-TTY use without --format, JSON is retained for compatibility; pass --format text to request text.\n",
   save: "Usage: modeck save [--config <dir>] [--cwd <dir>] [--state <dir>] [--format <text|json>] [--yes] [-h|--help]\n\n"
@@ -179,6 +181,7 @@ export const main = async (argv: string[]): Promise<number> => {
       throw modeError("E_PLATFORM", "Node22.20.0+ on macOS/Linux is required");
     }
     if (command === "mcp") return mcpStaticCommand(argv.slice(1));
+    if (command === "plugin") return pluginCommand(argv.slice(1));
     if (!Object.hasOwn(values, command)) throw modeError("E_USAGE", "Unknown command", { command });
     const hasAction = command === "resource" && argv[1] !== undefined && !argv[1].startsWith("-");
     const opts = options(command, argv.slice(hasAction ? 2 : 1));
@@ -257,6 +260,7 @@ export const main = async (argv: string[]): Promise<number> => {
       else {
         const plan = prepared.plan;
         const labels = resolvedIdLabels([...plan.modeIds, ...plan.resources.map(resource => resource.id),
+          ...plan.pluginIds,
           ...plan.reasons.flatMap(reason => [reason.mode, ...(reason.from === null ? [] : [reason.from])])]);
         const label = (id: string): string => labels.get(id) ?? id;
         const ordered = (ids: readonly string[]): string => ids.length ? ids.map((id, index) => `${index + 1}. ${label(id)}`).join("\n") : "(none)";
@@ -265,6 +269,7 @@ export const main = async (argv: string[]): Promise<number> => {
         ui.section(`Resolved context · ${plan.modeIds.length} mode${plan.modeIds.length === 1 ? "" : "s"}`,
           [`Directory: ${plan.cwd}`, `Boundary: ${plan.boundary}`, `Selector: ${plan.selectorPath ?? "(none; defaults and auto)"}`].join("\n"));
         ui.section(`Modes · ${plan.modeIds.length}`, ordered(plan.modeIds));
+        ui.section(`Selected plugins · ${plan.pluginIds.length}`, ordered(plan.pluginIds));
         ui.section(`Rules · ${rules.length}`, ordered(rules));
         ui.section(`Skills · ${skills.length}`, ordered(skills));
         if (plan.reasons.length) ui.section("Selection reasons", plan.reasons.map(reason =>

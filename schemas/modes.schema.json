@@ -60,6 +60,12 @@
           }
         }
       }
+    },
+    "plugins": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/plugin" }
     }
   },
   "$defs": {
@@ -96,6 +102,29 @@
         }
       }
     },
+    "plugin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "commit"],
+          "properties": {
+            "url": { "type": "string", "minLength": 1, "maxLength": 2048 },
+            "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "path": { "$ref": "#/$defs/path" }
+          }
+        },
+        "agents": {
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 1,
+          "items": { "enum": ["claude", "codex"] }
+        }
+      }
+    },
     "mode": {
       "type": "object",
       "additionalProperties": false,
@@ -107,6 +136,9 @@
           "$ref": "#/$defs/ids"
         },
         "skills": {
+          "$ref": "#/$defs/ids"
+        },
+        "plugins": {
           "$ref": "#/$defs/ids"
         }
       }
