@@ -19,7 +19,7 @@ npm install -g modeck
 modeck --version
 ```
 
-当前支持 **Claude Code、Codex CLI 和 CodeBuddy Code CLI**。modeck 通过统一的 agent 适配层处理原生路径、会话 hook 和启动参数；绑定时使用 [Rulesync](https://github.com/dyoshikawa/rulesync) 转换 hook 配置，再校验并合并，保留已有 hook。
+当前支持 **Claude Code、Codex CLI 和 CodeBuddy Code CLI**。modeck 通过统一的 agent 适配层处理原生路径和会话 hook；绑定时使用 [Rulesync](https://github.com/dyoshikawa/rulesync) 转换 hook 配置，再校验并合并，保留已有 hook。
 
 工作模式仍按项目动态选择，会话加载规则正文和按需读取的技能索引。Rulesync 当前用于 hook 格式转换，更多 agent 尚未接入。
 

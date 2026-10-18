@@ -19,7 +19,7 @@ modeck 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Cla
 | [contracts](../src/contracts/index.ts) | 类型、错误、协议、摘要及上限 | `Config`、`ResolvedPlan`、`VerifiedResourceSet`、`RenderedContext`、`BindPlan` |
 | [core](../src/core/index.ts) | 配置校验、工作区事实、mode 解析、文本编译 | `collectFacts` / `loadConfig` 执行 I/O；`resolve` / `compile` 为纯函数 |
 | [resources](../src/resources/index.ts) | 本地与已安装资源、内容存储、完整性校验 | `readResources` 返回已验证资源；外部资源安装由 CLI 的 `res init/update` 管理 |
-| [integration](../src/integration/index.ts) | 准备上下文、hook 协议、绑定与进程启动 | `prepare`、`encodeHook`、`planBind` / `applyBindPlan`、`runAgent` |
+| [integration](../src/integration/index.ts) | 准备上下文、hook 协议与绑定 | `prepare`、`encodeHook`、`planBind` / `applyBindPlan` |
 | [cli](../src/cli/main.ts) | 参数、交互、配置发现、初始化与迁移 | 文件系统和终端副作用留在命令边界 |
 | [schemas](../schemas/modes.schema.json) | 配置与资源 manifest 的数据契约 | schema 校验后继续核对引用、继承图和树摘要 |
 
@@ -27,7 +27,7 @@ modeck 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Cla
 
 ## 从工作目录到上下文
 
-`resolve`、`render`、`hook` 和 `run` 共用 [prepare](../src/integration/prepare.ts)。它先解析选择，再读取被选资源，最后编译；因此未选中的缺失资源不会阻塞本次会话。`resolve` 命令也执行资源准备与编译，不是只读取配置的静态预览。
+`resolve`、`render` 和 `hook` 共用 [prepare](../src/integration/prepare.ts)。它先解析选择，再读取被选资源，最后编译；因此未选中的缺失资源不会阻塞本次会话。`resolve` 命令也执行资源准备与编译，不是只读取配置的静态预览。
 
 主流程如下；图中的第二次解析把已验证资源摘要写入最终计划：
 
@@ -41,7 +41,7 @@ flowchart TB
   select --> resources["readResources：读取并验证所选资源"]
   resources --> plan["resolve：填入资源摘要"]
   plan --> compile["compile：规则正文与技能索引"]
-  compile --> output["render / hook / run"]
+  compile --> output["render / hook"]
 ```
 
 计划保留 `cwd`、边界、选择器路径和选择原因，供诊断使用；稳定正文不插入这些运行诊断。输出协议是 `modeck-context/1`。
@@ -133,10 +133,6 @@ flowchart TB
 | CodeBuddy Code CLI | `.codebuddy/settings.json` | 使用 CLI hook 协议；加载行为还受其运行时控制 |
 
 这些是 modeck 实现的写入位置，不代表所有 agent 自定义配置目录布局都可由绑定命令自动发现。成功输出 hook JSON 也不等同于真实模型已采纳上下文。
-
-[run 包装器](../src/integration/run.ts)是另一个启动入口：Claude / CodeBuddy 使用追加 system prompt 参数；Codex 读取有效配置、合并既有 `developer_instructions`，并在启动前复核配置快照。它以 argv 数组和 `shell: false` 启动子进程，继承 stdio、传递退出码及终止信号；仅接受已知参数和受支持子命令，冲突时报错。
-
-包装器设置 `MODECK_RUN_V1` 标记，包含 agent、目录、配置、状态和正文摘要及父进程 PID。hook 发现有效且一致的标记时不重复注入；不一致、过期或嵌套包装器均报错。
 
 ## 绑定计划、应用与恢复
 
