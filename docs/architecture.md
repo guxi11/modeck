@@ -122,7 +122,7 @@ flowchart TB
 
 ## Hook 与启动适配
 
-[hook 适配](../src/integration/hooks.ts)按 agent 校验 `SessionStart` 输入，并以各 CLI 原生格式返回上下文。七种适配都使用同步 command hook；hook 启用且成功时，在首个模型请求前完成注入。CodeBuddy 事件缺少 `cwd` 时使用 hook 进程的工作目录。
+[hook 适配](../src/integration/hooks.ts)按 agent 校验 `SessionStart` 输入，并以各 CLI 原生格式返回上下文。七种适配都使用同步 command hook；hook 启用且成功时，在主会话首轮推理前返回上下文，不承诺屏障覆盖启动阶段的 auxiliary、鉴权或其他网络请求。CodeBuddy 事件缺少 `cwd` 时使用 hook 进程的工作目录。
 
 绑定写入的默认位置如下，路径相对于 `--target-home`，默认是本机 home：
 
@@ -133,8 +133,8 @@ flowchart TB
 | CodeBuddy Code CLI | `.codebuddy/settings.json` | 使用 CLI hook 协议；加载行为还受其运行时控制 |
 | Qwen Code CLI | `.qwen/settings.json` | 使用原生 `SessionStart` command hook |
 | Qoder CLI | `.qoder/settings.json` | 使用原生 `SessionStart` command hook |
-| Factory Droid | `~/.factory/hooks.json` | 使用原生顶层事件映射；若文件缺失但存在 `settings.json` fallback 或 legacy hook，绑定拒绝遮蔽，须先用原生 `/hooks` 迁移 |
-| GitHub Copilot CLI | `~/.copilot/hooks/modeck.json` | 需 CLI 1.0.89+；使用独立配置文件，输出顶层 `additionalContext` |
+| Factory Droid | `~/.factory/hooks.json` | 需 CLI 0.196.0+（修复 `SessionStart` 上下文丢弃）；使用原生顶层事件映射；若文件缺失但存在 `settings.json` fallback 或 legacy hook，绑定拒绝遮蔽，须先用原生 `/hooks` 迁移 |
+| GitHub Copilot CLI | `~/.copilot/hooks/modeck.json` | 需 CLI 1.0.89+（1.0.88 已合并 `additionalContext` 修复，本项目保守提高下限）；使用独立配置文件，输出顶层 `additionalContext` |
 
 这些是 modeck 实现的写入位置，不代表所有 agent 自定义配置目录布局都可由绑定命令自动发现。hook 被禁用、策略阻止、未触发、命令失败或超时时，原生会话仍可能继续且缺少 mode 内容，因此不保证 fail-closed。成功输出 hook JSON 也不等同于真实模型已采纳上下文；尚无登录状态下的真实模型请求验证。
 
