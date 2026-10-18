@@ -1,10 +1,10 @@
 import { constants } from "node:fs";
 import { access, lstat, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
-import type { Key } from "node:readline";
-import checkbox from "@inquirer/checkbox";
 import { agentDefinitions, agents, modeError } from "../contracts/index.js";
 import type { Agent } from "../contracts/index.js";
+import { createUi, UiCancelled } from "./ui.js";
+import type { Ui } from "./ui.js";
 import { missing } from "../integration/fs.js";
 import { loadRecord } from "../integration/install.js";
 
@@ -24,7 +24,7 @@ const installed = async (home: string, agent: Agent): Promise<boolean> => {
   }))).some(Boolean);
 };
 
-export const selectAgents = async (operation: "bind" | "unbind" | "render", home: string): Promise<readonly Agent[]> => {
+export const selectAgents = async (operation: "bind" | "unbind" | "render", home: string, ui: Ui = createUi()): Promise<readonly Agent[]> => {
   if (!process.stdin.isTTY || !process.stderr.isTTY) throw modeError("E_USAGE", `${operation} requires a TTY for selection; use --agent <claude|codex|codebuddy>`);
   const candidates = (await Promise.all(agents.map(async agent => {
     const record = await loadRecord(home, agent);
@@ -33,28 +33,17 @@ export const selectAgents = async (operation: "bind" | "unbind" | "render", home
   }))).flat();
   if (!candidates.length) {
     if (operation === "render") throw modeError("E_USAGE", "No installed or bound agents found; use --agent <claude|codex|codebuddy>");
-    process.stderr.write(`No ${operation === "bind" ? "installed agents" : "modeck bindings"} found in ${home}; no changes made.\n`);
+    ui.printError(`No ${operation === "bind" ? "installed agents" : "modeck bindings"} found in ${home}; no changes made.`);
     return [];
   }
-  const controller = new AbortController();
-  const cancel = () => controller.abort();
-  const keypress = (_: string, key: Key) => { if (key.ctrl && ["c", "d"].includes(key.name ?? "")) cancel(); };
-  process.stdin.on("keypress", keypress);
-  process.stdin.on("end", cancel);
-  process.on("SIGINT", cancel);
   try {
-    const selected = await checkbox<Agent>({ message: `Select ${operation === "render" ? "one agent" : "agents"} to ${operation} (${home})`, choices: candidates,
-      ...(operation === "render" ? { validate: (selected: readonly unknown[]) => selected.length === 1 || "Select exactly one agent to render" } : {}) },
-      { output: process.stderr, signal: controller.signal });
-    if (!selected.length) process.stderr.write("No agents selected; no changes made.\n");
+    const selected = await ui.checkbox<Agent>(`Select ${operation === "render" ? "one agent" : "agents"} to ${operation} (${home})`, candidates,
+      operation === "render" ? { validate: items => items.length === 1 || "Select exactly one agent to render" } : {});
+    if (!selected.length) ui.printError("No agents selected; no changes made.");
     return selected;
   } catch (error) {
-    if (!(error instanceof Error) || !["AbortPromptError", "ExitPromptError"].includes(error.name)) throw error;
-    process.stderr.write("Selection cancelled; no changes made.\n");
+    if (!(error instanceof UiCancelled)) throw error;
+    ui.printError("Selection cancelled; no changes made.");
     return [];
-  } finally {
-    process.stdin.off("keypress", keypress);
-    process.stdin.off("end", cancel);
-    process.off("SIGINT", cancel);
   }
 };

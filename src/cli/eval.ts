@@ -1,12 +1,12 @@
 import { lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { createInterface } from "node:readline";
 import { canonical, LIMITS, modeError } from "../contracts/index.js";
 import type { FileImage } from "../contracts/index.js";
 import { collectFacts, loadConfig, parseSelector, resolve } from "../core/index.js";
 import { validateConfig } from "../core/config.js";
 import { atomic, data, missing, parentIdentity, readImage, safeAbsolute, same } from "../integration/fs.js";
 import { loadRegistry, registryPath } from "../integration/registry.js";
+import { createUi, UiCancelled } from "./ui.js";
 
 type Request = Readonly<{
   command: "eval" | "save"; configRoot: string; stateRoot: string; cwd: string; format: string; yes: boolean;
@@ -27,21 +27,9 @@ const unshadowed = async (cwd: string, boundary: string): Promise<void> => {
   if (entry) throw modeError("E_SELECTOR", "A nearer .modes would override the saved repository selection; run save from the repository root", { path });
   await unshadowed(dirname(cwd), boundary);
 };
-const confirm = async (): Promise<boolean> => {
-  if (!process.stdin.isTTY || !process.stderr.isTTY) {
-    throw modeError("E_USAGE", "Overwriting .modes requires a TTY confirmation or --yes");
-  }
-  const terminal = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-  terminal.on("SIGINT", () => terminal.close());
-  try {
-    const lines = terminal[Symbol.asyncIterator]();
-    process.stderr.write("Overwrite .modes? [y/N]: ");
-    const answer = await lines.next();
-    return !answer.done && /^(?:y|yes)$/iu.test(answer.value.trim());
-  } finally { terminal.close(); }
-};
 export const evaluateModes = async ({ command, configRoot, stateRoot, cwd, format, yes }: Request): Promise<void> => {
   const root = await safeAbsolute(configRoot);
+  const ui = createUi({ format: format === "json" ? "json" : "text" });
   // Snapshot discovery candidates too: adding an auto script or alternate YAML changes selection.
   const discovery = await snapshot([join(root, "modeck.yaml"), join(root, "modeck.yml")]);
   const registry = await loadRegistry(root);
@@ -98,7 +86,12 @@ export const evaluateModes = async ({ command, configRoot, stateRoot, cwd, forma
     }
   });
   process.stderr.write(`${before ? "Overwrite" : "Create"} ${path}\nBefore: ${before ? JSON.stringify(data(before).toString("utf8")) : "(missing)"}\nAfter: ${JSON.stringify(content)}\n`);
-  if (before && !yes && !await confirm()) { report(false); return; }
+  if (before && !yes) {
+    if (format === "json") throw modeError("E_USAGE", "Overwriting .modes in JSON mode requires --yes");
+    if (!process.stdin.isTTY || !process.stderr.isTTY) throw modeError("E_USAGE", "Overwriting .modes requires a TTY confirmation or --yes");
+    try { if (!await ui.confirm("Overwrite .modes?", false)) { report(false); return; } }
+    catch (error) { if (error instanceof UiCancelled) { report(false); return; } throw error; }
+  }
   await verify();
   if (!same(before, await readImage(path, LIMITS.jsonBytes))) throw modeError("E_PLAN_STALE", "Destination .modes changed; evaluate again", { path });
   await unshadowed(facts.cwd, facts.boundary);

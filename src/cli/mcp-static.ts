@@ -1,12 +1,12 @@
 import { homedir } from "node:os";
 import { lstat } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { modeError } from "../contracts/index.js";
 import type { StaticMcpAgent, StaticMcpRequest, StaticMcpScope, StaticMcpSummary } from "../contracts/mcp-static.js";
 import { missing, safeAbsolute } from "../integration/fs.js";
 import { manageStaticMcp } from "../mcp/manage.js";
 import { locate } from "../mcp/native.js";
+import { createUi, UiCancelled } from "./ui.js";
 
 const actions = ["migrate", "apply", "status", "recover"] as const;
 type Action = typeof actions[number];
@@ -50,55 +50,25 @@ const configurationDirectory = async (value: string): Promise<string> => {
   if (basename(path) === "modeck-mcp.yaml" && (!stat || stat.isFile())) return dirname(path);
   throw modeError("E_USAGE", "MCP --config requires an existing directory or the independent modeck-mcp.yaml file; mode YAML files are not supported");
 };
-const color = process.stdout.isTTY && process.env.NO_COLOR === undefined
-  ? { bold: (value: string) => `\u001b[1m${value}\u001b[22m`, green: (value: string) => `\u001b[32m${value}\u001b[39m`, red: (value: string) => `\u001b[31m${value}\u001b[39m`, cyan: (value: string) => `\u001b[36m${value}\u001b[39m` }
-  : { bold: (value: string) => value, green: (value: string) => value, red: (value: string) => value, cyan: (value: string) => value };
 const report = (summary: StaticMcpSummary, json: boolean): void => {
   if (json) { process.stdout.write(`${JSON.stringify(summary)}\n`); return; }
+  const ui = createUi();
+  const stream = process.stdout;
   const { counts } = summary;
-  const outcome = summary.outcome === "success" ? color.green(summary.outcome) : color.red(summary.outcome);
-  process.stdout.write(`${color.bold(`modeck mcp ${summary.action}`)}  ${outcome}\n\n`);
-  process.stdout.write(`${color.bold("Changes")}\n  Added ${counts.added} · Updated ${counts.updated} · Matched ${counts.matched} · Preserved ${counts.preserved} · Rejected ${counts.rejected}\n\n`);
-  process.stdout.write(`${color.bold("Result")}\n${summary.message}\n`);
-  if (summary.target) process.stdout.write(`\n${color.bold("Target")}\n  Native: ${summary.target}\n  Central: ${summary.configuration}\n`);
+  const outcome = ui.emphasize(summary.outcome, stream, summary.outcome === "success" ? "green" : "red");
+  ui.section(`modeck mcp ${summary.action}  ${outcome}`, "");
+  ui.section("Changes", `  Added ${counts.added} · Updated ${counts.updated} · Matched ${counts.matched} · Preserved ${counts.preserved} · Rejected ${counts.rejected}`);
+  ui.section("Result", summary.message);
+  if (summary.target) ui.section("Target", `  Native: ${summary.target}\n  Central: ${summary.configuration}`);
   const ordered = [...summary.decisions].sort((left, right) => Number(right.action === "rejected") - Number(left.action === "rejected"));
-  if (ordered.length) process.stdout.write(`\n${color.bold("Servers")}\n${ordered.map(decision => {
-    const state = decision.action === "rejected" ? color.red(decision.action) : decision.action;
+  if (ordered.length) ui.section("Servers", ordered.map(decision => {
+    const state = decision.action === "rejected" ? ui.emphasize(decision.action, stream, "red") : decision.action;
     return decision.action === "rejected" ? `  ${decision.name}  ${state}\n    ${decision.reason}` : `  ${decision.name}  ${state}`;
-  }).join("\n")}\n`);
-  process.stdout.write(`\n${color.bold("Next step")}\n${color.cyan(summary.next)}\n`);
+  }).join("\n"));
+  ui.section("Next step", ui.emphasize(summary.next, stream, "cyan"));
 };
-const promptValue = async (question: string, choices: readonly string[], defaultIndex?: number): Promise<string> => {
-  const controller = new AbortController();
-  const terminal = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-  const cancel = () => controller.abort();
-  terminal.on("SIGINT", cancel);
-  terminal.on("close", cancel);
-  try {
-    for (;;) {
-      const answer = (await terminal.question(`${question}\n${choices.map((choice, index) => `  ${index + 1}) ${choice}`).join("\n")}\nSelect [1-${choices.length}${defaultIndex === undefined ? "" : `, default ${defaultIndex + 1}`}]: `, { signal: controller.signal })).trim();
-      if (!answer && defaultIndex !== undefined) return String(defaultIndex);
-      if (!answer) continue;
-      const index = Number(answer);
-      if (Number.isInteger(index) && index >= 1 && index <= choices.length) return String(index - 1);
-      process.stderr.write(`Enter a number from 1 to ${choices.length}.\n`);
-    }
-  } catch {
-    const error = new Error("MCP interaction cancelled; no changes were made");
-    error.name = "MCPInteractionCancelled";
-    throw error;
-  } finally {
-    terminal.off("SIGINT", cancel);
-    terminal.off("close", cancel);
-    terminal.close();
-  }
-};
-const select = async <T extends string>(question: string, values: readonly T[], labels = values): Promise<T> => {
-  const index = Number(await promptValue(question, labels));
-  return values[index]!;
-};
-const review = (action: Action, agent: StaticMcpAgent, scope: StaticMcpScope, request: StaticMcpRequest, target: string): void => {
-  process.stderr.write(`${color.bold("Review MCP operation")}\n  Action: ${action}\n  Agent: ${agent}\n  Scope: ${scope}\n  Native target: ${target}\n  Central config: ${request.configRoot}/modeck-mcp.yaml\n`);
+const review = (action: Action, request: StaticMcpRequest, target: string, ui: ReturnType<typeof createUi>): void => {
+  ui.section("Review MCP operation", `  Operation: ${action}\n  Native path: ${target}\n  Config path: ${request.configRoot}/modeck-mcp.yaml`, process.stderr);
 };
 export const mcpStaticCommand = async (argv: readonly string[]): Promise<number> => {
   const requestedAction = argv[0] === "help" ? "help" : actions.includes(argv[0] as Action) ? argv[0]! : "";
@@ -114,6 +84,7 @@ export const mcpStaticCommand = async (argv: readonly string[]): Promise<number>
     const opts = options(argv.slice(requestedAction ? 1 : 0));
     if (opts.format !== undefined && !["text", "json"].includes(opts.format)) throw modeError("E_USAGE", "Unknown MCP output format; use --format text or --format json");
     json = opts.format === "json";
+    const ui = createUi({ format: json ? "json" : "text" });
     if (opts.agent === "codebuddy") throw modeError("E_USAGE", "CodeBuddy is not supported in this phase: candidate-file priority and shared project files require a separately verified adapter");
     if (opts.agent !== undefined && opts.agent !== "claude" && opts.agent !== "codex") throw modeError("E_USAGE", "Choose --agent claude or codex");
     if (opts.scope !== undefined && opts.scope !== "user" && opts.scope !== "project") throw modeError("E_USAGE", "Choose --scope user or project");
@@ -122,19 +93,19 @@ export const mcpStaticCommand = async (argv: readonly string[]): Promise<number>
     if (!action || action === "unknown") {
       if (!interactive) throw modeError("E_USAGE", "Choose an action: modeck mcp <migrate|apply|status|recover> [--agent claude|codex] [--scope user|project]; interactive selection requires a TTY and text output");
       usedInteraction = true;
-      action = await select("Choose an MCP action", actions);
+      action = await ui.select("Choose an MCP action", actions.map(value => ({ name: value, value })));
     }
     if (!opts.agent) {
       if (!interactive) throw modeError("E_USAGE", "Choose an agent with --agent claude|codex; interactive selection requires a TTY and text output");
       usedInteraction = true;
-      agent = await select("Choose an agent", ["claude", "codex"] as const);
+      agent = await ui.select("Choose an agent", (["claude", "codex"] as const).map(value => ({ name: value, value })));
     } else agent = opts.agent;
     if (agent === "codex" && opts.scope === "project") throw modeError("E_USAGE", "Codex project scope is not supported by this command; use --scope user");
     if (!opts.scope) {
       if (!interactive) throw modeError("E_USAGE", `Choose a scope with --scope ${agent === "codex" ? "user" : "user|project"}; interactive selection requires a TTY and text output`);
       usedInteraction = true;
-      scope = agent === "codex" ? await select("Codex MCP supports this scope", ["user"] as const)
-        : await select("Choose a Claude MCP scope", ["user", "project"] as const);
+      scope = await ui.select(agent === "codex" ? "Codex MCP supports this scope" : "Choose a Claude MCP scope",
+        (agent === "codex" ? ["user"] as const : ["user", "project"] as const).map(value => ({ name: value, value })));
     } else scope = opts.scope;
     if (agent === "codex" && scope !== "user") throw modeError("E_USAGE", "Codex project scope is not supported by this command; use --scope user");
     const request: StaticMcpRequest = {
@@ -143,20 +114,15 @@ export const mcpStaticCommand = async (argv: readonly string[]): Promise<number>
       configRoot: await configurationDirectory(opts.config ?? process.cwd()),
       cwd: await safeAbsolute(resolve(opts.cwd ?? process.cwd())),
     };
-    if (!json) review(action, agent, scope, request, (await locate(request, false)).path);
+    if (!json) review(action, request, (await locate(request, false)).path, ui);
     if (usedInteraction && ["migrate", "apply", "recover"].includes(action)) {
-      const answer = await promptValue("This operation writes configuration. Continue?", ["Continue", "Cancel"], 1);
-      if (answer !== "0") {
-        const error = new Error("MCP interaction cancelled; no changes were made");
-        error.name = "MCPInteractionCancelled";
-        throw error;
-      }
+      if (!await ui.confirm("This operation writes configuration?", false)) throw new UiCancelled();
     }
     const result = await manageStaticMcp(action, request);
     report(result, json);
     return result.outcome === "partial" ? 6 : result.outcome === "failed" ? 4 : 0;
   } catch (caught) {
-    const cancelled = caught instanceof Error && caught.name === "MCPInteractionCancelled";
+    const cancelled = caught instanceof UiCancelled;
     const known = caught instanceof Error && "code" in caught && /^E_(?:CONFIG|USAGE|PATH|LIMIT|INSTALL_CONFLICT|PLAN_STALE|BUSY)$/u.test(String(caught.code));
     const code = cancelled ? "E_CANCELLED" : known ? String(caught.code) : "E_IO";
     const message = known || cancelled ? (caught as Error).message : "MCP operation failed; inspect directory permissions and native configuration locally";

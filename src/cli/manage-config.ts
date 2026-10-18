@@ -9,6 +9,8 @@ import { atomic, checkDirectory, digest, ensureParents, imageJson, jsonImage, mi
 import { loadRegistry, registryPath, registryRoot } from "../integration/registry.js";
 import { prepare } from "../integration/prepare.js";
 import { choose } from "./selection.js";
+import { createUi } from "./ui.js";
+import type { Ui } from "./ui.js";
 
 type Options = Readonly<Record<string, string | boolean>>;
 type Snapshot = { readonly registry: ConfigRegistry; readonly image: FileImage | null; readonly records: readonly (BindRecord | null)[] };
@@ -69,7 +71,7 @@ const publish = async (root: string, before: FileImage | null, registry: ConfigR
   if (!same(before, image)) await atomic(path, image);
 };
 
-const answersFor = async (answers: string | undefined, before: Snapshot): Promise<{ readonly configs: readonly string[]; readonly agents: readonly Agent[] }> => {
+const answersFor = async (answers: string | undefined, before: Snapshot, ui: Ui): Promise<{ readonly configs: readonly string[]; readonly agents: readonly Agent[] }> => {
   if (answers !== undefined) {
     const image = await readImage(await safeAbsolute(resolve(answers)), LIMITS.jsonBytes);
     if (!image) throw modeError("E_USAGE", "Answers file is missing");
@@ -83,10 +85,10 @@ const answersFor = async (answers: string | undefined, before: Snapshot): Promis
     return { configs: value.configs as string[], agents: value.agents as Agent[] };
   }
   const configs = before.registry.projects.length ? await choose("1/2 · Enable configuration projects (registration order)",
-    before.registry.projects.map(project => ({ name: project.root, value: project.root, checked: project.enabled }))) : [];
+    before.registry.projects.map(project => ({ name: project.root, value: project.root, checked: project.enabled })), ui) : [];
   const selected = await choose("2/2 · Bind agents", agents.map((agent, index) => ({
     name: agent, value: agent, checked: before.records[index] !== null,
-  })));
+  })), ui);
   return { configs, agents: selected };
 };
 
@@ -105,7 +107,7 @@ const reverse = async (plan: BindPlan): Promise<BindPlan> => {
 };
 
 export const manageConfig = async (command: "register" | "unregister" | "config", home: string, cwd: string, runtimeRoot: string,
-  opts: Options): Promise<{ readonly conflicts?: boolean; readonly [key: string]: unknown }> => {
+  opts: Options, ui: Ui = createUi()): Promise<{ readonly conflicts?: boolean; readonly [key: string]: unknown }> => {
   const root = await safeAbsolute(registryRoot(home));
   const before = await snapshot(home, root);
   if (command === "config" && opts.list) {
@@ -136,7 +138,7 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
       return { ...registry, changed: command === "register" ? !exists : exists };
     });
   }
-  const selected = await answersFor(typeof opts.answers === "string" ? opts.answers : undefined, before);
+  const selected = await answersFor(typeof opts.answers === "string" ? opts.answers : undefined, before, ui);
   const registry: ConfigRegistry = { schemaVersion: 1, projects: before.registry.projects.map(project => ({
     ...project, enabled: selected.configs.includes(project.root),
   })) };

@@ -19,6 +19,8 @@ import { selectAgents } from "./bind.js";
 import { encodeHook, prepare, runAgent } from "../integration/index.js";
 import { imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
 import { parseEvent, runMarker } from "../integration/hooks.js";
+import { createUi } from "./ui.js";
+import type { Ui } from "./ui.js";
 
 const runtimeRoot = fileURLToPath(new URL("../../", import.meta.url));
 const help = "Usage: modeck <command> [options]\n\nCommands:\n"
@@ -106,28 +108,29 @@ const agentFor = (opts: Readonly<Record<string, string | boolean>>): Agent => {
 const pathFor = async (value: string): Promise<string> => safeAbsolute(absolute(value));
 const json = (value: unknown): void => { process.stdout.write(`${JSON.stringify(value)}\n`); };
 const items = (value: unknown): readonly unknown[] => Array.isArray(value) ? value : [];
-const reportImport = (command: string, value: unknown): void => {
+const reportImport = (command: string, value: unknown, ui: Ui): void => {
   const result = object(value);
   if (typeof result.message === "string") { process.stdout.write(`${result.message}\n`); return; }
   const count = items(result.resources).length;
   if (command !== "init" && count === 0) { process.stdout.write("No resources selected; no changes made.\n"); return; }
-  process.stdout.write(`modeck ${command}: ${command === "init" ? "initialized" : "imported"} (${count} resources)\nConfiguration: ${result.configRoot}\n`);
-  if (typeof result.backupDirectory === "string") process.stdout.write(`Backups: ${result.backupDirectory}\n`);
-  if (items(result.retained).length) process.stdout.write(`Retained ${items(result.retained).length} managed/shared entries.\n`);
+  const lines = [`Configuration: ${result.configRoot}`];
+  if (typeof result.backupDirectory === "string") lines.push(`Backups: ${result.backupDirectory}`);
+  if (items(result.retained).length) lines.push(`Retained ${items(result.retained).length} managed/shared entries.`);
+  ui.section(`modeck ${command}: ${command === "init" ? "initialized" : "imported"} (${count} resources)`, lines.join("\n"));
 };
-const reportConfig = (command: string, result: Readonly<Record<string, unknown>>): void => {
+const reportConfig = (command: string, result: Readonly<Record<string, unknown>>, ui: Ui): void => {
   if (command !== "config") {
-    process.stdout.write(`modeck ${command}: ${result.changed ? "complete" : "no changes"}\n`);
+    ui.section(`modeck ${command}: ${result.changed ? "complete" : "no changes"}`, "");
     return;
   }
-  process.stdout.write(result.conflicts ? "modeck config: conflicts found; no changes made.\n"
-    : `modeck config: complete (${items(result.projects).filter(project => object(project).enabled).length} configurations enabled)\n`);
+  ui.section(result.conflicts ? "modeck config: conflicts found; no changes made."
+    : `modeck config: complete (${items(result.projects).filter(project => object(project).enabled).length} configurations enabled)`, "");
   for (const value of items(result.plans)) {
     const plan = object(value);
     if (!result.conflicts) process.stdout.write(`  ${plan.agent}: ${plan.operation === "bind" ? "bound" : "unbound"}\n`);
     for (const value of [...items(plan.conflicts), ...items(plan.warnings)]) {
       const diagnostic = object(value);
-      process.stderr.write(`${plan.agent}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}\n`);
+      ui.printError(`${plan.agent}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`);
     }
   }
 };
@@ -201,6 +204,7 @@ export const main = async (argv: string[]): Promise<number> => {
     };
     const format = String(opts.format ?? "text");
     if (!["text", "json"].includes(format)) throw modeError("E_USAGE", "Unknown output format");
+    const ui = createUi({ format: format === "json" || opts.list === true ? "json" : "text" });
     if (command === "eval" || command === "save") {
       const cwd = await realpath(absolute(String(opts.cwd ?? process.cwd())));
       const configRoot = await configRootFor(homedir(), cwd, typeof opts.config === "string" ? opts.config : undefined);
@@ -215,7 +219,7 @@ export const main = async (argv: string[]): Promise<number> => {
         ...(opts.agent !== undefined ? { agent: agentFor(opts) } : {}),
         ...(typeof opts.config === "string" ? { configRoot: await pathFor(opts.config) } : {}),
       });
-      if (opts.list) json(result); else reportImport(command, result);
+      if (opts.list) json(result); else reportImport(command, result, ui);
       return 0;
     }
     if (command === "migrate") {
@@ -223,16 +227,22 @@ export const main = async (argv: string[]): Promise<number> => {
       const result = await migrate({ cwd: await realpath(process.cwd()), ...await configured(true),
         list: opts.list === true, ...(typeof opts.answers === "string" ? { answers: await pathFor(opts.answers) } : {}),
         ...(typeof opts.mode === "string" ? { mode: opts.mode } : {}) });
-      if (opts.list) json(result); else reportImport(command, result);
+      if (opts.list) json(result); else reportImport(command, result, ui);
       return 0;
     }
     if (command === "register" || command === "unregister" || command === "config") {
-      const result = await manageConfig(command, await pathFor(String(opts["target-home"] ?? homedir())), process.cwd(), runtimeRoot, opts);
-      if (opts.list || opts["dry-run"] || format === "json") json(result); else reportConfig(command, result);
+      const nonInteractive = !process.stdin.isTTY || !process.stderr.isTTY;
+      if (command === "config" && !opts.list && typeof opts.answers !== "string"
+        && (format === "json" || opts["dry-run"] === true && nonInteractive)) {
+        throw modeError("E_USAGE", "JSON config output requires --answers <file>; use --list to inspect without applying answers");
+      }
+      const result = await manageConfig(command, await pathFor(String(opts["target-home"] ?? homedir())), process.cwd(), runtimeRoot, opts, ui);
+      if (opts.list || opts["dry-run"] || format === "json") json(result); else reportConfig(command, result, ui);
       return result.conflicts ? 4 : 0;
     }
+    if (command === "render" && format === "json" && opts.agent === undefined) throw modeError("E_USAGE", "Choose an agent with --agent claude|codex|codebuddy; JSON output cannot prompt");
     const selectedAgent = command === "resolve" ? "codex" : opts.agent !== undefined ? agentFor(opts)
-      : command === "render" ? (await selectAgents("render", await pathFor(homedir())))[0] : undefined;
+      : command === "render" ? (await selectAgents("render", await pathFor(homedir()), ui))[0] : undefined;
     if (command === "render" && !selectedAgent) return 0;
     const { configRoot, stateRoot } = await configured(false, selectedAgent);
     if (command === "hook") {

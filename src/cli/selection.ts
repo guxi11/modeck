@@ -1,7 +1,6 @@
-import checkbox, { Separator } from "@inquirer/checkbox";
-import { createInterface } from "node:readline";
-import type { Key } from "node:readline";
 import { LIMITS, modeError, parseJson } from "../contracts/index.js";
+import { createUi, Separator, UiCancelled } from "./ui.js";
+import type { Ui, UiChoice } from "./ui.js";
 import type { ScanResult } from "../resources/scan.js";
 import { regularBytes, requireValue, utf8 } from "../resources/fs.js";
 
@@ -9,29 +8,20 @@ export type Choice = { readonly id: string; readonly name: string };
 const validName = (name: string): boolean => /^[a-z][a-z0-9-]{0,63}$/.test(name);
 const cancelled = () => modeError("E_USAGE", "Selection cancelled; no resources were moved");
 
-export const choose = async <T>(message: string, choices: readonly (Separator | { readonly name: string; readonly value: T; readonly description?: string; readonly checked?: boolean })[]): Promise<readonly T[]> => {
-  requireValue(process.stdin.isTTY && process.stderr.isTTY, "E_USAGE", "Selection requires a TTY; use --agent and --answers, or --list");
-  const controller = new AbortController();
-  const cancel = () => controller.abort();
-  const keypress = (_: string, key: Key) => { if (key.ctrl && ["c", "d"].includes(key.name ?? "")) cancel(); };
-  process.stdin.on("keypress", keypress);
-  process.stdin.on("end", cancel);
-  process.on("SIGINT", cancel);
+export const choose = async <T>(message: string, choices: readonly (Separator | UiChoice<T>)[], ui: Ui = createUi()): Promise<readonly T[]> => {
   try {
-    return await checkbox<T>({ message, choices: [...choices], pageSize: Math.max(4, Math.min(14, (process.stderr.rows ?? 24) - 9)),
+    return await ui.checkbox<T>(message, choices, { pageSize: Math.max(4, Math.min(14, (process.stderr.rows ?? 24) - 9)),
       loop: false, instructions: "\n↑↓ navigate · Space select · a all · Enter continue",
-      theme: { style: { renderSelectedChoices: (selected: readonly unknown[]) => `${selected.length} selected` } } }, { output: process.stderr, signal: controller.signal });
+      theme: { style: { renderSelectedChoices: (selected: readonly unknown[]) => `${selected.length} selected` } } },
+    "Selection requires a TTY; use --agent and --answers, or --list");
   } catch (error) {
-    if (error instanceof Error && ["AbortPromptError", "ExitPromptError"].includes(error.name)) throw cancelled();
+    if (error instanceof UiCancelled) throw cancelled();
     throw error;
-  } finally {
-    process.stdin.off("keypress", keypress);
-    process.stdin.off("end", cancel);
-    process.off("SIGINT", cancel);
   }
 };
 
 export const selections = async (scan: ScanResult, answers?: string, preview?: (choices: readonly Choice[]) => Promise<string>, rename = true): Promise<readonly Choice[]> => {
+  const ui = createUi();
   if (answers !== undefined) {
     const value = parseJson(utf8((await regularBytes(answers, LIMITS.jsonBytes)).bytes)) as Record<string, unknown>;
     requireValue(value && typeof value === "object" && !Array.isArray(value)
@@ -56,33 +46,19 @@ export const selections = async (scan: ScanResult, answers?: string, preview?: (
     return resources.length ? [new Separator(`── ${kind === "rule" ? "Rules" : "Skills"} (${resources.length}) ──`),
       ...resources.map(resource => ({ value: resource.id, name: resource.id,
         description: `${compact(resource.description).slice(0, 180)}\nSource: ${resource.aliases.join(", ")}` }))] : [];
-  }));
+  }), ui);
   if (!ids.length) return [];
-  const terminal = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-  const lines = terminal[Symbol.asyncIterator]();
-  let interrupted = false;
-  terminal.on("SIGINT", () => { interrupted = true; terminal.close(); });
-  const ask = async (prompt: string): Promise<string> => {
-    process.stderr.write(prompt);
-    const answer = await lines.next();
-    if (answer.done || interrupted) throw cancelled();
-    return answer.value.trim();
-  };
   try {
-    if (rename) process.stderr.write("\n2/3 · Resource names\nPress Enter to keep each name.\n");
+    if (rename) ui.printError("\n2/3 · Resource names\nPress Enter to keep each name.");
     const choices = rename ? await ids.reduce(async (pending, id) => {
       const choices = await pending;
-      const nameFor = async (): Promise<string> => {
-        const name = await ask(`Name for ${id} [${id}]: `) || id;
-        if (validName(name) && !choices.some(choice => choice.name === name)) return name;
-        process.stderr.write("Invalid or duplicate name; use lowercase letters, digits and hyphens, starting with a letter.\n");
-        return nameFor();
-      };
-      return [...choices, { id, name: await nameFor() }];
+      const name = await ui.input(`Name for ${id}`, id, value => validName(value) && !choices.some(choice => choice.name === value)
+        || "Invalid or duplicate name; use lowercase letters, digits and hyphens, starting with a letter.");
+      return [...choices, { id, name }];
     }, Promise.resolve([] as readonly Choice[])) : ids.map(id => ({ id, name: id }));
-    process.stderr.write(`\n${rename ? "3/3" : "2/2"} · Review ${choices.length} resources\n${choices.map(choice => `  ${choice.id}${choice.id === choice.name ? "" : ` → ${choice.name}`}`).join("\n")}\n\n`);
-    if (preview) process.stderr.write(`${await preview(choices)}\n`);
-    if (!/^(?:y|yes)$/i.test(await ask("Move selected resources after verifying all destinations? [y/N]: "))) throw cancelled();
+    ui.printError(`\n${rename ? "3/3" : "2/2"} · Review ${choices.length} resources\n${choices.map(choice => `  ${choice.id}${choice.id === choice.name ? "" : ` → ${choice.name}`}`).join("\n")}\n`);
+    if (preview) ui.printError(await preview(choices));
+    if (!await ui.confirm("Move selected resources after verifying all destinations?", false)) throw cancelled();
     return choices;
-  } finally { terminal.close(); }
+  } catch (error) { if (error instanceof UiCancelled) throw cancelled(); throw error; }
 };
