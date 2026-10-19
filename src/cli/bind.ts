@@ -8,7 +8,7 @@ import type { Ui } from "./ui.js";
 import { missing } from "../integration/fs.js";
 import { loadRecord } from "../integration/install.js";
 
-const installed = async (home: string, agent: Agent): Promise<boolean> => {
+export const installed = async (home: string, agent: Agent): Promise<boolean> => {
   const directory = await lstat(join(home, agentDefinitions[agent].configDirectory)).catch(error => {
     if (missing(error)) return null;
     throw error;

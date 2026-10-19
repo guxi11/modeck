@@ -9,6 +9,7 @@ import { atomic, checkDirectory, digest, ensureParents, imageJson, jsonImage, mi
 import { loadRegistry, registryPath, registryRoot } from "../integration/registry.js";
 import { prepare } from "../integration/prepare.js";
 import { choose } from "./selection.js";
+import { installed } from "./bind.js";
 import { createUi } from "./ui.js";
 import type { Ui } from "./ui.js";
 
@@ -71,7 +72,7 @@ const publish = async (root: string, before: FileImage | null, registry: ConfigR
   if (!same(before, image)) await atomic(path, image);
 };
 
-const answersFor = async (answers: string | undefined, before: Snapshot, ui: Ui): Promise<{ readonly configs: readonly string[]; readonly agents: readonly Agent[] }> => {
+const answersFor = async (home: string, answers: string | undefined, before: Snapshot, ui: Ui): Promise<{ readonly configs: readonly string[]; readonly agents: readonly Agent[] }> => {
   if (answers !== undefined) {
     const image = await readImage(await safeAbsolute(resolve(answers)), LIMITS.jsonBytes);
     if (!image) throw modeError("E_USAGE", "Answers file is missing");
@@ -86,9 +87,17 @@ const answersFor = async (answers: string | undefined, before: Snapshot, ui: Ui)
   }
   const configs = before.registry.projects.length ? await choose("1/2 · Enable configuration projects (registration order)",
     before.registry.projects.map(project => ({ name: project.root, value: project.root, checked: project.enabled })), ui) : [];
-  const selected = await choose("2/2 · Bind agents", agents.map((agent, index) => ({
-    name: agent, value: agent, checked: before.records[index] !== null,
-  })), ui);
+  // Only agents installed on this machine (or already bound, so they can be unbound) are offered.
+  const offered = (await Promise.all(agents.map(async (agent, index) => {
+    if (before.records[index] !== null || await installed(home, agent)) {
+      return [{ name: agent, value: agent, checked: before.records[index] !== null }];
+    }
+    return [];
+  }))).flat();
+  if (!offered.length) {
+    throw modeError("E_CONFIG", "No installed agents or existing bindings found; install an agent CLI before binding");
+  }
+  const selected = await choose("2/2 · Bind agents (installed on this machine)", offered, ui);
   return { configs, agents: selected };
 };
 
@@ -115,6 +124,9 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
     return { ...before.registry, agents: agents.map((agent, index) => ({ agent, bound: before.records[index] !== null,
       configRoot: before.records[index]?.configRoot ?? null, stateRoot: before.records[index]?.stateRoot ?? null })) };
   }
+  if (command === "config" && !before.registry.projects.length) {
+    throw modeError("E_CONFIG", "No configuration projects registered; run modeck register <dir> first, then run modeck config");
+  }
   const expected = opts.expect;
   if (expected !== undefined && (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected))) throw modeError("E_USAGE", "Invalid expected plan digest");
   if (command !== "config") {
@@ -138,7 +150,7 @@ export const manageConfig = async (command: "register" | "unregister" | "config"
       return { ...registry, changed: command === "register" ? !exists : exists };
     });
   }
-  const selected = await answersFor(typeof opts.answers === "string" ? opts.answers : undefined, before, ui);
+  const selected = await answersFor(home, typeof opts.answers === "string" ? opts.answers : undefined, before, ui);
   const registry: ConfigRegistry = { schemaVersion: 1, projects: before.registry.projects.map(project => ({
     ...project, enabled: selected.configs.includes(project.root),
   })) };
