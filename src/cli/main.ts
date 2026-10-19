@@ -171,6 +171,12 @@ const exitFor = (error: ModeError, hook: boolean): number => {
   if (error.code === "E_HOOK_INPUT") return 5;
   return ["E_USAGE", "E_CONFIG", "E_SELECTOR", "E_MODE_CONFLICT", "E_SCAN_LIMIT", "E_CONTEXT_SIZE", "E_LIMIT"].includes(error.code) ? 2 : 3;
 };
+const filteredNote = (item: { id: string; kind: string; basis: string }): string =>
+  item.basis === "native-skill" || item.basis === "native-instruction"
+    ? `modeck: omitted ${item.kind} already present natively: ${item.id} (${item.basis})\n`
+    : item.basis === "context-size:skill"
+      ? `modeck: omitted ${item.kind} so the context fits the output limit: ${item.id}\n`
+      : `modeck: shortened ${item.kind} description so the context fits the output limit: ${item.id}\n`;
 
 export const main = async (argv: string[]): Promise<number> => {
   const command = argv[0] === "res" ? "resource" : argv[0] ?? "--help";
@@ -252,7 +258,7 @@ export const main = async (argv: string[]): Promise<number> => {
       const reply = encodeHook({ rendered });
       // stdout carries only the hook reply; skipped paths go to the agent's hook log via stderr.
       plan.diagnostics.forEach(item => process.stderr.write(`modeck: ${`${item.code}: ${item.message}${item.path ? ` (${item.path})` : ""}`.replace(/\p{Cc}/gu, "?")}\n`));
-      rendered.filtered.forEach(item => process.stderr.write(`modeck: omitted ${item.kind} already present natively: ${item.id} (${item.basis})\n`));
+      rendered.filtered.forEach(item => process.stderr.write(filteredNote(item)));
       json(reply); return 0;
     }
     const cwd = await realpath(absolute(String(opts.cwd ?? process.cwd())));
@@ -286,7 +292,10 @@ export const main = async (argv: string[]): Promise<number> => {
       const { modeIds: _modeIds, ...rendered } = prepared.rendered;
       json(rendered);
     }
-    else process.stdout.write(prepared.rendered.text);
+    else {
+      process.stdout.write(prepared.rendered.text);
+      prepared.rendered.filtered.forEach(item => process.stderr.write(filteredNote(item)));
+    }
     return 0;
   } catch (caught) {
     if (caught instanceof UiCancelled) return 130;
