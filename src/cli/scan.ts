@@ -1,4 +1,4 @@
-import { lstat, mkdir, open, readdir, realpath, rm, rmdir, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rmdir, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, extname, join } from "node:path";
 import { stringify } from "yaml";
@@ -56,17 +56,40 @@ const occupiedLink = async (resource: ScannedResource, roots: { readonly homeRoo
   return null;
 };
 
-// Whole-directory removal refuses any catalog that still holds symbolic-link entries,
-// so retained references can never be deleted by consenting to the removal prompt.
-const hasSymlinkEntry = async (directory: string, depth: number): Promise<boolean> => {
-  if (depth > LIMITS.scanDepth) return true;
-  const names = await readdir(directory);
-  return names.reduce(async (pending, name) => {
-    if (await pending) return true;
+// Counts symbolic-link entries inside a catalog without following them; null when the tree
+// is too deep to inspect. Links die by unlink only, never their targets.
+const symlinkEntries = async (directory: string, depth: number): Promise<number | null> => {
+  if (depth > LIMITS.scanDepth) return null;
+  return (await readdir(directory)).reduce(async (counted, name) => {
+    const count = await counted;
+    if (count === null) return null;
     const info = await lstat(join(directory, name));
-    if (info.isSymbolicLink()) return true;
-    return info.isDirectory() && hasSymlinkEntry(join(directory, name), depth + 1);
-  }, Promise.resolve(false));
+    if (info.isSymbolicLink()) return count + 1;
+    if (!info.isDirectory()) return count;
+    const nested = await symlinkEntries(join(directory, name), depth + 1);
+    return nested === null ? null : count + nested;
+  }, Promise.resolve(0 as number | null));
+};
+
+// Recursive removal that never follows symbolic links: every entry is typed with lstat
+// before anything is removed, links are unlinked themselves, and directories are emptied
+// bottom-up with rmdir so content behind a link is never touched.
+const unlinkTree = async (path: string): Promise<void> => {
+  const info = await lstat(path);
+  if (!info.isDirectory()) { await unlink(path); return; }
+  await (await readdir(path)).reduce(async (pending, name) => {
+    await pending;
+    await unlinkTree(join(path, name));
+  }, Promise.resolve());
+  await rmdir(path);
+};
+
+type SourceDirectory = {
+  readonly dir: string;
+  readonly removable: boolean;
+  readonly reasons: readonly string[];
+  readonly links: number;
+  readonly extras: number;
 };
 
 export const migrateHome = async (cwd: string, home: string, options: HomeMigrationOptions, initial = false): Promise<unknown> => {
@@ -103,48 +126,88 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
     const message = "No new rules or skills found; no changes made.";
     return { configRoot: root, homeRoot, agents: selectedAgents, resources: [], retained: retainedLinks, message };
   }
-  // Whole-directory removal candidates: scanned agent skills catalogs that are real, owned,
-  // unprotected, hold no symbolic links or excluded entries, and whose every resource is selected.
-  const removalTargets = async (selectedIds: readonly string[]): Promise<readonly string[]> => {
+  // Whole-directory removal is the point of the migration: afterwards the content lives in
+  // the management repository. Candidates are the scanned agent skills catalogs themselves;
+  // only hard safety gates apply (real, owned, unprotected, lexically equal to their real
+  // path). Symbolic links and excluded entries inside no longer block removal — they are
+  // counted, named in the question, and deleted with the directory, links by unlink only.
+  const sourceDirectories = async (selectedIds: readonly string[]): Promise<readonly SourceDirectory[]> => {
     const selected = new Set(selectedIds);
+    const pendingIds = new Set(pending.map(item => item.id));
     const protectedRoots = [root, homeRoot, join(root, ".modeck"), join(home, ".local/share/modeck/v1")];
-    const catalogs = [...new Set(selectedAgents.flatMap(agent => agentDefinitions[agent].scanDirectories))].map(dir => join(home, dir, "skills"));
-    const direct = [...new Set(scan.resources.filter(resource => selected.has(resource.id) && resource.kind === "skill")
-      .flatMap(resource => resource.sources.map(source => dirname(source))))].filter(dir => catalogs.includes(dir));
-    return (await Promise.all(direct.map(async dir => {
+    const catalogs = [...new Set(selectedAgents.flatMap(agent => agentDefinitions[agent].scanDirectories))]
+      .map(dir => join(home, dir, "skills"));
+    return (await Promise.all(catalogs.map(async (dir): Promise<SourceDirectory | null> => {
+      const held = scan.resources.filter(resource => [...resource.sources, ...resource.aliases].some(path => within(dir, path)));
+      if (!held.some(resource => selected.has(resource.id) && resource.kind === "skill")) return null;
+      let links = 0;
+      let extras = 0;
+      const reasons: string[] = [];
       try {
-        if (protectedRoots.some(path => within(path, dir) || within(dir, path))) return null;
-        if (!scan.resources.every(resource => [...resource.sources, ...resource.aliases]
-          .every(path => !within(dir, path) || selected.has(resource.id)))) return null;
-        if (scan.excluded.some(item => within(dir, item.path))) return null;
-        if (!scan.resources.some(resource => selected.has(resource.id)
-          && [...resource.sources, ...resource.aliases].some(path => within(dir, path)))) return null;
+        if (protectedRoots.some(path => within(path, dir) || within(dir, path)) || within(dir, home))
+          reasons.push("inside or overlapping a protected modeck path or HOME");
         const info = await lstat(dir);
-        if (info.isSymbolicLink() || !info.isDirectory() || info.uid !== process.getuid?.() || await realpath(dir) !== dir) return null;
-        if (await hasSymlinkEntry(dir, 0)) return null;
-      } catch { return null; }
-      return dir;
-    }))).filter((dir): dir is string => dir !== null);
+        if (info.isSymbolicLink()) reasons.push("directory is a symbolic link");
+        else if (!info.isDirectory()) reasons.push("directory is not a real directory");
+        if (info.uid !== process.getuid?.()) reasons.push("directory is not owned by the current user");
+        if (await realpath(dir) !== dir) reasons.push("directory resolves across a symbolic link");
+        const counted = await symlinkEntries(dir, 0);
+        if (counted === null) reasons.push("directory is too deep to inspect");
+        else links = counted;
+        // Content that dies with the directory without being imported: excluded entries
+        // that are not themselves links (links are counted above), and scanned resources
+        // left unselected whose real content lives inside the directory.
+        extras = (await Promise.all(scan.excluded.filter(item => within(dir, item.path)).map(async item => {
+          const info = await lstat(item.path).catch(error => { if (missing(error)) return null; throw error; });
+          return info !== null && !info.isSymbolicLink() ? 1 : 0;
+        }))).reduce<number>((sum, value) => sum + value, 0)
+          + held.filter(resource => !selected.has(resource.id) && pendingIds.has(resource.id)
+            && resource.sources.some(source => within(dir, source))).length;
+      } catch { reasons.push("directory cannot be inspected"); }
+      return { dir, removable: reasons.length === 0, reasons, links, extras };
+    }))).filter((item): item is SourceDirectory => item !== null);
+  };
+  // The end review names every scanned catalog: removable ones with what else dies with
+  // them, refused ones with the exact gate that blocks them — never a silent skip.
+  const describeSources = (sources: readonly SourceDirectory[]): string => {
+    const removable = sources.filter(item => item.removable);
+    const refused = sources.filter(item => !item.removable);
+    const detail = (item: SourceDirectory): string => {
+      const parts = [
+        item.extras ? `${item.extras} unimported or excluded item${item.extras === 1 ? "" : "s"}` : "",
+        item.links ? `${item.links} symbolic link${item.links === 1 ? "" : "s"} (links only; targets are kept)` : "",
+      ].filter(Boolean);
+      return parts.length ? `\n    also deletes ${parts.join(" and ")}` : "";
+    };
+    return (removable.length ? `\nRemove after verification (entire directories)\n`
+      + removable.map(item => `  ${item.dir}${detail(item)}`).join("\n") + "\n" : "")
+      + (refused.length ? `\nKeep ${refused.length} source director${refused.length === 1 ? "y" : "ies"} (removal refused)\n`
+        + refused.map(item => `  ${item.dir}\n    ${item.reasons.join("; ")}`).join("\n") + "\n" : "");
   };
   if (!options.answers) process.stderr.write(`\nResources · ${pending.filter(item => item.kind === "rule").length} rules · ${pending.filter(item => item.kind === "skill").length} skills\n`
     + `Configuration: ${root}\n${scan.excluded.length} excluded · ${scan.resources.length - pending.length} already imported\n\n`);
-  // Captured by the end confirm: non-empty exactly when the question offered whole-directory
-  // removal and the user proceeded, so consent is recorded before anything is written.
-  let confirmedRemoval: readonly string[] = [];
+  // Captured by the end confirm: whole-directory removal is offered whenever a scanned
+  // catalog can be safely deleted, so consent is recorded before anything is written.
+  let confirmedSources: readonly SourceDirectory[] = [];
+  let removalOffered = false;
   const choices = !pending.length ? [] : await selections(discovered, options.answers, async selected => {
-    const dirs = await removalTargets(selected.map(choice => choice.id));
+    const sources = await sourceDirectories(selected.map(choice => choice.id));
     return `Destinations (copied and verified first)\n  ${homeRoot}\n  ${root}\n`
       + (retainedLinks.length ? `\nRetain ${retainedLinks.length} entries whose destination is an existing link\n`
         + retainedLinks.map(item => `  ${item.path}\n    ${item.reason}`).join("\n") + "\n" : "")
-      + (dirs.length ? `\nRemove after verification\n  ${dirs.join("\n  ")}\n` : "");
+      + describeSources(sources);
   }, {
     rename: false,
     confirm: async selected => {
-      const dirs = await removalTargets(selected.map(choice => choice.id));
-      confirmedRemoval = dirs;
-      return dirs.length
-        ? "Remove the entire source directory after verifying all destinations?"
-        : "Import selected resources after verifying all destinations?";
+      confirmedSources = await sourceDirectories(selected.map(choice => choice.id));
+      const removable = confirmedSources.filter(item => item.removable);
+      if (!removable.length) return "Import selected resources after verifying all destinations?";
+      removalOffered = true;
+      const extras = removable.reduce((sum, item) => sum + item.extras, 0);
+      const links = removable.reduce((sum, item) => sum + item.links, 0);
+      return extras || links
+        ? `Remove the entire source directory after verifying all destinations? Also deletes ${extras} unimported or excluded item${extras === 1 ? "" : "s"} and ${links} symbolic link${links === 1 ? "" : "s"} (links only; targets are kept)`
+        : "Remove the entire source directory after verifying all destinations?";
     },
   });
   if (!choices.length && (pending.length || context)) return { configRoot: root, homeRoot, resources: [], retained: retainedLinks, message: "No resources selected; no changes made." };
@@ -288,24 +351,28 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
     await verifyReferences();
     // From here onward keep the verified copies even if reporting or cleanup fails.
     preserve = true;
-    // Consent was captured by the end confirm: it asks to remove the entire source directory
-    // exactly when candidates exist, and "No" cancels before anything runs. Only directories
-    // that still pass every removal gate are deleted; refusals are reported, never fatal.
+    // Consent was captured by the end confirm: "No" cancels before anything runs. Every
+    // directory is re-checked against the same hard gates, then deleted without ever
+    // following symbolic links (links are unlinked themselves); refusals are reported,
+    // never fatal.
     const removed: string[] = [];
-    const consented = options.answers ? [] : [...confirmedRemoval];
-    const candidates = (await removalTargets(choices.map(choice => choice.id))).filter(dir => consented.includes(dir));
-    await candidates.reduce(async (pendingDir, dir) => {
-      await pendingDir; check();
+    const consented = options.answers || !removalOffered ? [] : [...confirmedSources];
+    await consented.reduce(async (pendingConsent, source) => {
+      await pendingConsent; check();
+      if (!source.removable) {
+        process.stderr.write(`modeck: kept ${source.dir}: ${source.reasons.join("; ").replace(/\p{Cc}/gu, " ").trim()}\n`);
+        return;
+      }
       try {
-        const info = await lstat(dir);
+        const info = await lstat(source.dir);
         requireValue(info.isDirectory() && !info.isSymbolicLink() && info.uid === process.getuid?.(),
-          "E_PATH", "Source directory is not an owned real directory", { path: dir });
-        requireValue(await realpath(dir) === dir, "E_PATH", "Source directory resolves across a symbolic link", { path: dir });
-        await rm(dir, { recursive: true, force: false });
-        removed.push(dir);
+          "E_PATH", "Source directory is not an owned real directory", { path: source.dir });
+        requireValue(await realpath(source.dir) === source.dir, "E_PATH", "Source directory resolves across a symbolic link", { path: source.dir });
+        await unlinkTree(source.dir);
+        removed.push(source.dir);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`modeck: refused to remove ${dir}: ${reason.replace(/\p{Cc}/gu, " ").trim()}\n`);
+        process.stderr.write(`modeck: refused to remove ${source.dir}: ${reason.replace(/\p{Cc}/gu, " ").trim()}\n`);
       }
     }, Promise.resolve());
     const stagedIdentity = files.find(file => file.path === staged)!;
