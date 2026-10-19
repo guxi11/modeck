@@ -52,8 +52,10 @@ export const compile = ({ plan, resources, agent, nativeSkillNames = [], nativeI
   const index = skills.map(({ resource }) => canonical({
     name: resource.skill!.name, description: resource.skill!.description, root: resource.root,
     entry: resource.entry })).join("\n");
-  const skillSection = `<SKILLS>\n\nMatch skills by name and description. When a skill applies, read its complete SKILL.md at the absolute entry path before following its instructions. Read supporting references only as needed; resolve bundled paths from root, not the project working directory. Scripts are not run automatically and remain subject to normal tool permissions. These indexed resources are not registered native skills.\n\n${index}\n\n</SKILLS>`;
-  const text = `${[...instructions, skillSection].map(withoutFinalLf).join("\n\n")}\n`;
+  // An empty selection injects no wrapper block at all, never an empty scaffold.
+  const skillSection = skills.length ? [`<SKILLS>\n\nMatch skills by name and description. When a skill applies, read its complete SKILL.md at the absolute entry path before following its instructions. Read supporting references only as needed; resolve bundled paths from root, not the project working directory. Scripts are not run automatically and remain subject to normal tool permissions. These indexed resources are not registered native skills.\n\n${index}\n\n</SKILLS>`] : [];
+  const sections = [...instructions, ...skillSection];
+  const text = sections.length ? `${sections.map(withoutFinalLf).join("\n\n")}\n` : "";
   const byteLength = Buffer.byteLength(text, "utf8");
   requireValue(text.length <= LIMITS.contextChars && byteLength <= LIMITS.contextBytes,
     "E_CONTEXT_SIZE", "Context exceeds the complete-output limit", { chars: text.length, byteLength,
