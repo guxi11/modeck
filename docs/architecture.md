@@ -25,6 +25,12 @@ modeck 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Cla
 
 这是运行职责分层，不是严格单向的包依赖图：例如 resources 会调用 core 的配置身份复核。改公共契约时，需要同步检查 TypeScript 类型、JSON Schema 和校验逻辑。
 
+## 静态 MCP 配置
+
+静态 MCP 由独立的 `modeck-mcp.json` 管理，不进入 mode 解析、多源组合或 SessionStart 注入。`src/contracts/mcp-static.ts` 定义 v2 契约：portable `servers` 可由适配器编码到不同 agent；`agents.claude.mcpServers` 与 `agents.codex.mcp_servers` 保存各自原生 JSON 定义，同名跨 agent 隔离，同一 agent 内与 portable 同名则拒绝。原生 JSON 值按原样验证和保留，Codex TOML 写入前须通过 parse/stringify 往返检查。portable 的环境引用及传输限制不套用到 native 定义。
+
+`src/mcp/config.ts` 负责 v1/v2 校验与 YAML 读取兼容，`src/mcp/manage.ts` 选择 JSON（只要存在即唯一真源）或仅在缺失时选择旧 YAML，并生成迁移、状态与应用计划；`src/mcp/native.ts` 处理 agent 原生布局及精确合并，`src/mcp/transaction.ts` 承担文件提交和恢复。`mcp migrate` 将旧 YAML 转成私有 v2 JSON、保留 YAML 副本，并可在没有新增 native 定义时完成转换；它不改原生配置字节。即使只登记匹配项，也会事务收紧 JSON 为 `0600`。`status` 只读。旧 ownership 来源、pending/committed journal 和 stale lock 均保留恢复兼容；端点身份绑定、漂移拒绝、原子批拒绝及未管理项保留构成写入边界。当前仅管理 Claude user/project 与 Codex 默认 user 配置；CodeBuddy 尚未适配。
+
 ## 从工作目录到上下文
 
 `resolve`、`render` 和 `hook` 共用 [prepare](../src/integration/prepare.ts)。它先解析选择，再读取被选资源，最后编译；因此未选中的缺失资源不会阻塞本次会话。`resolve` 命令也执行资源准备与编译，不是只读取配置的静态预览。

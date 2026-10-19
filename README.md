@@ -147,14 +147,16 @@ modeck-lock.json
 
 ## 静态 MCP 集中管理
 
-MCP 使用独立的 `modeck-mcp.yaml`，与定义工作模式的 `modeck.yaml` / `modeck.yml` 分离。文件包含 `schemaVersion: 1` 和按服务名称组织的 `servers`；每项声明 `transport`，stdio 使用 `command`、可选 `args` / `env`，http / sse 使用 `url`、可选 `headers`。`env` 和 `headers` 的值只能是 `{ env: ENV_NAME }` 引用，modeck 不读取或写入对应环境变量的实际值。
+MCP 使用独立的 `modeck-mcp.json`（`schemaVersion: 2`），与定义工作模式的 `modeck.yaml` / `modeck.yml` 分离。可跨 agent 表达的定义放在 `servers`；只针对某个 agent 的原生定义直接放在 `agents.claude.mcpServers` 或 `agents.codex.mcp_servers`。原生字段、扩展字段及 literal `args`、`env`、`headers` 按 JSON 值保留；这只保证配置可迁移和往返，不代表字段会被相应 agent 原生支持。`{ env: ENV_NAME }` 引用和 portable 编码限制仅适用于 `servers`，modeck 不读取环境变量实际值。Codex 原生定义写入 TOML 前会验证 TOML 往返可无损表示。
 
-`modeck mcp <migrate|apply|status|recover>` 必须显式指定 `--agent` 和 `--scope`。`--config` 接受配置目录或名为 `modeck-mcp.yaml` 的文件路径，省略时使用当前目录；不接受 mode YAML。`--target-home` 默认是当前用户 home，`--cwd` 默认是当前目录；这些目录必须已存在。可用 `--format json` 输出结构化结果，完整参数见 `modeck mcp --help`。
+不同 agent 可使用相同 server 名；同一 agent 的 native 定义不能与 `servers` 中的 portable 定义重名。将条目追加到相应 agent 的原生映射后运行 `status` 检查计划，再运行 `apply` 写入；`servers` 或 `agents` 为空时可省略。`migrate` 遇到与 native 同名且语义等价的 portable 项时保留 portable 项并登记 native 来源；语义不同则拒绝冲突，不覆盖任一方。
+
+只要 `modeck-mcp.json` 存在，它就是唯一真源，即使 `--config` 指向旧 YAML；JSON 无效时也不会回退。仅 JSON 缺失时才读取 `modeck-mcp.yaml`。`migrate` 会写入 JSON 并保留旧 YAML 作为不再生效的兼容副本；schema v1 wrapper 中的 native 项会按 agent 拆入 v2。`--config` 接受配置目录、`modeck-mcp.json` 或 `modeck-mcp.yaml`；`--target-home` 默认当前用户 home，`--cwd` 默认当前目录，目录必须已存在。TTY 文本模式可交互选择缺省 action、agent 和 scope；非 TTY 必须显式给出这些必要值。可用 `--format json` 输出结构化结果。
 
 | 命令 | 用途与安全行为 |
 | --- | --- |
-| `mcp migrate` | 从指定原生 scope 迁入可无损表示的定义，并在同一事务中登记成功迁入或匹配项的管理权；不改变原生文件内容。逐项拒绝字面凭据、非空参数、可能含凭据的 URL 路径、不支持字段和受管项漂移，可部分成功。 |
-| `mcp status` | 只读检查当前配置并输出不含凭据值的 apply 计划；不写入文件。 |
+| `mcp migrate` | 将原生定义按原样迁入 agent 专属 JSON，并登记成功迁入或匹配项的管理权；不改变原生文件字节。可部分成功，拒绝项的原生定义不改。匹配既有 portable 定义时保留它供其他 agent 使用并登记来源。即使没有新 native 项，也会把旧 YAML 转为 JSON；即使仅匹配，也会以事务将 JSON 权限收紧为 `0600`。 |
+| `mcp status` | 只读检查当前配置并输出不含凭据值的 apply 计划；不写入或收紧文件权限。 |
 | `mcp apply` | 增量合并中央定义；保留未受管项和已从中央移除的原生项，不自动删除。同名冲突、受管项漂移或端点身份变化会拒绝整批写入。匹配的未受管项不会自动接管，需先显式 `migrate`。 |
 | `mcp recover` | 回滚中断且未提交的事务，或完成已提交事务的清理；必须使用原事务的 agent、scope、home、cwd 和配置路径。 |
 
@@ -163,12 +165,12 @@ MCP 使用独立的 `modeck-mcp.yaml`，与定义工作模式的 `modeck.yaml` /
 | agent | scope 与原生目标 | 边界 |
 | --- | --- | --- |
 | Claude Code | `user`：`<home>/.claude.json`；`project`：`<cwd>/.mcp.json` | local 定义保留在原生配置。显式设置 `CLAUDE_CONFIG_DIR=<home>/.claude` 时，user 目标改为该目录内的 `.claude.json`。 |
-| Codex CLI | 仅 `user`：`<home>/.codex/config.toml` | 支持 stdio / http，拒绝 SSE 和环境变量重命名；原生 project 和独立 `*.config.toml` profile 能力存在，但此实现不写入它们。 |
+| Codex CLI | 仅 `user`：`<home>/.codex/config.toml` | 只写默认用户配置；portable 定义不支持显式 SSE，且不能通过变量重命名物化凭据。原生 project 和独立 `*.config.toml` profile 不写入。 |
 | CodeBuddy Code CLI | 暂不支持 | 候选文件优先级和共享项目文件需要独立适配。 |
 
 Codex 的原生可见性范围限于未使用 `--profile` 或 `-c` / `--config` 覆盖的默认用户配置；独立 profile 会参与同名冲突检查，但不会同步。非默认 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` 被拒绝。已有 `.mcp.json` 是共享原生文件；若新建它会遮蔽 CodeBuddy 已有的项目 `mcp.json`，操作会被拒绝。
 
-写入使用可恢复事务，日志与原生文件暂存位于 Git 工作树外的私有 modeck 状态目录；拒绝跨文件系统的原子写入。macOS / Linux 上使用内核文件锁协调 modeck 命令，不支持锁时拒绝操作。执行 `migrate` / `apply` / `recover` 时应暂停原生配置命令和编辑器写入：漂移检查不能保证与外部写入者之间的原子比较和替换。检测到受管策略或相关审批设置时会拒绝操作，交由原生工具处理。
+写入使用可恢复事务，日志与原生文件暂存位于 Git 工作树外的私有 modeck 状态目录；拒绝跨文件系统的原子写入。迁移与写入兼容既有同目录 ownership 来源记录、pending/committed journal 和 stale locks；recover 按原 agent、scope、home、cwd 与配置路径恢复。原生定义端点身份绑定并检查漂移；原子批次遇冲突整体拒绝，保留未管理项及中央已移除的项。macOS / Linux 上使用内核文件锁协调 modeck 命令，不支持锁时拒绝操作。执行 `migrate` / `apply` / `recover` 时应暂停原生配置命令和编辑器写入：漂移检查不能保证与外部写入者之间的原子比较和替换。检测到受管策略或相关审批设置时会拒绝操作，交由原生工具处理。
 
 MCP 不参与 mode 选择、注册配置多源组合或 SessionStart hook，也不会随它们自动同步。`apply` 后通过原生 MCP 列表命令检查，并重启会话加载；不承诺热更新、连接或认证成功，原生策略、审批和认证仍由 agent 负责。退出码：`0` 完成、`2` 用法或配置错误、`3` I/O 失败、`4` 冲突 / 忙 / 需恢复、`6` 部分迁入。
 

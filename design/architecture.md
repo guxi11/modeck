@@ -67,6 +67,12 @@
 
 OpenAI 当前缓存文档进一步说明：要求完整渲染前缀相同，工具定义也在前缀内；共享稳定片段仍不等于有可复用的缓存断点。CLI 未暴露或未验证相应控制时，本工具只稳定自己贡献的内容，不设置或伪造服务商缓存断点。
 
+## 静态 MCP 管理边界
+
+静态 MCP CLI 与 mode 上下文流水线解耦。配置契约在 `src/contracts/mcp-static.ts`，解析、v1 兼容转换和 portable/native 字段校验在 `src/mcp/config.ts`；`src/mcp/manage.ts` 读取中央源并计算操作，`src/mcp/native.ts` 负责 Claude JSON、Codex TOML 的原生映射与无损合并，`src/mcp/transaction.ts` 管理可恢复提交。v2 JSON 中 `servers` 表示跨 agent portable 定义，`agents.claude.mcpServers` / `agents.codex.mcp_servers` 表示 agent 原生定义。native JSON 字段按值原样保存；Codex 必须通过 TOML 往返校验。不同 agent 可同名，同 agent 的 native 与 portable 重名拒绝。
+
+中央真源优先级是文件存在性：JSON 存在即使用它，解析失败不回退；仅 JSON 缺失时读取旧 YAML。迁移把 v1 wrapper native 项拆入 v2 agent 段，将旧 YAML 转存为权限 `0600` 的 JSON 并保留旧文件。迁移只更新中央源及私有 ownership，不重写原生 MCP 字节；匹配项即使没有新增，也会纳入事务性权限收紧。`status` 只读。ownership 兼容旧 YAML 来源路径，transaction journal 兼容 pending/committed 阶段及旧锁清理；恢复校验原操作身份。端点身份、内容摘要和 scope 拓扑在提交前复核，apply 遇冲突会拒绝整批；migrate 可逐项部分成功，拒绝项保持原生不变。未管理及中央已移除的原生项保留。适配范围是 Claude user/project 与 Codex 默认 user；不包括 CodeBuddy。
+
 ## Agent 接入决策（核查于 2026-10-16）
 
 本机只读核查：Codex CLI `0.162.1`、Claude Code `2.1.296`。以当时官方接口为依据，不能沿用“Codex 完全没有 hook”的旧结论。
