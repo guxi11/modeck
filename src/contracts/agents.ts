@@ -9,6 +9,11 @@ export type AgentAdapter = {
   readonly configEnvironment: string | null;
   readonly scanDirectories: readonly string[];
   readonly nativeSkills: boolean;
+  // Injection budget derived from what the agent platform itself enforces on
+  // hook-injected SessionStart context, in characters; null when the platform
+  // has no known hard limit, in which case only the global safety valve
+  // (LIMITS.contextSafetyValveChars) applies.
+  readonly contextLimit: Readonly<{ chars: number }> | null;
   // Native instruction files the agent loads on its own; a modeck rule whose body already
   // exists verbatim inside one of them is dropped from the injected context.
   readonly instructions: {
@@ -46,6 +51,11 @@ export const agentDefinitions = {
   claude: {
     scanDirectories: [".claude"],
     nativeSkills: true,
+    // Claude Code truncates hook additionalContext at 10,000 characters; current
+    // builds even spill oversize to a file, leaving the model a 2,000-char preview.
+    // Source: https://code.claude.com/docs/en/hooks; verified in the local
+    // claude-code 2.1.84 binary (truncation constant f$8 = 1e4).
+    contextLimit: { chars: 10_000 },
     executable: "claude", rulesyncTarget: "claudecode", configDirectory: ".claude", configEnvironment: "CLAUDE_CONFIG_DIR",
     hook: { file: ".claude/settings.json", event: "SessionStart", canonicalEvent: "sessionStart", sources: claudeSources,
       cwdFallback: false, commandOptions: {}, nativeContainer: "hooks", nativeEntries: "groups", output: "hookSpecificOutput",
@@ -57,6 +67,11 @@ export const agentDefinitions = {
   codex: {
     scanDirectories: [".codex", ".agents"],
     nativeSkills: true,
+    // Codex spills hook additionalContext over 2,500 tokens by default, but the
+    // additionalContextLimit: 0 written into the hook entry below disables the
+    // spill entirely, so no platform limit remains. Source:
+    // openai/codex codex-rs/hooks/src/output_spill.rs (token_limit == 0 bypasses).
+    contextLimit: null,
     executable: "codex", rulesyncTarget: "codexcli", configDirectory: ".codex", configEnvironment: "CODEX_HOME",
     hook: { file: ".codex/hooks.json", event: "SessionStart", canonicalEvent: "sessionStart", sources: claudeSources, cwdFallback: false,
       commandOptions: { additionalContextLimit: 0 }, nativeContainer: "hooks", nativeEntries: "groups", output: "hookSpecificOutput",
@@ -68,6 +83,9 @@ export const agentDefinitions = {
   codebuddy: {
     scanDirectories: [".codebuddy", ".codebuddy-cli"],
     nativeSkills: true,
+    // Verified end-to-end on 2026-10-19: CodeBuddy passes SessionStart
+    // additionalContext through as a system-reminder with no length cap.
+    contextLimit: null,
     executable: "codebuddy", rulesyncTarget: "codebuddy", configDirectory: ".codebuddy", configEnvironment: "CODEBUDDY_CONFIG_DIR",
     // CodeBuddy 2.168 runs the hook in the project but omits cwd in its input.
     hook: { file: ".codebuddy/settings.json", event: "SessionStart", canonicalEvent: "sessionStart", sources: claudeSources,
@@ -81,6 +99,8 @@ export const agentDefinitions = {
   qwen: {
     scanDirectories: [".qwen"],
     nativeSkills: false,
+    // No verified platform cap; only the safety valve applies.
+    contextLimit: null,
     executable: "qwen", rulesyncTarget: "qwencode", configDirectory: ".qwen", configEnvironment: "QWEN_HOME",
     hook: { file: ".qwen/settings.json", event: "SessionStart", canonicalEvent: "sessionStart", sources: qwenSources,
       cwdFallback: false, commandOptions: {}, nativeContainer: "hooks", nativeEntries: "groups", output: "hookSpecificOutput",
@@ -91,6 +111,8 @@ export const agentDefinitions = {
   qoder: {
     scanDirectories: [".qoder"],
     nativeSkills: false,
+    // No verified platform cap; only the safety valve applies.
+    contextLimit: null,
     executable: "qodercli", rulesyncTarget: "qoder", configDirectory: ".qoder", configEnvironment: "QODER_CONFIG_DIR",
     hook: { file: ".qoder/settings.json", event: "SessionStart", canonicalEvent: "sessionStart", sources: qoderSources,
       cwdFallback: false, commandOptions: {}, nativeContainer: "hooks", nativeEntries: "groups", output: "hookSpecificOutput",
@@ -101,6 +123,8 @@ export const agentDefinitions = {
   copilot: {
     scanDirectories: [], executable: "copilot", rulesyncTarget: "copilotcli", configDirectory: ".copilot", configEnvironment: "COPILOT_HOME",
     nativeSkills: false, instructions: null,
+    // No verified platform cap; only the safety valve applies.
+    contextLimit: null,
     hook: { file: ".copilot/hooks/modeck.json", rulesyncFile: ".github/hooks/copilotcli-hooks.json", event: "sessionStart", canonicalEvent: "sessionStart",
       sources: ["startup", "resume", "new"], cwdFallback: false, commandOptions: {}, nativeContainer: "versioned-hooks",
       nativeEntries: "command", output: "additionalContext", input: "copilot", matcher: false, timeoutField: "timeoutSec" },
@@ -109,6 +133,8 @@ export const agentDefinitions = {
   droid: {
     scanDirectories: [], executable: "droid", rulesyncTarget: "factorydroid", configDirectory: ".factory", configEnvironment: null,
     nativeSkills: false, instructions: null,
+    // No verified platform cap; only the safety valve applies.
+    contextLimit: null,
     hook: { file: ".factory/hooks.json", event: "SessionStart", canonicalEvent: "sessionStart",
       sources: ["startup", "resume", "clear", "compact"], cwdFallback: false, commandOptions: {}, nativeContainer: "events",
       nativeEntries: "groups", output: "hookSpecificOutput", input: "standard", matcher: true, timeoutField: "timeout" },

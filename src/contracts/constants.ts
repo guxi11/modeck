@@ -19,8 +19,11 @@ export const LIMITS = Object.freeze({
   textFileBytes: 1_048_576,
   allResourceBytes: 536_870_912,
   skillDescriptionChars: 1024,
-  contextChars: 32_000,
-  contextBytes: 65_536,
+  // Defensive ceiling for agents whose platform imposes no known cap on injected
+  // context: stops a pathological multi-Megabyte payload from breaking hook
+  // pipelines that were never sized for it. Not a platform value; an agent with
+  // a verified platform cap overrides it via AgentAdapter.contextLimit.
+  contextSafetyValveChars: 1_000_000,
   contextDescriptionChars: 200,
   hookTimeoutSeconds: 15,
   hookInputBytes: 1_048_576,

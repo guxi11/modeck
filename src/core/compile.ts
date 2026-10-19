@@ -1,5 +1,5 @@
 import { isAbsolute, join } from "node:path";
-import { agents, canonical, isAgent, LIMITS, modeError, PROTOCOL, sha256 } from "../contracts/index.js";
+import { agentDefinitions, agents, canonical, isAgent, LIMITS, modeError, PROTOCOL, sha256 } from "../contracts/index.js";
 import type { CompileRequest, FilteredResource, RenderedContext, VerifiedResource } from "../contracts/index.js";
 import { immutable, requireValue } from "./values.js";
 
@@ -66,8 +66,11 @@ export const compile = ({ plan, resources, agent, nativeSkillNames = [], nativeI
     const sections = [...instructions, ...(lines.length ? [skillSection(lines)] : [])];
     return sections.length ? `${sections.map(withoutFinalLf).join("\n\n")}\n` : "";
   };
-  const within = (text: string): boolean =>
-    text.length <= LIMITS.contextChars && Buffer.byteLength(text, "utf8") <= LIMITS.contextBytes;
+  // The injection budget is the agent platform's own cap when one is verified
+  // (AgentAdapter.contextLimit), otherwise a defensive safety valve that must
+  // never fire for ordinary configurations — only a runaway payload hits it.
+  const maxChars = agentDefinitions[agent].contextLimit?.chars ?? LIMITS.contextSafetyValveChars;
+  const within = (text: string): boolean => text.length <= maxChars;
   // Context-size degradation: rules are never reduced. Skills first lose description
   // detail, then whole index entries (largest first); each step stays observable
   // through rendered.filtered instead of failing the injection outright.
@@ -94,9 +97,8 @@ export const compile = ({ plan, resources, agent, nativeSkillNames = [], nativeI
     }
   }
   const byteLength = Buffer.byteLength(text, "utf8");
-  requireValue(text.length <= LIMITS.contextChars && byteLength <= LIMITS.contextBytes,
-    "E_CONTEXT_SIZE", "Context exceeds the complete-output limit", { chars: text.length, byteLength,
-      maxChars: LIMITS.contextChars, maxBytes: LIMITS.contextBytes,
+  requireValue(text.length <= maxChars,
+    "E_CONTEXT_SIZE", "Context exceeds the complete-output limit", { chars: text.length, byteLength, maxChars,
       cause: "rules alone exceed the limit; shorten rule bodies or reduce selected modes" });
   return immutable({ schemaVersion: 1 as const, protocol: PROTOCOL, agent,
     configDigest: plan.configDigest, resourceDigest: plan.resourceDigest, selectionDigest,
