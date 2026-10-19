@@ -97,6 +97,14 @@ hook 统一调用同一 npm 可执行文件，读 stdin cwd 后调用 resolver�
 - [Claude Code Skills](https://code.claude.com/docs/en/skills)：skill 为按需机制，不能独自保证首轮推理前执行。
 - [OpenAI Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching)：完整渲染前缀、工具顺序、缓存断点与实际命中的限制。
 
+## 当前插件实现边界（提交 `576496b`）
+
+本节记录该提交的实现事实；上文关于“双 Adapter”、旧式 install/wrapper 闭环和阶段验收属于早期设计背景，不是插件功能的现行契约。插件配置使用 `plugins.<id>.source`（必填 `url` 与完整 40 位 `commit`，可选 `path` 默认 `.`）及可选 `agents: [claude, codex]`，mode 通过 `plugins: [id]` 引用。包 manifest 提供同一原生插件名；固定 commit、完整树摘要和动态资源索引写入根 `modeck-plugins-lock.json`，内容安装到 `vendor/plugins/`，本机状态放在 `.modeck/`。
+
+`plugin init|status|apply|remove|recover` 均要求 `--config <dir> --agent <claude|codex> --target-home <dir> --cwd <dir>`，可选 `--format <text|json>`。init 建立锁和 vendor 包；status 只读；apply 创建该配置独立 marketplace 并调用原生命令安装；remove 按 journal 与指纹卸载归属项；recover 依 journal 阶段恢复或完成清理。仅管理 Claude Code、Codex 的 user scope。每份注册配置的 marketplace 命名空间独立，但原生插件名与 MCP 名称冲突仍拒绝。
+
+动态 skills/rules 从被 mode 选中的锁定插件包提取并进入 SessionStart 上下文，skills 按插件命名空间处理；多注册源组合时资源 ID 按配置根身份限定，同名 skill 仅在内容相同时合并。commands、agents、hooks、LSP、MCP 等静态组件投影至原生 marketplace，由 agent 加载。Codex portable 投影拒绝 hooks、apps、auth 和不支持组件；legacy hooks 保留原生 untrusted 状态。原生状态变更需要重启会话，动态内容在 SessionStart 生效，不热切换，也不构成权限隔离。journal/fingerprint 用于所有权与漂移检测，但无法使操作与外部写入原子化；原生 CLI 没有 CAS。
+
 ## 阶段验收
 
 hard 详细设计必须固定 JSON schema、CLI 命令与默认值、模块共享类型、文件所有权和任务依赖；先给契约，再派 standard。可简化实现技巧，不可删掉上述闭环或虚构 agent 能力。

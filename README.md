@@ -151,6 +151,29 @@ modeck-lock.json
 
 会话启动时只读取并校验这些已安装资源，不自动下载或更新。修改资源来源后需再次运行 `res init`；已有 `.modeck/resources/` 安装会在校验后迁移到 `vendor/`，保留锁定版本，目标重名或本地修改会阻止迁移。移除声明不会删除本地目录。
 
+## 管理原生插件
+
+插件包以完整 Git commit 固定，并与 mode 动态内容分开声明。`plugins` 的键是配置内 ID；`source.url` 和完整 40 位 `source.commit` 必填，`source.path` 可省略（默认仓库根），`agents` 可选且只接受 `claude`、`codex`。mode 用 `plugins` 引用这些 ID：
+
+```yaml
+plugins:
+  team-tools:
+    source:
+      url: https://github.com/your-org/agent-plugins.git
+      path: plugins/team-tools
+      commit: 0123456789abcdef0123456789abcdef01234567
+    agents: [claude, codex]
+modes:
+  prog:
+    plugins: [team-tools]
+```
+
+所有子命令都必须显式提供 `--config CONFIG_DIR --agent <claude|codex> --target-home HOME --cwd PROJECT_DIR`，`--format text|json` 可选。`modeck plugin init` 按固定 commit 安装并校验包，写根目录 `modeck-plugins-lock.json`，内容在 `vendor/plugins/`；`/vendor/` 与 `/.modeck/` 忽略，锁文件跟踪。`status` 只读；`apply` 管理原生插件；`remove` 卸载本配置拥有的插件；`recover` 处理未完成操作。升级时先 remove 原生安装，修改 pin 后运行 init，再 apply 新版本。
+
+被 mode 选中的插件 skills/rules 作为动态资源参与上下文，skill 名称按插件命名空间处理。commands、agents、hooks、LSP、MCP 等受支持的静态组件由 apply 经私有 marketplace 投影并调用原生命令安装；动态 skills/rules 从静态投影中移除，避免重复加载。当前仅支持 Claude Code 与 Codex 的 user scope，不写 project scope。Codex portable 插件的 hooks、apps、auth 和不支持组件会被拒绝；Codex legacy hooks 保持原生 untrusted 状态，modeck 不授予信任。
+
+每份注册配置使用独立 marketplace 名称；跨配置的原生插件名或 MCP 名称冲突会拒绝。动态内容在 SessionStart 时生效，原生插件变更需重启 session；均不热切换，也不构成权限隔离。journal 与原生指纹用于检查所有权和漂移；冲突时拒绝覆盖或删除。原生 CLI 不提供 compare-and-swap，检查和外部写入之间仍有竞态。
+
 ## 静态 MCP 集中管理
 
 MCP 使用独立的 `modeck-mcp.json`（`schemaVersion: 2`），与定义工作模式的 `modeck.yaml` / `modeck.yml` 分离。可跨 agent 表达的定义放在 `servers`；只针对某个 agent 的原生定义直接放在 `agents.claude.mcpServers` 或 `agents.codex.mcp_servers`。原生字段、扩展字段及 literal `args`、`env`、`headers` 按 JSON 值保留；这只保证配置可迁移和往返，不代表字段会被相应 agent 原生支持。`{ env: ENV_NAME }` 引用和 portable 编码限制仅适用于 `servers`，modeck 不读取环境变量实际值。Codex 原生定义写入 TOML 前会验证 TOML 往返可无损表示。

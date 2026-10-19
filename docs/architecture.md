@@ -105,6 +105,16 @@ flowchart TB
 
 `vendor/` 存放下载资源，`.modeck/` 保留本机状态、安装互斥、暂存及备份；两者加入配置目录 `.gitignore`，共享 YAML 和根目录 `modeck-lock.json`。运行期验证安装内容与锁记录，不联网；来源声明变化或缓存缺失时需要重新执行 `res init`，本地内容被修改时拒绝覆盖。资源安装在配置身份变化等可捕获错误下回滚目标、锁和忽略文件。没有 `--frozen` 命令；远端是否仍提供锁定 commit 影响缺失资源的恢复，内容摘要也不能证明资源作者可信。
 
+## 插件包：动态上下文与原生投影
+
+现行声明由 `plugins.<id>` 定义：`source.url`、完整 40 位 `source.commit` 必填，`source.path` 可省略并默认为仓库根，`agents` 可选且仅为 `claude` / `codex`；mode 的 `plugins` 数组引用配置 ID。插件 manifest 的名称决定原生插件名。`plugin init` 获取固定 commit、检查包与动态声明，并以根目录 `modeck-plugins-lock.json` 锁定来源、commit、文件树和动态路径；内容存于 `vendor/plugins/`，本机 staging/intent 位于 `.modeck/`。两目录忽略，锁文件共享跟踪。运行时读取锁与 vendor 校验，不自动联网更新。
+
+`plugin init|status|apply|remove|recover` 均要求显式 `--config`、`--agent`、`--target-home`、`--cwd`，可选 `--format text|json`。init 初始化固定包与锁；status 只读报告包及托管安装状态；apply 创建 marketplace、安装原生插件；remove 只移除 journal 证明归本配置所有的安装；recover 按 journal 阶段恢复或完成清理。状态按配置根和 agent 分开，marketplace 名称包含配置身份；原生插件名及 MCP server 名仍须跨注册配置避免冲突。
+
+`src/plugins/dynamic.ts` 将被选 mode 引用的插件技能和规则并入普通资源编译；skill 名称按插件名称命名空间化。注册配置组合时，mode/plugin/resource ID 再以配置根身份限定，避免不同来源的相同 ID 串用；相同 skill 名仅在内容等价时合并。它们随同步 SessionStart 生效，不会改变原生静态安装。原生静态组件由 `src/plugins/projection.ts` 按 agent manifest 投影进配置私有 marketplace，再由原生 CLI 注册和安装；仅支持 Claude Code 与 Codex 的 user scope。Codex portable manifest 拒绝 hooks、apps、auth、不支持组件及额外依赖；Codex legacy hooks 即使投影也保持 untrusted，信任仍由原生 agent 管理。不会自动安装到 project scope。
+
+原生安装 journal 记录来源、安装路径、内容摘要和 inventory 指纹。漂移或同名未拥有内容会导致拒绝；recover 也不会移除无法由指纹证明归属的插件。原生 CLI 操作只做前后核验，没有 compare-and-swap，无法消除与 agent 或其他写入者并发操作的竞态。`apply` 后需重启会话加载原生插件；动态资源仅在下一次 SessionStart 编译，不热切换，也不提供权限隔离。
+
 ## 编译与按需技能
 
 [编译器](../src/core/compile.ts)检查计划与资源身份一致后，依次输出 `<INSTRUCTIONS>` 规则正文和 `<SKILLS>` 技能索引；没有规则时省略前者。规则正文统一 UTF-8、LF 和末尾换行，不添加资源 ID 注释；技能只提供名称、描述、绝对 `root` 和 `entry`，正文由 agent 在匹配任务后读取，配套 references/assets/scripts 从 root 定位。`render --format json` 也不展示 mode ID；内部计划、资源匹配及摘要继续保留 ID 关联，`resolve` 仍提供诊断计划。

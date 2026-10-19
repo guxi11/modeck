@@ -2,6 +2,8 @@
 
 阶段：hard详细设计，2026-10-16；经ultra review修订并收口，作为v1 Interface。任务与文件归属见 `tasks.md`。本轮只设计，不实现、不写测试代码、不操作真实全局配置、不发布或推送；这不限制产品在用户显式授权后安装到其真实HOME。以 `architecture.md` 为需求基线；本文明确收敛处优先作为standard实施契约。
 
+**现行实现边界：**本文原第 1–11 节保留插件功能之前的历史设计记录，其中 `run`、`install/uninstall`、双 Adapter 等契约不代表提交 `576496b` 的现状。插件行为以第 12 节及 `src/plugins/`、`src/cli/plugin.ts` 为准。
+
 ## 1. 收敛后的闭环与 Module
 
 Node.js >=20，TypeScript strict，ESM，首版支持 macOS/Linux。Windows 在写入前报 `E_PLATFORM`，不生成不能执行的 shell hook。包名为 `modeck`，bin 为 `modeck`；无 ai-rulez 依赖。只提供 Claude Code、Codex 两个真实 Adapter。
@@ -420,3 +422,13 @@ migrate 事务写入中央 JSON 与私有 ownership，apply 事务写入原生�
 ## 11. hook 预载与交付限制
 
 hook直接调用安装内统一CLI脚本预载，wrapper复用prepare；不再打包或安装入口skill。旧record兼容仅允许清理已记录owned且完整未改的入口skill；新增文件、摘要/权限变化或缺失均整体冲突，不接管用户手写同名skill。升级清理旧入口及runtime后移除本工具留下的空目录。产品可以经用户授权安装真实HOME，本次实施/验收仍只在隔离目标调用，不附带README/示例代码/仓库测试。
+
+## 12. 插件生命周期与投影（提交 `576496b`）
+
+配置契约为 `plugins: Record<Id, { source: { url: string; path?: string; commit: string }; agents?: PluginAgent[] }>`；URL 可为 HTTPS/SSH 或配置内相对 Git 仓库，commit 必须是完整 40 位小写 SHA-1，path 默认为 `.`。`agents` 仅允许 `claude` / `codex`。mode 的 `plugins: Id[]` 选择包。锁文件 `modeck-plugins-lock.json`（version 1）逐插件记录 source、commit、完整树 entries/digest、manifest 派生的原生 name 与动态声明；内容寻址位于 `vendor/plugins/<id>/<treeDigest>/`，本机 staging intent 位于 `.modeck/plugin-bundles/`。来源或声明与锁不符、包树缺失/漂移时需 `plugin init`，运行时不自动取远端。
+
+CLI 形式为 `modeck plugin <init|status|apply|remove|recover> --config <dir> --agent <claude|codex> --target-home <dir> --cwd <dir> [--format <text|json>]`。四个路径/agent 参数均必填；`--format` 默认 `text`，未知或重复参数拒绝。`init` 同步 pin 并产生锁及 vendor；`status` 读取包、journal 和原生 inventory，不写；`apply` 创建独立 marketplace 投影、注册并安装；`remove` 仅卸载 journal 拥有且指纹仍匹配的插件并清理 marketplace；`recover` 只处理存在的中断 journal，按阶段完成可证明归属的恢复/清理，不删除未知同名安装。recover 不等同于常规卸载。
+
+动态资源从插件 manifest 派生：Claude 常规 `skills/` 与声明技能目录、Codex 支持的技能目录，以及 `rules/*.md`；仅在 mode 选中后才并入上下文。skill 名称加插件名称前缀，冲突按资源内容校验；动态文件中的 `${PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}` 会替换为锁定原包根目录，依赖 `${PLUGIN_DATA}` 或 `user_config` 的动态内容拒绝。注册配置组合时，mode/plugin/resource ID 均按配置根身份限定；同名 skill 只有内容相同时才合并。静态 commands、agents、hooks、LSP、MCP 及其他支持组件留在独立插件投影中，由原生加载器管理，不并入 mode 正文。每个配置根与 agent 使用独立 marketplace 名称和 journal；原生 plugin 名与 MCP server 名跨配置冲突时拒绝。
+
+Codex portable `plugin.json` 采用显式能力白名单：拒绝 lifecycle hooks、apps、auth、依赖以及投影器不支持的 Claude 原生组件；portable MCP 仅接受受限的 stdio / streamable HTTP 声明。Codex legacy manifest 可投影受支持 hooks，但原生 trust 状态仍为 untrusted，modeck 不写信任数据。原生安装只支持 Claude Code 与 Codex 的 user scope。apply/remove/recover 使用 journal 阶段、内容摘要及原生 inventory 指纹核对所有权和漂移；检查与原生 CLI 命令之间没有 CAS，不能视为与外部写入原子化。原生变化需重启 agent session；动态上下文在 SessionStart 生效，不热切换，也不构成权限隔离。
