@@ -38,10 +38,14 @@ export const planBackups = async (scan: ScanResult, ids: readonly string[], conf
     ...initialPlan.skipped.map(item => item.path),
     ...scan.resources.filter(resource => !selected.includes(resource)).flatMap(resource => resource.origins.map(origin => origin.path)),
   ])].map(async path => ({ path, source: await realpath(path) })));
-  const references = [...preserved, ...(catalogReferences ?? await scanCatalogReferences(scan.home)).references
+  const referenceScan = catalogReferences ?? await scanCatalogReferences(scan.home);
+  const references = [...preserved, ...referenceScan.references
     .flatMap(reference => reference.source === null ? [] : [{ path: reference.path, source: reference.source }])];
+  // An unreadable catalog may hold links into any entry, so nothing can be proven unshared.
+  const unverified = referenceScan.excluded[0];
   const shared = initialPlan.entries.flatMap(entry => {
-    const reference = references.find(reference => within(entry.source, reference.source) || within(reference.source, entry.source));
+    const reference = unverified ? { path: `${unverified.path} (unreadable; references unverified)` }
+      : references.find(reference => within(entry.source, reference.source) || within(reference.source, entry.source));
     return reference ? [{ entry, reference }] : [];
   });
   const plan: BackupPlan = {

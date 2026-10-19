@@ -5,6 +5,12 @@ import { checkRelativePath, modeError } from "../contracts/index.js";
 import type { ModeErrorCode } from "../contracts/index.js";
 
 export const missing = (error: unknown): boolean => error instanceof Error && "code" in error && error.code === "ENOENT";
+// Permission failures (EACCES/EPERM) as a skip reason for `entry`; null for every other error, which must still propagate.
+export const denied = (error: unknown, entry: string): string | null => {
+  if (!(error instanceof Error && "code" in error && (error.code === "EACCES" || error.code === "EPERM"))) return null;
+  const at = "path" in error && typeof error.path === "string" && error.path !== entry ? ` at ${error.path}` : "";
+  return `Permission denied (${error.code})${at}; skipped`;
+};
 export const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
 export const hashPattern = /^[0-9a-f]{64}$/;
 export const commitPattern = /^[0-9a-f]{40}$/;

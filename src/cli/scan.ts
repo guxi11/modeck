@@ -188,7 +188,7 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
     const imported = await loadConfig({ configRoot: root });
     // Home imports target defaults, independently of project selectors and auto-detection.
     const selection = resolve({ context: imported, resourceDigest: "0".repeat(64), facts: {
-      cwd: root, boundary: root, files: [], dependencies: [],
+      cwd: root, boundary: root, files: [], dependencies: [], excluded: [],
       selector: { path: join(root, ".modes"), value: { auto: false, add: [] } },
     } });
     await readResources({ context: imported, stateRoot: join(home, ".local/share/modeck/v1"), parseManifest,

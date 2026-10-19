@@ -101,6 +101,9 @@ export const prepare = async ({ configRoot, configRoots, stateRoot, cwd, agent }
   if (configRoots === undefined && canonical(await loadRegistry(root)) !== canonical(registry)) {
     throw modeError("E_CONFIG", "Configuration registry changed while preparing context");
   }
-  const { plan, resources } = combined ? aggregate(projects, facts) : projects[0]!;
+  const { plan: selected, resources } = combined ? aggregate(projects, facts) : projects[0]!;
+  // Paths skipped while collecting facts stay visible as diagnostics; they never block context injection.
+  const plan: ResolvedPlan = { ...selected, diagnostics: [
+    ...facts.excluded.map(item => ({ code: "SCAN_SKIPPED", message: item.reason, path: item.path })), ...selected.diagnostics] };
   return { plan, rendered: compile({ plan, resources, agent, nativeSkillNames: nativeNames, nativeInstructions: nativeTexts }) };
 };

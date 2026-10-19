@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
-import { lstat, readdir, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
+import type { Dirent } from "node:fs";
+import { access, lstat, readdir, realpath } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { checkRelativePath, LIMITS, modeError } from "../contracts/index.js";
@@ -7,7 +9,7 @@ import type { CollectFactsRequest, ProjectFacts } from "../contracts/index.js";
 import { absolute, isMissing, readJsonFile, safePath, within } from "./files.js";
 import { parseSelector } from "./validation.js";
 import { compare, immutable } from "./values.js";
-import { regularBytes, utf8 } from "../resources/fs.js";
+import { denied, regularBytes, utf8 } from "../resources/fs.js";
 
 const execute = promisify(execFile);
 const excluded = new Set([".git", "node_modules", "dist", "build", "coverage", ".next", ".turbo", ".cache", ".modeck"]);
@@ -56,13 +58,27 @@ const selectorAt = async (cwd: string, boundary: string): Promise<ProjectFacts["
   }
 };
 
-type Scan = { readonly files: readonly string[]; readonly entries: number };
+type Excluded = ProjectFacts["excluded"][number];
+type Scan = { readonly files: readonly string[]; readonly entries: number; readonly excluded: readonly Excluded[] };
 
-const scanFiles = async (root: string, stateRoot: string): Promise<readonly string[]> => {
+// List a directory, or the skip reason when permission is denied; other errors propagate.
+const listing = async (directory: string): Promise<{ readonly entries: readonly Dirent[] } | { readonly reason: string }> => {
+  try {
+    await safePath(directory);
+    return { entries: (await readdir(directory, { withFileTypes: true })).sort((a, b) => compare(a.name, b.name)) };
+  } catch (error) {
+    const reason = denied(error, directory);
+    if (reason === null) throw error;
+    return { reason };
+  }
+};
+
+const scanFiles = async (root: string, stateRoot: string): Promise<Scan> => {
   const walk = async (directory: string, depth: number, state: Scan): Promise<Scan> => {
     if (depth > LIMITS.scanDepth) throw modeError("E_SCAN_LIMIT", "Directory depth limit exceeded", { path: directory });
-    await safePath(directory);
-    const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) => compare(a.name, b.name));
+    const listed = await listing(directory);
+    if ("reason" in listed) return { ...state, excluded: [...state.excluded, { path: directory, reason: listed.reason }] };
+    const { entries } = listed;
     const count = state.entries + entries.length;
     if (count > LIMITS.scanEntries) throw modeError("E_SCAN_LIMIT", "Directory entry limit exceeded", { limit: LIMITS.scanEntries });
     return entries.reduce(async (pending, entry) => {
@@ -75,16 +91,22 @@ const scanFiles = async (root: string, stateRoot: string): Promise<readonly stri
       if (entry.isDirectory()) return walk(path, depth + 1, current);
       if (!entry.isFile()) return current;
       if (current.files.length >= LIMITS.scanFiles) throw modeError("E_SCAN_LIMIT", "File count limit exceeded", { limit: LIMITS.scanFiles });
-      return { files: [...current.files, rel], entries: current.entries };
-    }, Promise.resolve({ files: state.files, entries: count }));
+      return { ...current, files: [...current.files, rel] };
+    }, Promise.resolve({ ...state, entries: count }));
   };
-  return [...(await walk(root, 0, { files: [], entries: 0 })).files].sort(compare);
+  const scan = await walk(root, 0, { files: [], entries: 0, excluded: [] });
+  return { ...scan, files: [...scan.files].sort(compare) };
 };
 
-const dependenciesAt = async (root: string): Promise<readonly string[]> => {
+const dependenciesAt = async (root: string): Promise<{ readonly dependencies: readonly string[]; readonly excluded: readonly Excluded[] }> => {
   const path = join(root, "package.json");
-  try { await lstat(path); }
-  catch (error) { if (isMissing(error)) return []; throw error; }
+  try { await lstat(path); await access(path, constants.R_OK); }
+  catch (error) {
+    if (isMissing(error)) return { dependencies: [], excluded: [] };
+    const reason = denied(error, path);
+    if (reason === null) throw error;
+    return { dependencies: [], excluded: [{ path, reason }] };
+  }
   const { value } = await readJsonFile(path, LIMITS.jsonBytes, "E_CONFIG");
   if (!value || typeof value !== "object" || Array.isArray(value)) throw modeError("E_CONFIG", "package.json must be an object", { path });
   const record = value as Record<string, unknown>;
@@ -97,7 +119,7 @@ const dependenciesAt = async (root: string): Promise<readonly string[]> => {
     }
     return Object.keys(field);
   });
-  return [...new Set(names)].sort(compare);
+  return { dependencies: [...new Set(names)].sort(compare), excluded: [] };
 };
 
 export const collectFacts = async ({ cwd, stateRoot, ignoreSelector = false }: CollectFactsRequest): Promise<ProjectFacts> => {
@@ -117,9 +139,10 @@ export const collectFacts = async ({ cwd, stateRoot, ignoreSelector = false }: C
     });
     if (stateInfo && !stateInfo.isDirectory()) throw modeError("E_PATH", "State root must be a directory", { path: canonicalState });
     const selector = ignoreSelector ? null : await selectorAt(directory, boundary);
-    const files = await scanFiles(boundary, canonicalState);
+    const scan = await scanFiles(boundary, canonicalState);
     const dependencies = await dependenciesAt(boundary);
-    return immutable({ cwd: directory, boundary, selector, files, dependencies });
+    return immutable({ cwd: directory, boundary, selector, files: scan.files, dependencies: dependencies.dependencies,
+      excluded: [...scan.excluded, ...dependencies.excluded] });
   } catch (error) {
     if (error instanceof Error && "code" in error && String(error.code).startsWith("E_")) throw error;
     throw modeError("E_IO", "Cannot collect project facts", { cwd, cause: String(error) });

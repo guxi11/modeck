@@ -247,8 +247,10 @@ export const main = async (argv: string[]): Promise<number> => {
       const agent = agentFor(opts);
       const event = parseEvent(await input(), agent);
       const normalized = { ...event, cwd: await realpath(event.cwd) };
-      const { rendered } = await prepare({ agent, configRoot, stateRoot, cwd: normalized.cwd });
+      const { plan, rendered } = await prepare({ agent, configRoot, stateRoot, cwd: normalized.cwd });
       const reply = encodeHook({ rendered });
+      // stdout carries only the hook reply; skipped paths go to the agent's hook log via stderr.
+      plan.diagnostics.forEach(item => process.stderr.write(`modeck: ${`${item.code}: ${item.message}${item.path ? ` (${item.path})` : ""}`.replace(/\p{Cc}/gu, "?")}\n`));
       rendered.filtered.forEach(item => process.stderr.write(`modeck: omitted ${item.kind} already present natively: ${item.id} (${item.basis})\n`));
       json(reply); return 0;
     }

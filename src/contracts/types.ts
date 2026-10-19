@@ -22,7 +22,7 @@ export type ManifestResource = DeepReadonly<{ id: Id; kind: Kind; sourceDigest: 
 export type ResourceManifest = DeepReadonly<{ schemaVersion: 1; resourceSpecDigest: Sha256; resources: ManifestResource[] }>;
 export type ConfigContext = DeepReadonly<{ configRoot: string; config: Config; configDigest: Sha256; rawConfigDigest: Sha256;
   configSources?: { path: string; digest: Sha256 }[]; autoModeIds?: Id[] }>;
-export type ProjectFacts = DeepReadonly<{ cwd: string; boundary: string; files: string[]; dependencies: string[]; selector: { path: string; value: Selector } | null }>;
+export type ProjectFacts = DeepReadonly<{ cwd: string; boundary: string; files: string[]; dependencies: string[]; selector: { path: string; value: Selector } | null; excluded: { path: string; reason: string }[] }>;
 export type Reason = DeepReadonly<{ mode: Id; via: "default" | "detect" | "selector" | "parent"; from: Id | null; conditionIndex: number | null }>;
 export type Diagnostic = DeepReadonly<{ code: string; message: string; path: string | null }>;
 export type BoundResource = DeepReadonly<{ id: Id; kind: Kind }>;

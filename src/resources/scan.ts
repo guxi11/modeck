@@ -2,7 +2,7 @@ import { lstat, readdir, readlink, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { agentDefinitions, canonical, checkRelativePath, LIMITS, parseJson, sha256 } from "../contracts/index.js";
 import type { Agent, Kind, TreeEntry } from "../contracts/index.js";
-import { compare, exists, missing, regularBytes, requireValue, safePath, utf8 } from "./fs.js";
+import { compare, denied, exists, missing, regularBytes, requireValue, safePath, utf8 } from "./fs.js";
 import { resourceEntry } from "./skill.js";
 import { snapshotLocal } from "./tree.js";
 
@@ -23,9 +23,11 @@ type Candidate = Omit<ScannedResource, "id" | "sources" | "aliases" | "origins">
 const targets = [".claude", ".codex", ".agents", ".codebuddy", ".codebuddy-cli", ".gemini", ".qwen", ".qoder"];
 const markdownRuleTargets = new Set([".claude", ".codebuddy", ".qwen", ".qoder"]);
 const ruleNames: Readonly<Record<string, string>> = { ".claude": "CLAUDE.md", ".codex": "AGENTS.md", ".codebuddy": "CODEBUDDY.md", ".codebuddy-cli": "CODEBUDDY.md", ".gemini": "GEMINI.md", ".qwen": "QWEN.md", ".qoder": "AGENTS.md" };
+export type Excluded = { readonly path: string; readonly reason: string };
 export type CatalogReferenceScan = {
   readonly references: readonly { readonly path: string; readonly source: string | null; readonly link: string;
     readonly ino: number; readonly dev: number; readonly mtime: number; readonly ctime: number }[];
+  readonly excluded: readonly Excluded[];
   readonly referenceDigest: string;
 };
 // VCS metadata and dependency trees are never catalog entries; drop them before path validation instead of traversing.
@@ -36,15 +38,26 @@ const target = (path: string): Promise<string | null> => realpath(path).catch(er
   if (error instanceof Error && "code" in error && ["ENOENT", "ENOTDIR", "ELOOP"].includes(String(error.code))) return null;
   throw error;
 });
+// Run one catalog entry; an unreadable entry is recorded in `excluded` instead of aborting the whole scan.
+const tolerating = (excluded: Excluded[]) => async (path: string, run: () => Promise<void>): Promise<void> => {
+  try { await run(); }
+  catch (error) {
+    const reason = denied(error, path);
+    if (reason === null) throw error;
+    excluded.push({ path, reason });
+  }
+};
 
 // Enumerate references without reading resource contents; canonical directory visits bound aliases and cycles.
 export const scanCatalogReferences = async (home: string): Promise<CatalogReferenceScan> => {
   const root = await safePath(home);
   const references: CatalogReferenceScan["references"][number][] = [];
+  const excluded: Excluded[] = [];
+  const tolerate = tolerating(excluded);
   let visited = 0;
   const traversed = new Set<string>();
   const platformRoots = targets.flatMap(target => ["plugins", "packages"].map(name => join(root, target, name)));
-  const walk = async (path: string, depth: number, children?: readonly string[]): Promise<void> => {
+  const walk = (path: string, depth: number, children?: readonly string[]): Promise<void> => tolerate(path, async () => {
     requireValue(depth <= LIMITS.scanDepth && ++visited <= LIMITS.scanEntries,
       "E_SCAN_LIMIT", "Catalog reference scan limit exceeded");
     const info = await lstat(path).catch(error => { if (missing(error)) return null; throw error; });
@@ -76,13 +89,14 @@ export const scanCatalogReferences = async (home: string): Promise<CatalogRefere
       requireValue(child.length <= LIMITS.pathLength, "E_SCAN_LIMIT", "Catalog reference path is too long", { path: child });
       await walk(child, depth + 1);
     }, Promise.resolve());
-  };
+  });
   await targets.reduce(async (pending, target) => {
     await pending;
     await walk(join(root, target), 0, ["skills", "rules", ...(ruleNames[target] ? [ruleNames[target]!] : [])]);
   }, Promise.resolve());
   const sorted = references.sort((a, b) => compare(a.path, b.path));
-  return { references: sorted, referenceDigest: sha256(Buffer.from(canonical(sorted))) };
+  const skipped = excluded.sort((a, b) => compare(a.path, b.path));
+  return { references: sorted, excluded: skipped, referenceDigest: sha256(Buffer.from(canonical({ references: sorted, excluded: skipped }))) };
 };
 
 const object = (value: unknown): Record<string, unknown> => {
@@ -100,7 +114,8 @@ const scanCatalog = async (home: string, project: boolean, agents?: readonly Age
   const root = await safePath(home);
   requireValue((await lstat(root)).isDirectory(), "E_PATH", "HOME must be a directory");
   const candidates: Candidate[] = [];
-  const excluded: { path: string; reason: string }[] = [];
+  const excluded: Excluded[] = [];
+  const tolerate = tolerating(excluded);
   const manifests: { path: string; digest: string; root: string }[] = [];
   const managedRules = new Map<string, string>();
   const scannedRuleRoots = new Set<string>();
@@ -124,7 +139,7 @@ const scanCatalog = async (home: string, project: boolean, agents?: readonly Age
     candidates.push({ kind, source, alias, origin, name: entry.skill?.name ?? resourceId(basename(source).replace(/\.[^.]+$/, "")),
       description: entry.skill?.description ?? "Global instructions", treeDigest: snapshot.treeDigest, entries: snapshot.entries });
   };
-  const walk = async (alias: string, kind: Kind, ancestors: readonly string[] = []): Promise<void> => {
+  const walk = (alias: string, kind: Kind, ancestors: readonly string[] = []): Promise<void> => tolerate(alias, async () => {
     if (!await exists(alias)) return;
     const source = await target(alias);
     if (source === null) { excluded.push({ path: alias, reason: "Dangling or looping catalog link; excluded without traversal" }); return; }
@@ -156,11 +171,13 @@ const scanCatalog = async (home: string, project: boolean, agents?: readonly Age
       await pending;
       checkRelativePath(name, false);
       const child = join(alias, name);
-      const stat = await lstat(child);
-      if (kind === "skill" && stat.isFile()) return;
-      await walk(child, kind, [...ancestors, source]);
+      await tolerate(child, async () => {
+        const stat = await lstat(child);
+        if (kind === "skill" && stat.isFile()) return;
+        await walk(child, kind, [...ancestors, source]);
+      });
     }, Promise.resolve());
-  };
+  });
   await (project ? [] : catalogs).reduce(async (pending, target) => {
     await pending;
     const directory = join(root, target);
