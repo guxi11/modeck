@@ -30,22 +30,30 @@ const skillName = async (directory: string, fallback: string, agent: Agent): Pro
 const projectDirectories = (cwd: string, boundary: string): readonly string[] =>
   cwd === boundary || dirname(cwd) === cwd ? [cwd] : [cwd, ...projectDirectories(dirname(cwd), boundary)];
 
-export const nativeSkillNames = async (cwd: string, agent: Agent = "codebuddy", boundary = cwd): Promise<readonly string[]> => {
+const scoped = async (cwd: string, boundary: string): Promise<readonly [string, string]> => {
   const project = await realpath(cwd);
   const root = await realpath(boundary);
   const rel = relative(root, project);
   if (rel === ".." || rel.startsWith(`..${sep}`) || resolve(root, rel) !== project) {
-    throw modeError("E_PATH", "Native skill boundary does not contain cwd");
+    throw modeError("E_PATH", "Native probe boundary does not contain cwd");
   }
+  return [project, root];
+};
+
+const userConfigHome = (adapter: (typeof agentDefinitions)[Agent], project: string): string => {
+  const configHome = adapter.configEnvironment ? process.env[adapter.configEnvironment] : undefined;
+  return resolve(project, configHome || join(homedir(), adapter.configDirectory));
+};
+
+export const nativeSkillNames = async (cwd: string, agent: Agent = "codebuddy", boundary = cwd): Promise<readonly string[]> => {
+  const [project, root] = await scoped(cwd, boundary);
   const adapter = agentDefinitions[agent];
   if (!adapter.nativeSkills || !adapter.skills) return [];
   const { skills } = adapter;
-  const configHome = adapter.configEnvironment ? process.env[adapter.configEnvironment] : undefined;
-  const user = resolve(project, configHome || join(homedir(), adapter.configDirectory));
   const roots = [...new Set([
     ...(skills.ancestors ? projectDirectories(project, root) : [project]).map(path => join(path, skills.projectDirectory)),
     ...(skills.sharedHome ? [join(homedir(), skills.sharedHome)] : []),
-    join(user, "skills"),
+    join(userConfigHome(adapter, project), "skills"),
     ...(skills.system ? [skills.system] : []),
   ])];
   type Scan = { readonly names: readonly string[]; readonly entries: number };
@@ -78,4 +86,28 @@ export const nativeSkillNames = async (cwd: string, agent: Agent = "codebuddy", 
   const scanned = await roots.reduce(async (pending, path) => walk(path, path, new Set(), await pending),
     Promise.resolve({ names: [] as readonly string[], entries: 0 }));
   return [...new Set(scanned.names)].sort();
+};
+
+// Normalized text of the native instruction files the agent loads on its own (CLAUDE.md,
+// AGENTS.md, CODEBUDDY.md, ...). Reads are best-effort: an unreadable file yields no text,
+// which only keeps modeck content injected (the safe direction).
+export const nativeInstructionTexts = async (cwd: string, agent: Agent = "codebuddy", boundary = cwd): Promise<readonly string[]> => {
+  const adapter = agentDefinitions[agent];
+  const instructions = adapter.instructions;
+  if (!instructions) return [];
+  const [project, root] = await scoped(cwd, boundary);
+  const directories = instructions.ancestors ? projectDirectories(project, root) : [project];
+  const paths = [...new Set([
+    ...directories.flatMap(directory => instructions.projectFiles.map(file => join(directory, file))),
+    ...(instructions.userFile ? [join(userConfigHome(adapter, project), instructions.userFile)] : []),
+  ])];
+  const texts: string[] = [];
+  for (const path of paths) {
+    const image = await readImage(path, LIMITS.textFileBytes).catch(() => null);
+    if (!image) continue;
+    try { texts.push(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data(image))
+      .replace(/^\uFEFF/u, "").replace(/\r\n?/g, "\n").replace(/\n*$/, "\n")); }
+    catch { continue; }
+  }
+  return texts;
 };

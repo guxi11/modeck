@@ -10,7 +10,7 @@ const content = (bytes: Readonly<Uint8Array>): string => {
 };
 const withoutFinalLf = (text: string): string => text.replace(/\n+$/, "");
 
-export const compile = ({ plan, resources, agent, nativeSkillNames = [] }: CompileRequest): RenderedContext => {
+export const compile = ({ plan, resources, agent, nativeSkillNames = [], nativeInstructions = [] }: CompileRequest): RenderedContext => {
   requireValue(plan.configDigest === resources.configDigest && plan.resourceDigest === resources.resourceDigest,
     "E_INTEGRITY", "Plan and verified resources have different identities");
   requireValue(isAgent(agent), "E_CONFIG", `Unsupported agent; choose ${agents.join(", ")}`);
@@ -29,7 +29,19 @@ export const compile = ({ plan, resources, agent, nativeSkillNames = [] }: Compi
     return { binding, resource };
   });
   const native = new Set(nativeSkillNames);
-  const selected = bound.filter(({ binding, resource }) => binding.kind !== "skill" || !native.has(resource.skill!.name));
+  // A rule is dropped only when its whole body (trimmed) already exists verbatim inside a
+  // native instruction file; a same-topic but different body is kept. The length floor
+  // keeps short bodies from matching coincidental substrings.
+  const redundantRule = (text: string): boolean => {
+    const body = text.trim();
+    return body.length >= 32 && nativeInstructions.some(value => value.includes(body));
+  };
+  const keep = bound.map(({ binding, resource }) => ({ binding, resource,
+    keep: binding.kind === "skill" ? !native.has(resource.skill!.name) : !redundantRule(content(resource.entryBytes)) }));
+  const selected = keep.filter(item => item.keep);
+  const filtered = keep.filter(item => !item.keep)
+    .map(({ binding }) => ({ id: binding.id, kind: binding.kind,
+      basis: binding.kind === "skill" ? "native-skill" as const : "native-instruction" as const }));
   const identity = selected.map(({ binding, resource }) => ({ id: binding.id, kind: binding.kind,
     treeDigest: resource.treeDigest }));
   const selectionDigest = sha256(Buffer.from(canonical({ protocol: PROTOCOL, agent, modeIds: plan.modeIds, resources: identity })));
@@ -48,5 +60,6 @@ export const compile = ({ plan, resources, agent, nativeSkillNames = [] }: Compi
       maxChars: LIMITS.contextChars, maxBytes: LIMITS.contextBytes });
   return immutable({ schemaVersion: 1 as const, protocol: PROTOCOL, agent,
     configDigest: plan.configDigest, resourceDigest: plan.resourceDigest, selectionDigest,
-    modeIds: [...plan.modeIds], text, contentDigest: sha256(Buffer.from(text, "utf8")), byteLength });
+    modeIds: [...plan.modeIds], text, contentDigest: sha256(Buffer.from(text, "utf8")), byteLength,
+    filtered });
 };

@@ -5,7 +5,7 @@ import { canonical, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { ConfigContext, PrepareRequest, PreparedContext, ProjectFacts, ResolvedPlan, VerifiedResourceSet } from "../contracts/index.js";
 import { validateConfig } from "../core/config.js";
 import { safeAbsolute } from "./fs.js";
-import { nativeSkillNames } from "./native-skills.js";
+import { nativeInstructionTexts, nativeSkillNames } from "./native-skills.js";
 import { loadRegistry } from "./registry.js";
 import { attachDynamicPlugins, carryDynamicSkillIdentity, sameDynamicSkillContent } from "../plugins/dynamic.js";
 
@@ -79,6 +79,7 @@ export const prepare = async ({ configRoot, configRoots, stateRoot, cwd, agent }
   const state = await safeAbsolute(stateRoot);
   const facts = await collectFacts({ cwd, stateRoot: state });
   const nativeNames = await nativeSkillNames(facts.cwd, agent, facts.boundary);
+  const nativeTexts = await nativeInstructionTexts(facts.cwd, agent, facts.boundary);
   const registry = configRoots === undefined ? await loadRegistry(root) : null;
   const roots = await Promise.all((configRoots ?? (registry ? registry.projects.filter(value => value.enabled).map(value => value.root) : [root])).map(safeAbsolute));
   if (roots.length > LIMITS.modes || new Set(roots).size !== roots.length) throw modeError("E_CONFIG", "Invalid configuration project selection");
@@ -101,5 +102,5 @@ export const prepare = async ({ configRoot, configRoots, stateRoot, cwd, agent }
     throw modeError("E_CONFIG", "Configuration registry changed while preparing context");
   }
   const { plan, resources } = combined ? aggregate(projects, facts) : projects[0]!;
-  return { plan, rendered: compile({ plan, resources, agent, nativeSkillNames: nativeNames }) };
+  return { plan, rendered: compile({ plan, resources, agent, nativeSkillNames: nativeNames, nativeInstructions: nativeTexts }) };
 };

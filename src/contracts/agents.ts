@@ -9,6 +9,13 @@ export type AgentAdapter = {
   readonly configEnvironment: string | null;
   readonly scanDirectories: readonly string[];
   readonly nativeSkills: boolean;
+  // Native instruction files the agent loads on its own; a modeck rule whose body already
+  // exists verbatim inside one of them is dropped from the injected context.
+  readonly instructions: {
+    readonly projectFiles: readonly string[];
+    readonly userFile: string | null;
+    readonly ancestors: boolean;
+  } | null;
   readonly hook: {
     readonly file: string;
     readonly rulesyncFile?: string;
@@ -45,6 +52,7 @@ export const agentDefinitions = {
       input: "standard", matcher: true, timeoutField: "timeout" },
     skills: { projectDirectory: ".claude/skills", ancestors: true, sharedHome: null, system: null,
       requireMetadata: false, recursive: false, qualifiedFallback: false },
+    instructions: { projectFiles: ["CLAUDE.md", ".claude/CLAUDE.md"], userFile: "CLAUDE.md", ancestors: true },
   },
   codex: {
     scanDirectories: [".codex", ".agents"],
@@ -55,6 +63,7 @@ export const agentDefinitions = {
       input: "standard", matcher: true, timeoutField: "timeout" },
     skills: { projectDirectory: ".agents/skills", ancestors: true, sharedHome: ".agents/skills", system: "/etc/codex/skills",
       requireMetadata: true, recursive: true, qualifiedFallback: false },
+    instructions: { projectFiles: ["AGENTS.md"], userFile: "AGENTS.md", ancestors: true },
   },
   codebuddy: {
     scanDirectories: [".codebuddy", ".codebuddy-cli"],
@@ -66,6 +75,8 @@ export const agentDefinitions = {
       input: "standard", matcher: true, timeoutField: "timeout" },
     skills: { projectDirectory: ".codebuddy/skills", ancestors: false, sharedHome: null, system: null,
       requireMetadata: false, recursive: true, qualifiedFallback: true },
+    // Only the confirmed surfaces: project AGENTS.md and the global CODEBUDDY.md.
+    instructions: { projectFiles: ["AGENTS.md"], userFile: "CODEBUDDY.md", ancestors: false },
   },
   qwen: {
     scanDirectories: [".qwen"],
@@ -75,6 +86,7 @@ export const agentDefinitions = {
       cwdFallback: false, commandOptions: {}, nativeContainer: "hooks", nativeEntries: "groups", output: "hookSpecificOutput",
       input: "standard", matcher: true, timeoutField: "timeout" },
     skills: null,
+    instructions: { projectFiles: ["QWEN.md", "AGENTS.md"], userFile: "QWEN.md", ancestors: true },
   },
   qoder: {
     scanDirectories: [".qoder"],
@@ -84,10 +96,11 @@ export const agentDefinitions = {
       cwdFallback: false, commandOptions: {}, nativeContainer: "hooks", nativeEntries: "groups", output: "hookSpecificOutput",
       input: "standard", matcher: true, timeoutField: "timeout" },
     skills: null,
+    instructions: { projectFiles: ["AGENTS.md"], userFile: "AGENTS.md", ancestors: false },
   },
   copilot: {
     scanDirectories: [], executable: "copilot", rulesyncTarget: "copilotcli", configDirectory: ".copilot", configEnvironment: "COPILOT_HOME",
-    nativeSkills: false,
+    nativeSkills: false, instructions: null,
     hook: { file: ".copilot/hooks/modeck.json", rulesyncFile: ".github/hooks/copilotcli-hooks.json", event: "sessionStart", canonicalEvent: "sessionStart",
       sources: ["startup", "resume", "new"], cwdFallback: false, commandOptions: {}, nativeContainer: "versioned-hooks",
       nativeEntries: "command", output: "additionalContext", input: "copilot", matcher: false, timeoutField: "timeoutSec" },
@@ -95,7 +108,7 @@ export const agentDefinitions = {
   },
   droid: {
     scanDirectories: [], executable: "droid", rulesyncTarget: "factorydroid", configDirectory: ".factory", configEnvironment: null,
-    nativeSkills: false,
+    nativeSkills: false, instructions: null,
     hook: { file: ".factory/hooks.json", event: "SessionStart", canonicalEvent: "sessionStart",
       sources: ["startup", "resume", "clear", "compact"], cwdFallback: false, commandOptions: {}, nativeContainer: "events",
       nativeEntries: "groups", output: "hookSpecificOutput", input: "standard", matcher: true, timeoutField: "timeout" },

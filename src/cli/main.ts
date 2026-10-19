@@ -249,6 +249,7 @@ export const main = async (argv: string[]): Promise<number> => {
       const normalized = { ...event, cwd: await realpath(event.cwd) };
       const { rendered } = await prepare({ agent, configRoot, stateRoot, cwd: normalized.cwd });
       const reply = encodeHook({ rendered });
+      rendered.filtered.forEach(item => process.stderr.write(`modeck: omitted ${item.kind} already present natively: ${item.id} (${item.basis})\n`));
       json(reply); return 0;
     }
     const cwd = await realpath(absolute(String(opts.cwd ?? process.cwd())));
