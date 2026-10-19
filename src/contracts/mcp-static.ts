@@ -10,7 +10,9 @@ export type StaticMcpServer = Readonly<{
 } | {
   transport: "native"; agent: StaticMcpAgent; definition: Readonly<Record<string, unknown>>;
 }>;
-export type StaticMcpConfig = Readonly<{ schemaVersion: 1; servers: Readonly<Record<string, StaticMcpServer>> }>;
+export type StaticMcpConfig = Readonly<{ schemaVersion: 2; servers?: Readonly<Record<string, Exclude<StaticMcpServer, { transport: "native" }>>>;
+  agents?: Readonly<Partial<Record<StaticMcpAgent, Readonly<{ mcpServers?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+    mcp_servers?: Readonly<Record<string, Readonly<Record<string, unknown>>>> }>>>> }>;
 export type StaticMcpRequest = Readonly<{
   agent: StaticMcpAgent; scope: StaticMcpScope; targetHome: string; cwd: string; configRoot: string;
 }>;

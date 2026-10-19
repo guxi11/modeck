@@ -34,7 +34,9 @@ const assertContext = async (value: Readonly<Record<string, unknown>>, request: 
     throw modeError("E_INSTALL_CONFLICT", "MCP recovery home/state/scope identity does not match the original transaction; use its original agent, scope, target-home, cwd and config. Original locks were not cleared");
   }
 };
-const lockPaths = (central: string, target: string): readonly string[] => [...new Set([central, target])].sort().map(path => `${path}.modeck-mcp.lock`);
+const lockPaths = (centrals: readonly string[], target: string): readonly Readonly<{ path: string; central: string }>[] =>
+  [...centrals.map(central => ({ path: `${central}.modeck-mcp.lock`, central })),
+    { path: `${target}.modeck-mcp.lock`, central: centrals[0]! }].sort((left, right) => left.path.localeCompare(right.path));
 const inside = (parent: string, child: string): boolean => { const path = relative(parent, child); return path === "" || path !== ".." && !path.startsWith("../") && !path.startsWith("/"); };
 const privateFile = async (path: string, singleLink = true): Promise<void> => {
   const stat = await lstat(path);
@@ -170,13 +172,13 @@ const alive = (pid: number): boolean => {
   try { process.kill(pid, 0); return true; }
   catch (error) { return !(error instanceof Error && "code" in error && error.code === "ESRCH"); }
 };
-const staleLock = async (path: string, central: string, target: string, request: StaticMcpRequest): Promise<void> => {
+const staleLock = async (path: string, centrals: readonly string[], target: string, request: StaticMcpRequest): Promise<void> => {
   const image = await readImage(path);
   if (!image) return;
   await privateFile(path, false);
   const identity = await lstat(path);
   const value = object(imageJson(image));
-  if (value.owner !== owner || value.central !== central || value.target !== target || !Number.isSafeInteger(value.pid)
+  if (value.owner !== owner || !centrals.includes(String(value.central)) || value.target !== target || !Number.isSafeInteger(value.pid)
     || (value.pid as number) <= 0 || typeof value.token !== "string") throw modeError("E_INSTALL_CONFLICT", "MCP lock belongs to another transaction; recover it using its original target and configuration");
   // A shared project target does not identify HOME: validate its journal/state owner before any cleanup.
   await assertContext(value, request, target);
@@ -199,24 +201,26 @@ const staleLock = async (path: string, central: string, target: string, request:
   await cleanupStages(checkedStages(value.stages, request.targetHome));
   await unlink(path); await syncDirectory(dirname(path));
 };
-const acquire = async (request: StaticMcpRequest, central: string, target: string, recovery: boolean, staging: Staging): Promise<readonly HeldLock[]> => {
+const acquire = async (request: StaticMcpRequest, central: string, target: string, recovery: boolean, staging: Staging,
+  aliases: readonly string[] = []): Promise<readonly HeldLock[]> => {
   const held: HeldLock[] = [];
   try {
     const context = await transactionContext(request, target);
     if (staging.files.some(stage => stage.parentDev !== context.stateDev || stage.parentIno !== context.stateIno)) {
       throw modeError("E_PLAN_STALE", "MCP private state identity changed before locking");
     }
-    for (const path of lockPaths(central, target)) {
-      await durableParents(path === `${central}.modeck-mcp.lock` ? request.configRoot
+    const centrals = [...new Set([central, ...aliases])];
+    for (const { path, central: lockCentral } of lockPaths(centrals, target)) {
+      await durableParents(centrals.some(value => path === `${value}.modeck-mcp.lock`) ? request.configRoot
         : request.scope === "project" ? request.cwd : request.targetHome, path);
       await checkDirectory(dirname(path));
-      if (recovery) await staleLock(path, central, target, request);
+      if (recovery) await staleLock(path, path === `${target}.modeck-mcp.lock` ? centrals : [lockCentral], target, request);
       const token = randomUUID();
       const temporary = join(dirname(path), `.modeck-mcp-lock-${token}`);
       const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
       try {
         // Persist every staging inode before any native/journal bytes enter it, including journal's first write.
-        await handle.writeFile(JSON.stringify({ owner, pid: process.pid, token, target, central, ...context, stages: staging.files })); await handle.sync();
+        await handle.writeFile(JSON.stringify({ owner, pid: process.pid, token, target, central: lockCentral, ...context, stages: staging.files })); await handle.sync();
         const stat = await handle.stat();
         // Claim a fully written lock with one atomic hard-link operation; a crash cannot leave an empty lock.
         try { await link(temporary, path); }
@@ -242,14 +246,23 @@ const checkedImage = (value: unknown): FileImage | null => {
     || (image.mode as number) < 0 || (image.mode as number) > 0o777) throw modeError("E_CONFIG", "Invalid MCP recovery image");
   return image as FileImage;
 };
-const loadJournal = async (request: StaticMcpRequest, central: string, target: string): Promise<Journal | null> => {
+const recoveryCentrals = (central: string, aliases: readonly string[]): readonly string[] => {
+  const values = [...new Set([central, ...aliases])];
+  const root = dirname(central);
+  if (values.length > 2 || values.some(path => dirname(path) !== root || !["modeck-mcp.json", "modeck-mcp.yaml"].includes(path.slice(root.length + 1)))
+    || !values.includes(join(root, "modeck-mcp.json")) || !values.includes(join(root, "modeck-mcp.yaml"))) {
+    throw modeError("E_INSTALL_CONFLICT", "MCP recovery accepts only the JSON/YAML central pair in one configuration directory");
+  }
+  return values;
+};
+const loadJournal = async (request: StaticMcpRequest, centrals: readonly string[], target: string): Promise<Journal | null> => {
   const path = journalPath(request.targetHome, target);
   const image = await readImage(path, 70_000_000);
   if (!image) return null;
   await privateFile(path);
   const root = object(imageJson(image));
   if (Object.keys(root).some(key => !["schemaVersion", "owner", "target", "central", "phase", "changes", "agent", "scope", "cwd", "targetHome", "stateRoot", "journalPath", "stateDev", "stateIno"].includes(key))
-    || root.schemaVersion !== 1 || root.owner !== owner || root.target !== target || root.central !== central
+    || root.schemaVersion !== 1 || root.owner !== owner || root.target !== target || typeof root.central !== "string" || !centrals.includes(root.central)
     || !["pending", "committed"].includes(String(root.phase)) || !Array.isArray(root.changes) || root.changes.length > 2) {
     throw modeError("E_INSTALL_CONFLICT", "MCP recovery journal does not match this target and configuration");
   }
@@ -257,11 +270,11 @@ const loadJournal = async (request: StaticMcpRequest, central: string, target: s
   const changes = root.changes.map(raw => {
     const change = object(raw);
     if (Object.keys(change).some(key => !["path", "before", "after"].includes(key)) || typeof change.path !== "string"
-      || ![central, target, ownershipPath(request.targetHome, target)].includes(change.path)) throw modeError("E_INSTALL_CONFLICT", "Invalid MCP recovery destination");
+      || ![root.central, target, ownershipPath(request.targetHome, target)].includes(change.path)) throw modeError("E_INSTALL_CONFLICT", "Invalid MCP recovery destination");
     return { path: change.path, before: checkedImage(change.before), after: checkedImage(change.after) };
   });
   if (new Set(changes.map(change => change.path)).size !== changes.length) throw modeError("E_CONFIG", "Duplicate MCP recovery destination");
-  return { ...await transactionContext(request, target), schemaVersion: 1, owner, target, central, phase: root.phase as Journal["phase"], changes };
+  return { ...await transactionContext(request, target), schemaVersion: 1, owner, target, central: root.central, phase: root.phase as Journal["phase"], changes };
 };
 const removeJournal = async (request: StaticMcpRequest, target: string, staging: Staging): Promise<void> => {
   const path = journalPath(request.targetHome, target);
@@ -287,19 +300,20 @@ const rollback = async (changes: readonly Change[], staging: Staging): Promise<b
 export const assertNoJournal = async (request: StaticMcpRequest, target: string): Promise<void> => {
   if (await readImage(journalPath(request.targetHome, target), 70_000_000)) throw modeError("E_INSTALL_CONFLICT", "An interrupted MCP transaction requires mcp recover with the same target and configuration before proceeding");
 };
-export const transact = async (request: StaticMcpRequest, central: string, target: string, changes: readonly Change[], verify: (written?: readonly Change[]) => Promise<void>): Promise<void> => withMcpMutex([central, target], async () => {
+export const transact = async (request: StaticMcpRequest, central: string, target: string, changes: readonly Change[], verify: (written?: readonly Change[]) => Promise<void>,
+  aliases: readonly string[] = []): Promise<void> => withMcpMutex([central, ...aliases, target], async () => {
   if (!changes.length) { await verify(); return; }
   await ensureState(request, target);
   const staging = await createStages(request, changes.length * 2 + 2);
   let held: readonly HeldLock[];
-  try { held = await acquire(request, central, target, false, staging); }
+  try { held = await acquire(request, central, target, false, staging, aliases); }
   catch (error) { await cleanupStages(staging.files); throw error; }
   let retain = false;
   try {
     await assertNoJournal(request, target);
     await verify();
     for (const change of changes) {
-      await durableParents(change.path === central ? request.configRoot
+      await durableParents(dirname(change.path) === request.configRoot ? request.configRoot
         : change.path === target && request.scope === "project" ? request.cwd : request.targetHome, change.path);
       if ((await parentIdentity(change.path)).dev !== staging.files[0]!.dev) {
         throw modeError("E_CONFIG", "Atomic MCP writes require private state and destination on the same filesystem; use a target home on that filesystem or user scope");
@@ -343,18 +357,20 @@ export const transact = async (request: StaticMcpRequest, central: string, targe
     }
   }
 });
-export const recover = async (request: StaticMcpRequest, central: string, target: string): Promise<string> => withMcpMutex([central, target], async () => {
+export const recover = async (request: StaticMcpRequest, central: string, target: string, aliases: readonly string[] = []): Promise<Readonly<{ message: string; central?: string }>> => {
+  const centrals = recoveryCentrals(central, aliases);
+  return withMcpMutex([...centrals, target], async () => {
   await ensureState(request, target);
   // Refuse a mismatched journal before replacing stale locks; re-read under the acquired locks below.
-  await loadJournal(request, central, target);
+  await loadJournal(request, centrals, target);
   const staging = await createStages(request, 6);
   let held: readonly HeldLock[];
-  try { held = await acquire(request, central, target, true, staging); }
+  try { held = await acquire(request, central, target, true, staging, centrals.filter(path => path !== central)); }
   catch (error) { await cleanupStages(staging.files); throw error; }
   let retain = false;
   try {
-    const journal = await loadJournal(request, central, target);
-    if (!journal) return "No pending journal; stale transaction locks cleared";
+    const journal = await loadJournal(request, centrals, target);
+    if (!journal) return { message: "No pending journal; stale transaction locks cleared" };
     if (journal.phase === "committed") {
       for (const change of journal.changes) {
         if (!same(await readImage(change.path), change.after)) {
@@ -367,11 +383,12 @@ export const recover = async (request: StaticMcpRequest, central: string, target
       throw modeError("E_INSTALL_CONFLICT", "MCP recovery found externally modified files; no conflicting data was overwritten. Private journal retained for inspection");
     }
     await removeJournal(request, target, staging);
-    return journal.phase === "committed" ? "Committed transaction cleanup completed" : "Interrupted transaction rolled back safely";
+    return { message: journal.phase === "committed" ? "Committed transaction cleanup completed" : "Interrupted transaction rolled back safely", central: journal.central };
   } finally {
     if (!retain) {
       await cleanupStages(staging.files);
       for (const lock of [...held].reverse()) await release(lock);
     }
   }
-});
+  });
+};

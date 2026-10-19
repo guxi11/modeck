@@ -1,5 +1,5 @@
-import { parseDocument, stringify } from "yaml";
-import { canonical, modeError } from "../contracts/index.js";
+import { parseDocument } from "yaml";
+import { canonical, modeError, parseJson } from "../contracts/index.js";
 import type { FileImage } from "../contracts/index.js";
 import type { StaticMcpConfig, StaticMcpReference, StaticMcpServer } from "../contracts/mcp-static.js";
 import { data, object } from "../integration/fs.js";
@@ -10,6 +10,8 @@ export const serverName = (value: string): boolean => /^[a-zA-Z0-9][a-zA-Z0-9_-]
 const keys = (value: Record<string, unknown>, permitted: readonly string[], required: readonly string[] = []): void => {
   if (Object.keys(value).some(key => !permitted.includes(key)) || required.some(key => !Object.hasOwn(value, key))) fail("Unsupported or missing MCP configuration field");
 };
+const optionalObject = (parent: Record<string, unknown>, key: string): Record<string, unknown> =>
+  Object.hasOwn(parent, key) ? object(parent[key]) : {};
 const text = (value: unknown, maximum = 4096): string => {
   if (typeof value !== "string" || !value || value.length > maximum || /\p{Cc}/u.test(value)) fail("Invalid MCP string");
   return value as string;
@@ -112,25 +114,66 @@ export const checkedServer = (value: unknown): StaticMcpServer => {
 export const checkedConfig = (value: unknown): StaticMcpConfig => {
   canonical(value);
   const config = object(value);
-  keys(config, ["schemaVersion", "servers"], ["schemaVersion", "servers"]);
-  if (config.schemaVersion !== 1) fail("Unsupported static MCP schema version");
-  const entries = Object.entries(object(config.servers));
-  if (entries.length > 512) fail("Too many MCP servers");
-  return { schemaVersion: 1, servers: Object.fromEntries(entries.map(([name, server]) => {
+  if (config.schemaVersion === 1) {
+    keys(config, ["schemaVersion", "servers"], ["schemaVersion", "servers"]);
+    const portable: Record<string, Exclude<StaticMcpServer, { transport: "native" }>> = {};
+    const agents: Record<string, Record<string, Record<string, unknown>>> = {};
+    for (const [name, raw] of Object.entries(object(config.servers))) {
+      if (!serverName(name)) fail("Invalid MCP server name");
+      const server = checkedServer(raw);
+      if (server.transport === "native") {
+        const key = server.agent === "claude" ? "mcpServers" : "mcp_servers";
+        const agent = agents[server.agent] ??= {};
+        agent[key] ??= {};
+        agent[key]![name] = server.definition;
+      } else portable[name] = server;
+    }
+    return checkedConfig({ schemaVersion: 2, ...(Object.keys(portable).length ? { servers: portable } : {}),
+      ...(Object.keys(agents).length ? { agents } : {}) });
+  }
+  keys(config, ["schemaVersion", "servers", "agents"], ["schemaVersion"]);
+  if (config.schemaVersion !== 2) fail("Unsupported static MCP schema version");
+  const portable = Object.entries(optionalObject(config, "servers"));
+  const agentEntries = Object.entries(optionalObject(config, "agents"));
+  if (portable.length > 512 || agentEntries.length > 2) fail("Too many MCP servers or agents");
+  const servers = Object.fromEntries(portable.map(([name, raw]) => {
     if (!serverName(name)) fail("Invalid MCP server name");
-    return [name, checkedServer(server)];
-  })) };
+    const server = checkedServer(raw);
+    if (server.transport === "native") fail("Native MCP definitions belong under agents");
+    return [name, server];
+  }));
+  const agents: Record<string, { mcpServers?: Record<string, Record<string, unknown>>; mcp_servers?: Record<string, Record<string, unknown>> }> = {};
+  for (const [agent, rawAgent] of agentEntries) {
+    if (agent !== "claude" && agent !== "codex") fail("Invalid static MCP agent");
+    const key = agent === "claude" ? "mcpServers" : "mcp_servers";
+    const agentValue = object(rawAgent);
+    keys(agentValue, [key]);
+    const entries = Object.entries(optionalObject(agentValue, key));
+    if (entries.length > 512) fail("Too many MCP servers");
+    const definitions = Object.fromEntries(entries.map(([name, definition]) => {
+      if (!serverName(name) || Object.hasOwn(servers, name)) fail("Invalid or ambiguous MCP server name within agent");
+      const checked = checkedServer({ transport: "native", agent, definition });
+      if (checked.transport !== "native") fail("Invalid native MCP definition");
+      return [name, (checked as Extract<StaticMcpServer, { transport: "native" }>).definition];
+    }));
+    agents[agent] = { [key]: definitions };
+  }
+  return { schemaVersion: 2, ...(portable.length ? { servers: servers as Record<string, Exclude<StaticMcpServer, { transport: "native" }>> } : {}), ...(agentEntries.length ? { agents } : {}) };
 };
-export const parseCentral = (image: FileImage | null): StaticMcpConfig => {
-  if (!image) return { schemaVersion: 1, servers: {} };
+export const parseCentral = (image: FileImage | null, format: "json" | "yaml" = "json"): StaticMcpConfig => {
+  if (!image) return { schemaVersion: 2 };
   try {
-    const document = parseDocument(new TextDecoder("utf-8", { fatal: true }).decode(data(image)), {
-      schema: "core", uniqueKeys: true, strict: true,
-    });
+    const source = new TextDecoder("utf-8", { fatal: true }).decode(data(image));
+    if (format === "json") return checkedConfig(parseJson(source));
+    const document = parseDocument(source, { schema: "core", uniqueKeys: true, strict: true });
     if (document.errors.length || document.warnings.length) fail("Invalid static MCP YAML");
     return checkedConfig(document.toJS({ maxAliasCount: 0 }));
-  } catch { return fail("Invalid static MCP configuration; inspect modeck-mcp.yaml without exposing its values"); }
+  } catch { return fail("Invalid static MCP configuration; inspect it without exposing its values"); }
+};
+export const centralNeedsUpgrade = (image: FileImage | null, format: "json" | "yaml"): boolean => {
+  if (!image || format === "yaml") return true;
+  return object(parseJson(new TextDecoder("utf-8", { fatal: true }).decode(data(image)))).schemaVersion !== 2;
 };
 export const centralImage = (config: StaticMcpConfig, mode = 0o600): FileImage => ({
-  data: stringify(config), encoding: "utf8", mode,
+  data: `${JSON.stringify(config, null, 2)}\n`, encoding: "utf8", mode,
 });
