@@ -409,13 +409,13 @@ planDigest=sha256(canonical(plan除planDigest字段))，覆盖agent/target/opera
 
 安装检查state/config准备成功，确保hook首轮能离线render；preview本身不调用同步。安装阶段不创建任何agent会话，不运行目标已有hook。Codex信任提醒、Claude失败不能block的限制进入plan.warnings（固定code与文本、无动态时间）。
 
-## 静态 MCP JSON 与事务兼容
+## 静态 MCP JSON 与事务边界
 
 静态 MCP 配置独立于 mode 和 hook。v2 `modeck-mcp.json` 将 portable 定义放在 `servers`，原生定义放在 `agents.claude.mcpServers` / `agents.codex.mcp_servers`；native 对象验证 JSON 可表示性及关键字段形状后保留完整值，包括可序列化扩展和 literal 参数/环境/请求头。该保留不承诺 agent 对扩展字段的支持。Codex 原生条目在写入 TOML 前执行 parse/stringify 往返等价检查；portable 的 SSE 与环境变量名映射约束仅作用于 portable 适配。
 
-`manageStaticMcp` 只在 JSON 不存在时读取旧 `modeck-mcp.yaml`；JSON 一旦存在，即便显式路径给的是 YAML，也以 JSON 为唯一源，且错误不触发回退。`migrate` 将 v1 wrapper 中按 agent 标记的条目拆到 v2 对应字段，保留 portable 声明，并将旧 YAML 留作 inactive copy。迁移结果无新增 native 项时仍可写 JSON；匹配登记也会将 JSON 事务性设为 `0600`。原生目标字节不变，status 不写入。
+`manageStaticMcp` 仅读取 `modeck-mcp.json` 的 schemaVersion 2。`migrate` 从 agent 原生配置导入条目到对应字段，并保留已有 portable 声明。迁移结果无新增 native 项时仍会创建 JSON；匹配登记也会将 JSON 事务性设为 `0600`。原生目标字节不变，status 不写入。
 
-migrate 事务写入中央 JSON 与私有 ownership，apply 事务写入原生目标与 ownership；从旧 YAML 迁移时同时锁定旧源与新 JSON，两个中央路径均纳入观察复核。旧 YAML 保留且不改。ownership 可接受旧 YAML source 路径，recover 仅接受同目录的 JSON/YAML 中央路径对。pending journal 可安全回滚，committed journal 只完成清理；journal 和 stale lock 必须通过原 agent、scope、home、cwd、配置及目标身份核验。native endpoint 指纹用于阻止端点身份漂移，观察快照与拓扑在提交前复核；apply 任一条目冲突时整批不写，migrate 可逐项部分成功且拒绝项保持原生不变。未管理项及中央已删定义不会自动删除。支持仅为 Claude user/project 与 Codex 默认 user scope；配置同步不进入多源 mode、插件或 SessionStart 组合。
+migrate 事务写入中央 JSON 与私有 ownership，apply 事务写入原生目标与 ownership。ownership source、journal 和 stale lock 的 central 路径必须精确匹配当前 JSON；其他 central 路径及缺少 staging inventory 的旧锁会安全拒绝，不清理或接管。pending journal 可安全回滚，committed journal 只完成清理；journal 和 stale lock 必须通过原 agent、scope、home、cwd、配置及目标身份核验。native endpoint 指纹用于阻止端点身份漂移，观察快照与拓扑在提交前复核；apply 任一条目冲突时整批不写，migrate 可逐项部分成功且拒绝项保持原生不变。未管理项及中央已删定义不会自动删除。支持仅为 Claude user/project 与 Codex 默认 user scope；配置同步不进入多源 mode、插件或 SessionStart 组合。
 
 ## 11. hook 预载与交付限制
 

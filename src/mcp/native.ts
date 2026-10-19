@@ -74,7 +74,7 @@ const assertClaudeRemoteReferences = (server: StaticMcpServer): void => {
     fail("Claude reads this credential reference as empty in remote headers; use a dedicated variable name and verify authentication natively");
   }
 };
-export const decodeServer = (agent: StaticMcpAgent, raw: unknown, _migration = false): StaticMcpServer => {
+export const decodeServer = (agent: StaticMcpAgent, raw: unknown): StaticMcpServer => {
   const server = checkedServer({ transport: "native", agent, definition: object(raw) });
   if (server.transport !== "native") return fail("Native MCP definition changed during validation");
   if (canonical(server.definition) !== canonical(raw)) fail("Native MCP definition changed during validation");

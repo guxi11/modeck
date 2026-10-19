@@ -4,7 +4,7 @@ import { canonical, modeError, sha256 } from "../contracts/index.js";
 import type { FileImage } from "../contracts/index.js";
 import type { StaticMcpConfig, StaticMcpDecision, StaticMcpRequest, StaticMcpServer, StaticMcpSummary } from "../contracts/mcp-static.js";
 import { checkDirectory, imageJson, jsonImage, object, readImage, same } from "../integration/fs.js";
-import { centralImage, centralNeedsUpgrade, checkedConfig, parseCentral, serverName } from "./config.js";
+import { centralImage, checkedConfig, parseCentral, serverName } from "./config.js";
 import { decodeServer, encodeServer, equivalent, locate, mergeImage, nativeRoot, nativeServers } from "./native.js";
 import { assertNoJournal, ownershipPath, recover, transact } from "./transaction.js";
 import type { Change } from "./transaction.js";
@@ -14,24 +14,6 @@ type Ownership = Readonly<{ schemaVersion: 1; owner: "modeck/static-mcp/1"; targ
   servers: Readonly<Record<string, Owned>> }>;
 type Observed = Readonly<{ path: string; image: FileImage | null }>;
 const hash = (value: unknown): string => sha256(Buffer.from(canonical(value)));
-const legacyEndpoint = (server: unknown): string => {
-  const value = object(server);
-  return hash(Object.hasOwn(value, "command") ? { command: value.command, args: value.args ?? [] }
-    : { transport: value.type ?? value.transport ?? "http", url: value.url });
-};
-const priorEndpoint = (server: unknown): string => {
-  const value = object(server);
-  const identity = Object.hasOwn(value, "command")
-    ? { command: value.command, args: value.args ?? [], ...(Object.hasOwn(value, "cwd") ? { cwd: value.cwd } : {}) }
-    : { transport: value.type ?? value.transport ?? "http", url: value.url };
-  return hash({ ...identity, ...(Object.hasOwn(value, "http_headers_helper") ? { http_headers_helper: value.http_headers_helper } : {}) });
-};
-const legacyEndpoints = (server: unknown): readonly string[] => {
-  const value = object(server);
-  const candidates = [() => legacyEndpoint(value), () => priorEndpoint(value),
-    ...(Object.hasOwn(value, "url") ? [() => hash({ transport: value.type ?? "http", url: value.url })] : [])];
-  return candidates.flatMap(candidate => { try { return [candidate()]; } catch { return []; } });
-};
 const endpoint = (server: unknown): string => {
   const value = object(server);
   const identity: Record<string, unknown> = {};
@@ -62,13 +44,13 @@ const safeNative = async (path: string, image: FileImage | null): Promise<void> 
   const stat = await lstat(path);
   if (stat.uid !== process.getuid?.() || image.mode & 0o022 || stat.nlink !== 1) throw modeError("E_INSTALL_CONFLICT", "MCP source/target must be owned by this user, singly linked and not writable by others");
 };
-const readOwned = async (image: FileImage | null, request: StaticMcpRequest, target: string, source: string, legacySource?: string): Promise<Ownership> => {
+const readOwned = async (image: FileImage | null, request: StaticMcpRequest, target: string, source: string): Promise<Ownership> => {
   if (!image) return { schemaVersion: 1, owner: "modeck/static-mcp/1", target, agent: request.agent, source, servers: {} };
   if (image.mode !== 0o600) throw modeError("E_INSTALL_CONFLICT", "MCP ownership metadata must have mode 0600");
   const root = object(imageJson(image));
   if (Object.keys(root).some(key => !["schemaVersion", "owner", "target", "agent", "source", "servers"].includes(key))
     || root.schemaVersion !== 1 || root.owner !== "modeck/static-mcp/1" || root.target !== target || root.agent !== request.agent
-    || root.source !== source && !(legacySource && root.source === legacySource)) throw modeError("E_INSTALL_CONFLICT", "This native target has ownership from another agent/configuration; keep its existing owner and use the original --config");
+    || root.source !== source) throw modeError("E_INSTALL_CONFLICT", "This native target has ownership from another agent/configuration; keep its existing owner and use the original --config");
   const servers = object(root.servers);
   for (const [name, raw] of Object.entries(servers)) {
     const entry = object(raw);
@@ -96,29 +78,26 @@ export const manageStaticMcp = async (action: "migrate" | "apply" | "status" | "
   for (const path of [request.targetHome, request.cwd, request.configRoot]) {
     if (!(await lstat(path)).isDirectory()) throw modeError("E_PATH", "MCP home, working directory and configuration directory must already exist");
   }
-  const centralJson = join(request.configRoot, "modeck-mcp.json");
-  const centralYaml = join(request.configRoot, "modeck-mcp.yaml");
+  const central = join(request.configRoot, "modeck-mcp.json");
   const location = await locate(request, action !== "recover");
   if (action === "recover") {
-    const result = await recover(request, centralJson, location.path, [centralYaml]);
-    const configuration = result.central ?? `${centralJson} / ${centralYaml} (known recovery pair)`;
+    const result = await recover(request, central, location.path);
+    const configuration = result.central ?? central;
     return summary(action, request, [], result.message, location.path, undefined, configuration);
   }
   await assertNoJournal(request, location.path);
   const state = ownershipPath(request.targetHome, location.path);
-  const observations = await observe([centralJson, centralYaml, state, ...location.checks, ...location.policy,
+  const observations = await observe([central, state, ...location.checks, ...location.policy,
     ...(location.shadowedCandidate ? [location.shadowedCandidate] : [])]);
   const imageAt = (path: string): FileImage | null => observations.find(item => item.path === path)?.image ?? null;
-  const central = imageAt(centralJson) ? centralJson : imageAt(centralYaml) ? centralYaml : centralJson;
   for (const item of observations) await safeNative(item.path, item.image);
   const sourceImage = imageAt(central);
   if (action !== "migrate" && !sourceImage) throw modeError("E_CONFIG", "Static MCP configuration is missing; migrate first or create modeck-mcp.json");
-  const config = parseCentral(sourceImage, central.endsWith(".yaml") ? "yaml" : "json");
+  const config = parseCentral(sourceImage);
   const nativeImage = imageAt(location.path);
   const root = nativeRoot(request.agent, nativeImage);
   const current = nativeServers(root, location.key);
-  const owned = await readOwned(imageAt(state), request, location.path, central,
-    central === centralJson ? centralYaml : undefined);
+  const owned = await readOwned(imageAt(state), request, location.path, central);
   const decisions: StaticMcpDecision[] = [];
   const verify = async (written: readonly Change[] = []): Promise<void> => {
     await verifyObserved(observations, written);
@@ -131,10 +110,10 @@ export const manageStaticMcp = async (action: "migrate" | "apply" | "status" | "
       try {
         if (!serverName(name) || request.agent === "claude" && ["workspace", "claude-in-chrome", "computer-use"].includes(name)) throw modeError("E_CONFIG", "Native server name is outside the migration contract");
         const previous = Object.hasOwn(owned.servers, name) ? owned.servers[name] : undefined;
-        if (previous && (hash(raw) !== previous.digest || endpoint(raw) !== previous.endpoint && !legacyEndpoints(raw).includes(previous.endpoint))) {
+        if (previous && (hash(raw) !== previous.digest || endpoint(raw) !== previous.endpoint)) {
           throw modeError("E_CONFIG", "Owned native definition drifted or changed endpoint; migrate cannot reset its ownership baseline. Restore it or use a new server name");
         }
-        const server = decodeServer(request.agent, raw, true);
+        const server = decodeServer(request.agent, raw);
         if (server.transport !== "native") throw modeError("E_CONFIG", "Native definition changed during migration");
         const encoded = encodeServer(request.agent, server);
         if (canonical(encoded) !== canonical(raw)) throw modeError("E_CONFIG", "Native definition cannot be represented without loss; native source preserved");
@@ -179,15 +158,14 @@ export const manageStaticMcp = async (action: "migrate" | "apply" | "status" | "
       ...(Object.keys(config.servers ?? {}).length ? { servers: config.servers } : {}),
       ...((Object.keys(config.agents ?? {}).length || Object.keys(nativeImports).length) ? { agents: {
         ...(config.agents ?? {}), ...(Object.keys(nativeImports).length ? { [request.agent]: { ...previousAgent, [nativeKey]: { ...previousNative, ...nativeImports } } } : {}) } } : {}) });
-    const nextOwned: Ownership = { ...owned, source: centralJson, servers: enrolled };
+    const nextOwned: Ownership = { ...owned, source: central, servers: enrolled };
     // Native definitions may contain literal credentials; keep this file private, including when tightening an existing file.
-    const changes: Change[] = centralNeedsUpgrade(sourceImage, central.endsWith(".yaml") ? "yaml" : "json")
-      || sourceImage?.mode !== 0o600 || Object.keys(imported).length
-      ? [{ path: centralJson, before: imageAt(centralJson), after: centralImage(desired, 0o600) }] : [];
+    const changes: Change[] = sourceImage === null || sourceImage.mode !== 0o600 || Object.keys(imported).length
+      ? [{ path: central, before: imageAt(central), after: centralImage(desired, 0o600) }] : [];
     if (canonical(nextOwned) !== canonical(owned)) changes.push({ path: state, before: imageAt(state), after: jsonImage(nextOwned) });
-    await transact(request, centralJson, location.path, changes, verify, central === centralYaml ? [centralYaml] : []);
+    await transact(request, central, location.path, changes, verify);
     return summary(action, request, decisions, changes.length ? "Safe entries migrated/enrolled for management; native source unchanged"
-      : "No central or ownership changes; native source unchanged", location.path, undefined, centralJson);
+      : "No central or ownership changes; native source unchanged", location.path, undefined, central);
   }
   const desired: Record<string, unknown> = {};
   const sources: [string, StaticMcpServer][] = Object.entries(config.servers ?? {});
@@ -232,9 +210,7 @@ export const manageStaticMcp = async (action: "migrate" | "apply" | "status" | "
       decisions.push({ name, action: "rejected", reason: "Owned native definition drifted or was removed; refusing to overwrite. Restore the original native definition or choose a new server name" });
       continue;
     }
-    const endpointBaseline = previous && present !== undefined && hash(present) === previous.digest
-      && legacyEndpoints(present).includes(previous.endpoint) ? endpoint(present) : previous?.endpoint;
-    if (previous && endpoint(next) !== endpointBaseline) {
+    if (previous && endpoint(next) !== previous.endpoint) {
       decisions.push({ name, action: "rejected", reason: "Owned endpoint identity changed; use a new server name to keep native credentials isolated" });
       continue;
     }

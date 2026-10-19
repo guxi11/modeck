@@ -10,10 +10,10 @@ import { createUi, UiCancelled } from "./ui.js";
 
 const actions = ["migrate", "apply", "status", "recover"] as const;
 type Action = typeof actions[number];
-const help = "Usage: modeck mcp [migrate|apply|status|recover] [--agent <claude|codex>] [--scope <user|project>] [--config <dir|modeck-mcp.json|modeck-mcp.yaml>] [--target-home <dir>] [--cwd <dir>] [--format <text|json>]\n\n"
+const help = "Usage: modeck mcp [migrate|apply|status|recover] [--agent <claude|codex>] [--scope <user|project>] [--config <dir|modeck-mcp.json>] [--target-home <dir>] [--cwd <dir>] [--format <text|json>]\n\n"
   + "Omitted action, agent or scope is selected interactively in a TTY. Defaults: current action prompt, current directory, HOME.\n"
-  + "Central source: modeck-mcp.json, an independent agent-native JSON file. JSON takes precedence when both files exist; mode YAML files are never used. --config accepts its explicit path or an existing directory.\n"
-  + "  migrate  Import native definitions and enroll them for management while preserving native bytes. Converts a legacy modeck-mcp.yaml source to private JSON; the YAML remains as an inactive compatibility copy.\n"
+  + "Central source: modeck-mcp.json, an independent agent-native JSON file. --config accepts its explicit path or an existing directory.\n"
+  + "  migrate  Import native definitions and enroll them for management while preserving native bytes.\n"
   + "  apply    Merge central definitions into native configuration; preserve unmanaged and centrally removed servers, reject conflicts/drift without changing the native batch.\n"
   + "  status   Show a credential-free apply plan; no writes.\n"
   + "  recover  Roll back an interrupted transaction, or finish committed cleanup. Use the original agent, scope, home, cwd and configuration.\n\n"
@@ -47,8 +47,8 @@ const configurationDirectory = async (value: string): Promise<string> => {
   const path = await safeAbsolute(resolve(value));
   const stat = await lstat(path).catch(error => { if (missing(error)) return null; throw error; });
   if (stat?.isDirectory()) return path;
-  if (["modeck-mcp.json", "modeck-mcp.yaml"].includes(basename(path)) && (!stat || stat.isFile())) return dirname(path);
-  throw modeError("E_USAGE", "MCP --config requires an existing directory or modeck-mcp.json/modeck-mcp.yaml file; mode YAML files are not supported");
+  if (basename(path) === "modeck-mcp.json" && (!stat || stat.isFile())) return dirname(path);
+  throw modeError("E_USAGE", "MCP --config requires an existing directory or the modeck-mcp.json file");
 };
 const report = (summary: StaticMcpSummary, json: boolean): void => {
   if (json) { process.stdout.write(`${JSON.stringify(summary)}\n`); return; }
@@ -67,7 +67,7 @@ const report = (summary: StaticMcpSummary, json: boolean): void => {
   ui.section("Next step", ui.emphasize(summary.next, stream, "cyan"));
 };
 const review = (action: Action, request: StaticMcpRequest, target: string, ui: ReturnType<typeof createUi>): void => {
-  ui.section("Review MCP operation", `  Operation: ${action}\n  Native path: ${target}\n  Config: ${request.configRoot}/modeck-mcp.json (preferred); ${request.configRoot}/modeck-mcp.yaml (used only when JSON is absent)`, process.stderr);
+  ui.section("Review MCP operation", `  Operation: ${action}\n  Native path: ${target}\n  Config path: ${request.configRoot}/modeck-mcp.json`, process.stderr);
 };
 export const mcpStaticCommand = async (argv: readonly string[]): Promise<number> => {
   const requestedAction = argv[0] === "help" ? "help" : actions.includes(argv[0] as Action) ? argv[0]! : "";

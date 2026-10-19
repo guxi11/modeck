@@ -1,4 +1,3 @@
-import { parseDocument } from "yaml";
 import { canonical, modeError, parseJson } from "../contracts/index.js";
 import type { FileImage } from "../contracts/index.js";
 import type { StaticMcpConfig, StaticMcpReference, StaticMcpServer } from "../contracts/mcp-static.js";
@@ -114,23 +113,6 @@ export const checkedServer = (value: unknown): StaticMcpServer => {
 export const checkedConfig = (value: unknown): StaticMcpConfig => {
   canonical(value);
   const config = object(value);
-  if (config.schemaVersion === 1) {
-    keys(config, ["schemaVersion", "servers"], ["schemaVersion", "servers"]);
-    const portable: Record<string, Exclude<StaticMcpServer, { transport: "native" }>> = {};
-    const agents: Record<string, Record<string, Record<string, unknown>>> = {};
-    for (const [name, raw] of Object.entries(object(config.servers))) {
-      if (!serverName(name)) fail("Invalid MCP server name");
-      const server = checkedServer(raw);
-      if (server.transport === "native") {
-        const key = server.agent === "claude" ? "mcpServers" : "mcp_servers";
-        const agent = agents[server.agent] ??= {};
-        agent[key] ??= {};
-        agent[key]![name] = server.definition;
-      } else portable[name] = server;
-    }
-    return checkedConfig({ schemaVersion: 2, ...(Object.keys(portable).length ? { servers: portable } : {}),
-      ...(Object.keys(agents).length ? { agents } : {}) });
-  }
   keys(config, ["schemaVersion", "servers", "agents"], ["schemaVersion"]);
   if (config.schemaVersion !== 2) fail("Unsupported static MCP schema version");
   const portable = Object.entries(optionalObject(config, "servers"));
@@ -160,19 +142,12 @@ export const checkedConfig = (value: unknown): StaticMcpConfig => {
   }
   return { schemaVersion: 2, ...(portable.length ? { servers: servers as Record<string, Exclude<StaticMcpServer, { transport: "native" }>> } : {}), ...(agentEntries.length ? { agents } : {}) };
 };
-export const parseCentral = (image: FileImage | null, format: "json" | "yaml" = "json"): StaticMcpConfig => {
+export const parseCentral = (image: FileImage | null): StaticMcpConfig => {
   if (!image) return { schemaVersion: 2 };
   try {
     const source = new TextDecoder("utf-8", { fatal: true }).decode(data(image));
-    if (format === "json") return checkedConfig(parseJson(source));
-    const document = parseDocument(source, { schema: "core", uniqueKeys: true, strict: true });
-    if (document.errors.length || document.warnings.length) fail("Invalid static MCP YAML");
-    return checkedConfig(document.toJS({ maxAliasCount: 0 }));
+    return checkedConfig(parseJson(source));
   } catch { return fail("Invalid static MCP configuration; inspect it without exposing its values"); }
-};
-export const centralNeedsUpgrade = (image: FileImage | null, format: "json" | "yaml"): boolean => {
-  if (!image || format === "yaml") return true;
-  return object(parseJson(new TextDecoder("utf-8", { fatal: true }).decode(data(image)))).schemaVersion !== 2;
 };
 export const centralImage = (config: StaticMcpConfig, mode = 0o600): FileImage => ({
   data: `${JSON.stringify(config, null, 2)}\n`, encoding: "utf8", mode,

@@ -151,11 +151,11 @@ MCP 使用独立的 `modeck-mcp.json`（`schemaVersion: 2`），与定义工作�
 
 不同 agent 可使用相同 server 名；同一 agent 的 native 定义不能与 `servers` 中的 portable 定义重名。将条目追加到相应 agent 的原生映射后运行 `status` 检查计划，再运行 `apply` 写入；`servers` 或 `agents` 为空时可省略。`migrate` 遇到与 native 同名且语义等价的 portable 项时保留 portable 项并登记 native 来源；语义不同则拒绝冲突，不覆盖任一方。
 
-只要 `modeck-mcp.json` 存在，它就是唯一真源，即使 `--config` 指向旧 YAML；JSON 无效时也不会回退。仅 JSON 缺失时才读取 `modeck-mcp.yaml`。`migrate` 会写入 JSON 并保留旧 YAML 作为不再生效的兼容副本；schema v1 wrapper 中的 native 项会按 agent 拆入 v2。`--config` 接受配置目录、`modeck-mcp.json` 或 `modeck-mcp.yaml`；`--target-home` 默认当前用户 home，`--cwd` 默认当前目录，目录必须已存在。TTY 文本模式可交互选择缺省 action、agent 和 scope；非 TTY 必须显式给出这些必要值。可用 `--format json` 输出结构化结果。
+中央配置仅接受 `modeck-mcp.json` 的 schemaVersion 2；`migrate` 从 agent 原生配置导入并写入该 JSON 文件。`--config` 接受配置目录或 `modeck-mcp.json`；`--target-home` 默认当前用户 home，`--cwd` 默认当前目录，目录必须已存在。TTY 文本模式可交互选择缺省 action、agent 和 scope；非 TTY 必须显式给出这些必要值。可用 `--format json` 输出结构化结果。
 
 | 命令 | 用途与安全行为 |
 | --- | --- |
-| `mcp migrate` | 将原生定义按原样迁入 agent 专属 JSON，并登记成功迁入或匹配项的管理权；不改变原生文件字节。可部分成功，拒绝项的原生定义不改。匹配既有 portable 定义时保留它供其他 agent 使用并登记来源。即使没有新 native 项，也会把旧 YAML 转为 JSON；即使仅匹配，也会以事务将 JSON 权限收紧为 `0600`。 |
+| `mcp migrate` | 将原生定义按原样迁入 agent 专属 JSON，并登记成功迁入或匹配项的管理权；不改变原生文件字节。可部分成功，拒绝项的原生定义不改。匹配既有 portable 定义时保留它供其他 agent 使用并登记来源。即使没有新 native 项，也会创建 JSON；即使仅匹配，也会以事务将 JSON 权限收紧为 `0600`。 |
 | `mcp status` | 只读检查当前配置并输出不含凭据值的 apply 计划；不写入或收紧文件权限。 |
 | `mcp apply` | 增量合并中央定义；保留未受管项和已从中央移除的原生项，不自动删除。同名冲突、受管项漂移或端点身份变化会拒绝整批写入。匹配的未受管项不会自动接管，需先显式 `migrate`。 |
 | `mcp recover` | 回滚中断且未提交的事务，或完成已提交事务的清理；必须使用原事务的 agent、scope、home、cwd 和配置路径。 |
