@@ -125,6 +125,7 @@ const reportImport = (command: string, value: unknown, ui: Ui): void => {
   const unchanged = command !== "init" && count === 0;
   const lines = [unchanged ? "No resources selected; no changes made." : `Configuration:\n  ${result.configRoot}`];
   if (typeof result.backupDirectory === "string") lines.push(`Backups:\n  ${result.backupDirectory}`);
+  if (items(result.removed).length) lines.push(`Removed source directories:\n  ${items(result.removed).filter(item => typeof item === "string").join("\n  ")}`);
   if (items(result.retained).length) lines.push(`Retained ${items(result.retained).length} managed/shared entries.`);
   ui.section(`modeck ${command}: ${unchanged ? "no changes" : command === "init" ? "initialized" : "imported"} · ${count} resources`, lines.join("\n"));
 };

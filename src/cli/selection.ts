@@ -5,6 +5,12 @@ import type { ScanResult } from "../resources/scan.js";
 import { regularBytes, requireValue, utf8 } from "../resources/fs.js";
 
 export type Choice = { readonly id: string; readonly name: string };
+export type SelectionOptions = {
+  // init/scan import resources under their scanned id; only `migrate` still renames.
+  readonly rename?: boolean;
+  // The end-of-flow confirmation; a function receives the reviewed choices.
+  readonly confirm?: string | ((choices: readonly Choice[]) => Promise<string> | string);
+};
 const validName = (name: string): boolean => /^[a-z][a-z0-9-]{0,63}$/.test(name);
 const cancelled = () => modeError("E_USAGE", "Selection cancelled; no resources were moved");
 
@@ -20,7 +26,9 @@ export const choose = async <T>(message: string, choices: readonly (Separator | 
   }
 };
 
-export const selections = async (scan: ScanResult, answers?: string, preview?: (choices: readonly Choice[]) => Promise<string>, rename = true): Promise<readonly Choice[]> => {
+export const selections = async (scan: ScanResult, answers?: string, preview?: (choices: readonly Choice[]) => Promise<string>,
+  options: SelectionOptions = {}): Promise<readonly Choice[]> => {
+  const rename = options.rename ?? true;
   const ui = createUi();
   if (answers !== undefined) {
     const value = parseJson(utf8((await regularBytes(answers, LIMITS.jsonBytes)).bytes)) as Record<string, unknown>;
@@ -31,7 +39,7 @@ export const selections = async (scan: ScanResult, answers?: string, preview?: (
       const entry = item as Record<string, unknown>;
       requireValue(Object.keys(entry).every(key => ["id", "name"].includes(key)) && typeof entry.id === "string"
         && (entry.name === undefined || typeof entry.name === "string"), "E_USAGE", "Invalid resource answer");
-      requireValue(rename || entry.name === undefined, "E_USAGE", "init does not accept resource names; use {id} only");
+      requireValue(rename || entry.name === undefined, "E_USAGE", "init and scan do not accept resource names; use {id} only");
       return { id: entry.id as string, name: (entry.name ?? entry.id) as string };
     });
     requireValue(choices.every(choice => scan.resources.some(resource => resource.id === choice.id) && validName(choice.name))
@@ -58,7 +66,9 @@ export const selections = async (scan: ScanResult, answers?: string, preview?: (
     }, Promise.resolve([] as readonly Choice[])) : ids.map(id => ({ id, name: id }));
     ui.printError(`\n${rename ? "3/3" : "2/2"} · Review ${choices.length} resources\n${choices.map(choice => `  ${choice.id}${choice.id === choice.name ? "" : ` → ${choice.name}`}`).join("\n")}\n`);
     if (preview) ui.printError(await preview(choices));
-    if (!await ui.confirm("Move selected resources after verifying all destinations?", false)) throw cancelled();
+    const question = options.confirm === undefined ? "Move selected resources after verifying all destinations?"
+      : typeof options.confirm === "string" ? options.confirm : await options.confirm(choices);
+    if (!await ui.confirm(question, false)) throw cancelled();
     return choices;
   } catch (error) { if (error instanceof UiCancelled) throw cancelled(); throw error; }
 };

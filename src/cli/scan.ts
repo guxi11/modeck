@@ -1,8 +1,8 @@
-import { lstat, mkdir, open, rmdir, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rm, rmdir, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, extname, join } from "node:path";
 import { stringify } from "yaml";
-import { agents, LIMITS, modeError, sha256 } from "../contracts/index.js";
+import { agentDefinitions, agents, LIMITS, modeError, sha256 } from "../contracts/index.js";
 import type { Agent, ConfigContext, Kind } from "../contracts/index.js";
 import { loadConfig, parseConfig, parseManifest, resolve } from "../core/index.js";
 import { validateConfig } from "../core/config.js";
@@ -10,11 +10,10 @@ import { findConfigPath, readConfigFile } from "../core/config-file.js";
 import { atomic, checkDirectory, readImage, same } from "../integration/fs.js";
 import { loadRecord } from "../integration/install.js";
 import { readResources } from "../resources/index.js";
-import { exists, regularBytes, requireValue, safePath, utf8, within } from "../resources/fs.js";
+import { exists, missing, regularBytes, requireValue, safePath, utf8, within } from "../resources/fs.js";
 import { scanCatalogReferences, scanHome } from "../resources/scan.js";
 import type { ScannedResource } from "../resources/scan.js";
 import { snapshotLocal } from "../resources/tree.js";
-import { backupSkills, planBackups } from "./backup.js";
 import { addResourceBindings } from "./edit-config.js";
 import { choose, selections } from "./selection.js";
 import { presentAgents } from "./bind.js";
@@ -34,10 +33,40 @@ const imported = async (resource: ScannedResource, context: ConfigContext | null
         return (resource.kind === "rule" ? entry.rules : entry.skills).includes(id);
       })) return false;
     const paths = [join(context.configRoot, spec.source.path), join(homeRoot, resourcePath(spec.kind, id))];
-    if (!(await Promise.all(paths.map(exists))).every(Boolean)) return false;
+    // A destination occupied by a symbolic link is not readable resource content;
+    // treat it as not imported so the resource reaches the retained path instead of throwing.
+    const plain = await Promise.all(paths.map(async path => {
+      const info = await lstat(path).catch(error => { if (missing(error)) return null; throw error; });
+      return info !== null && !info.isSymbolicLink();
+    }));
+    if (!plain.every(Boolean)) return false;
     return (await Promise.all(paths.map(path => snapshotLocal(path, spec.kind)))).every(snapshot => snapshot.treeDigest === resource.treeDigest);
   }));
   return matches.some(Boolean);
+};
+
+// A destination path already held by a symbolic link (dangling or not) is a user-owned
+// reference; the resource is retained instead of migrated so the link is never clobbered.
+const occupiedLink = async (resource: ScannedResource, roots: { readonly homeRoot: string; readonly root: string }): Promise<string | null> => {
+  const destinations = [...new Set([join(roots.homeRoot, resourcePath(resource.kind, resource.id)), join(roots.root, resourcePath(resource.kind, resource.id))])];
+  for (const destination of destinations) {
+    const info = await lstat(destination).catch(error => { if (missing(error)) return null; throw error; });
+    if (info?.isSymbolicLink()) return destination;
+  }
+  return null;
+};
+
+// Whole-directory removal refuses any catalog that still holds symbolic-link entries,
+// so retained references can never be deleted by consenting to the removal prompt.
+const hasSymlinkEntry = async (directory: string, depth: number): Promise<boolean> => {
+  if (depth > LIMITS.scanDepth) return true;
+  const names = await readdir(directory);
+  return names.reduce(async (pending, name) => {
+    if (await pending) return true;
+    const info = await lstat(join(directory, name));
+    if (info.isSymbolicLink()) return true;
+    return info.isDirectory() && hasSymlinkEntry(join(directory, name), depth + 1);
+  }, Promise.resolve(false));
 };
 
 export const migrateHome = async (cwd: string, home: string, options: HomeMigrationOptions, initial = false): Promise<unknown> => {
@@ -62,25 +91,63 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
   requireValue(context || !await exists(autoPath), "E_PATH", "modeck-auto.mjs already exists without a modeck configuration");
   const scan = await scanHome(home, selectedAgents);
   const referenceScan = await scanCatalogReferences(home);
-  const pending = (await Promise.all(scan.resources.map(async resource => await imported(resource, context, homeRoot) ? [] : [resource]))).flat();
+  const scanned = (await Promise.all(scan.resources.map(async resource => await imported(resource, context, homeRoot) ? [] : [resource]))).flat();
+  const occupancies = await Promise.all(scanned.map(async resource => ({ resource, link: await occupiedLink(resource, { homeRoot, root }) })));
+  // Destinations already held by a symbolic link are user-owned references: retained, never migrated.
+  const retainedLinks = occupancies.filter(item => item.link !== null)
+    .map(item => ({ id: item.resource.id, path: item.link!, reason: "Destination is an existing symbolic link; retained without migration" }));
+  const pending = occupancies.filter(item => item.link === null).map(item => item.resource);
   const discovered = { ...scan, resources: pending };
-  if (options.list) return { ...discovered, configRoot: root, homeRoot, agents: selectedAgents };
+  if (options.list) return { ...discovered, retained: retainedLinks, configRoot: root, homeRoot, agents: selectedAgents };
   if (!pending.length && (!initial || context)) {
     const message = "No new rules or skills found; no changes made.";
-    return { configRoot: root, homeRoot, agents: selectedAgents, resources: [], message };
+    return { configRoot: root, homeRoot, agents: selectedAgents, resources: [], retained: retainedLinks, message };
   }
+  // Whole-directory removal candidates: scanned agent skills catalogs that are real, owned,
+  // unprotected, hold no symbolic links or excluded entries, and whose every resource is selected.
+  const removalTargets = async (selectedIds: readonly string[]): Promise<readonly string[]> => {
+    const selected = new Set(selectedIds);
+    const protectedRoots = [root, homeRoot, join(root, ".modeck"), join(home, ".local/share/modeck/v1")];
+    const catalogs = [...new Set(selectedAgents.flatMap(agent => agentDefinitions[agent].scanDirectories))].map(dir => join(home, dir, "skills"));
+    const direct = [...new Set(scan.resources.filter(resource => selected.has(resource.id) && resource.kind === "skill")
+      .flatMap(resource => resource.sources.map(source => dirname(source))))].filter(dir => catalogs.includes(dir));
+    return (await Promise.all(direct.map(async dir => {
+      try {
+        if (protectedRoots.some(path => within(path, dir) || within(dir, path))) return null;
+        if (!scan.resources.every(resource => [...resource.sources, ...resource.aliases]
+          .every(path => !within(dir, path) || selected.has(resource.id)))) return null;
+        if (scan.excluded.some(item => within(dir, item.path))) return null;
+        if (!scan.resources.some(resource => selected.has(resource.id)
+          && [...resource.sources, ...resource.aliases].some(path => within(dir, path)))) return null;
+        const info = await lstat(dir);
+        if (info.isSymbolicLink() || !info.isDirectory() || info.uid !== process.getuid?.() || await realpath(dir) !== dir) return null;
+        if (await hasSymlinkEntry(dir, 0)) return null;
+      } catch { return null; }
+      return dir;
+    }))).filter((dir): dir is string => dir !== null);
+  };
   if (!options.answers) process.stderr.write(`\nResources · ${pending.filter(item => item.kind === "rule").length} rules · ${pending.filter(item => item.kind === "skill").length} skills\n`
     + `Configuration: ${root}\n${scan.excluded.length} excluded · ${scan.resources.length - pending.length} already imported\n\n`);
+  // Captured by the end confirm: non-empty exactly when the question offered whole-directory
+  // removal and the user proceeded, so consent is recorded before anything is written.
+  let confirmedRemoval: readonly string[] = [];
   const choices = !pending.length ? [] : await selections(discovered, options.answers, async selected => {
-    const plan = await planBackups(scan, selected.map(choice => choice.id), root, true, referenceScan);
-    return `Destinations (copied and verified first)\n  ${homeRoot}\n  ${root}\n\n`
-      + `Back up ${plan.entries.length} native entries\n  ${join(root, ".modeck", "backups")}/<batch>\n`
-      + plan.entries.map(item => `  ${item.source}`).join("\n")
-      + `\n\nRetain ${plan.skipped.length} managed/shared entries\n`
-      + plan.skipped.map(item => `  ${item.path}\n    ${item.reason}`).join("\n");
-  }, !initial);
-  if (!choices.length && (pending.length || context)) return { configRoot: root, homeRoot, resources: [], message: "No resources selected; no changes made." };
-  const backupPlan = await planBackups(scan, choices.map(choice => choice.id), root, true, referenceScan);
+    const dirs = await removalTargets(selected.map(choice => choice.id));
+    return `Destinations (copied and verified first)\n  ${homeRoot}\n  ${root}\n`
+      + (retainedLinks.length ? `\nRetain ${retainedLinks.length} entries whose destination is an existing link\n`
+        + retainedLinks.map(item => `  ${item.path}\n    ${item.reason}`).join("\n") + "\n" : "")
+      + (dirs.length ? `\nRemove after verification\n  ${dirs.join("\n  ")}\n` : "");
+  }, {
+    rename: false,
+    confirm: async selected => {
+      const dirs = await removalTargets(selected.map(choice => choice.id));
+      confirmedRemoval = dirs;
+      return dirs.length
+        ? "Remove the entire source directory after verifying all destinations?"
+        : "Import selected resources after verifying all destinations?";
+    },
+  });
+  if (!choices.length && (pending.length || context)) return { configRoot: root, homeRoot, resources: [], retained: retainedLinks, message: "No resources selected; no changes made." };
   const modes = context ? context.config.defaults : ["base"];
   requireValue(modes.length > 0, "E_CONFIG", "Configuration must define default modes before importing home resources");
   const resources = { rules: {} as Record<string, string>, skills: {} as Record<string, string> };
@@ -93,7 +160,12 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
     const snapshot = await snapshotLocal(resource.sources[0]!, resource.kind);
     requireValue(snapshot.treeDigest === resource.treeDigest, "E_INTEGRITY", "Resource changed after discovery", { id: resource.id });
     const destinations = [...new Set([join(homeRoot, path), join(root, path)])];
-    requireValue(resource.sources.every(source => destinations.every(destination => !within(source, destination) && !within(destination, source))),
+    // A source already at a destination is content living inside the catalog (typically an
+    // agent catalog symlinked into the configuration root): the same-digest check downstream
+    // accepts the existing copy and the native entry is retained. Strict containment either
+    // way would copy or remove a tree inside itself and stays rejected.
+    requireValue(resource.sources.every(source => destinations.every(destination =>
+      source === destination || !within(source, destination) && !within(destination, source))),
       "E_PATH", "Migration source and destination overlap", { id: resource.id });
     resources[resource.kind === "rule" ? "rules" : "skills"][choice.name] = path;
     return { resource, snapshot, destinations };
@@ -197,7 +269,15 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
     await validateConfig(imported);
     const currentRecords = await Promise.all(selectedAgents.map(agent => loadRecord(home, agent)));
     requireValue(JSON.stringify(currentRecords) === JSON.stringify(records), "E_PLAN_STALE", "Agent bindings changed during migration");
-    requireValue((await scanHome(home, selectedAgents)).scanDigest === scan.scanDigest,
+    // Our own catalog writes are visible through symlinked agent catalogs, so the fresh scan
+    // legitimately gains aliases for imported resources; drift is fatal only when it touches
+    // anything other than the original resources (unchanged) and this migration's imports.
+    const fresh = await scanHome(home, selectedAgents);
+    const known = new Set(scan.resources.map(resource => resource.id));
+    requireValue(scan.resources.every(resource => fresh.resources.some(item => item.id === resource.id && item.treeDigest === resource.treeDigest)),
+      "E_PLAN_STALE", "Native resources or ownership manifests changed during migration; scan again");
+    requireValue(fresh.resources.every(item => known.has(item.id)
+      || imports.some(({ resource, snapshot }) => resource.id === item.id && snapshot.treeDigest === item.treeDigest)),
       "E_PLAN_STALE", "Native resources or ownership manifests changed during migration; scan again");
     const verifyReferences = async (): Promise<void> => {
       check();
@@ -206,9 +286,28 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
       check();
     };
     await verifyReferences();
-    const backups = await backupSkills(root, backupPlan, verifyReferences);
     // From here onward keep the verified copies even if reporting or cleanup fails.
     preserve = true;
+    // Consent was captured by the end confirm: it asks to remove the entire source directory
+    // exactly when candidates exist, and "No" cancels before anything runs. Only directories
+    // that still pass every removal gate are deleted; refusals are reported, never fatal.
+    const removed: string[] = [];
+    const consented = options.answers ? [] : [...confirmedRemoval];
+    const candidates = (await removalTargets(choices.map(choice => choice.id))).filter(dir => consented.includes(dir));
+    await candidates.reduce(async (pendingDir, dir) => {
+      await pendingDir; check();
+      try {
+        const info = await lstat(dir);
+        requireValue(info.isDirectory() && !info.isSymbolicLink() && info.uid === process.getuid?.(),
+          "E_PATH", "Source directory is not an owned real directory", { path: dir });
+        requireValue(await realpath(dir) === dir, "E_PATH", "Source directory resolves across a symbolic link", { path: dir });
+        await rm(dir, { recursive: true, force: false });
+        removed.push(dir);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`modeck: refused to remove ${dir}: ${reason.replace(/\p{Cc}/gu, " ").trim()}\n`);
+      }
+    }, Promise.resolve());
     const stagedIdentity = files.find(file => file.path === staged)!;
     await (async () => {
       await safePath(staged);
@@ -217,7 +316,7 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
         && sha256((await regularBytes(staged, LIMITS.jsonBytes)).bytes) === stagedIdentity.digest) await unlink(staged);
     })().catch(() => undefined);
     return { configRoot: root, homeRoot, agents: selectedAgents, resources: choices.map(choice => choice.name),
-      backupDirectory: backups.directory, backups: backups.entries, retained: backupPlan.skipped };
+      retained: retainedLinks, removed };
   } catch (error) {
     if (installed && !preserve) {
       const current = await readImage(configPath, LIMITS.jsonBytes);
