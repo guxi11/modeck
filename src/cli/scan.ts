@@ -17,6 +17,7 @@ import { snapshotLocal } from "../resources/tree.js";
 import { backupSkills, planBackups } from "./backup.js";
 import { addResourceBindings } from "./edit-config.js";
 import { choose, selections } from "./selection.js";
+import { presentAgents } from "./bind.js";
 import { projectRootFor } from "./config.js";
 
 export type HomeMigrationOptions = {
@@ -42,8 +43,11 @@ const imported = async (resource: ScannedResource, context: ConfigContext | null
 export const migrateHome = async (cwd: string, home: string, options: HomeMigrationOptions, initial = false): Promise<unknown> => {
   await safePath(home);
   await checkDirectory(home);
-  const selectedAgents = options.agent ? [options.agent] : options.list ? agents
-    : await choose("Scan · Select agents", agents.map(agent => ({ name: agent, value: agent })));
+  const selectedAgents = options.agent ? [options.agent] : options.list ? agents : await (async () => {
+    const offered = await presentAgents(home);
+    requireValue(offered.length > 0, "E_CONFIG", "No installed agents or existing bindings found; install an agent CLI before scanning");
+    return choose("Scan · Select agents (installed on this machine)", offered.map(({ agent }) => ({ name: agent, value: agent })));
+  })();
   if (!selectedAgents.length) return { resources: [], message: "No agents selected; no changes made." };
   const records = await Promise.all(selectedAgents.map(agent => loadRecord(home, agent)));
   const root = await safePath(initial ? options.configRoot ?? cwd : await projectRootFor(home, cwd, options.configRoot));

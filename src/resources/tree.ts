@@ -57,7 +57,8 @@ export const snapshotLocal = async (root: string, kind: Kind): Promise<Snapshot>
     requireValue(depth <= LIMITS.scanDepth, "E_LIMIT", "Resource directory depth exceeded");
     const directory = relative ? childPath(root, relative) : root;
     await safePath(directory);
-    const names = (await readdir(directory)).sort(compare);
+    // VCS metadata is not resource content (Git sources never include it either); skip a cloned skill's .git.
+    const names = (await readdir(directory)).filter(name => name.toLowerCase() !== ".git").sort(compare);
     requireValue(state.directories.length + state.files.length + names.length <= LIMITS.treeEntries,
       "E_LIMIT", "Resource entry limit exceeded");
     return names.reduce(async (pending, name) => {

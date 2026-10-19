@@ -2,13 +2,13 @@ import { constants } from "node:fs";
 import { access, lstat, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { agentDefinitions, agents, modeError } from "../contracts/index.js";
-import type { Agent } from "../contracts/index.js";
+import type { Agent, BindRecord } from "../contracts/index.js";
 import { createUi, UiCancelled } from "./ui.js";
 import type { Ui } from "./ui.js";
 import { missing } from "../integration/fs.js";
 import { loadRecord } from "../integration/install.js";
 
-export const installed = async (home: string, agent: Agent): Promise<boolean> => {
+const installed = async (home: string, agent: Agent): Promise<boolean> => {
   const directory = await lstat(join(home, agentDefinitions[agent].configDirectory)).catch(error => {
     if (missing(error)) return null;
     throw error;
@@ -24,13 +24,18 @@ export const installed = async (home: string, agent: Agent): Promise<boolean> =>
   }))).some(Boolean);
 };
 
+// Agents worth offering for selection: installed on this machine, or still bound so they can be managed after uninstall.
+export const presentAgents = async (home: string): Promise<readonly { readonly agent: Agent; readonly record: BindRecord | null }[]> =>
+  (await Promise.all(agents.map(async agent => {
+    const record = await loadRecord(home, agent);
+    return record || await installed(home, agent) ? [{ agent, record }] : [];
+  }))).flat();
+
 export const selectAgents = async (operation: "bind" | "unbind" | "render", home: string, ui: Ui = createUi()): Promise<readonly Agent[]> => {
   if (!process.stdin.isTTY || !process.stderr.isTTY) throw modeError("E_USAGE", `${operation} requires a TTY for selection; use --agent <${agents.join("|")}>`);
-  const candidates = (await Promise.all(agents.map(async agent => {
-    const record = await loadRecord(home, agent);
-    if (operation === "unbind" ? !record : !record && !await installed(home, agent)) return [];
-    return [{ value: agent, name: `${agent} — ${record ? `bound to ${record.configRoot}` : "not bound"}`, checked: false }];
-  }))).flat();
+  const candidates = (await presentAgents(home))
+    .filter(({ record }) => operation !== "unbind" || record)
+    .map(({ agent, record }) => ({ value: agent, name: `${agent} — ${record ? `bound to ${record.configRoot}` : "not bound"}`, checked: false }));
   if (!candidates.length) {
     if (operation === "render") throw modeError("E_USAGE", `No installed or bound agents found; use --agent <${agents.join("|")}>`);
     ui.printError(`No ${operation === "bind" ? "installed agents" : "modeck bindings"} found in ${home}; no changes made.`);

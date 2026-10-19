@@ -9,7 +9,7 @@ import { atomic, checkDirectory, digest, ensureParents, imageJson, jsonImage, mi
 import { loadRegistry, registryPath, registryRoot } from "../integration/registry.js";
 import { prepare } from "../integration/prepare.js";
 import { choose } from "./selection.js";
-import { installed } from "./bind.js";
+import { presentAgents } from "./bind.js";
 import { createUi } from "./ui.js";
 import type { Ui } from "./ui.js";
 
@@ -87,13 +87,7 @@ const answersFor = async (home: string, answers: string | undefined, before: Sna
   }
   const configs = before.registry.projects.length ? await choose("1/2 · Enable configuration projects (registration order)",
     before.registry.projects.map(project => ({ name: project.root, value: project.root, checked: project.enabled })), ui) : [];
-  // Only agents installed on this machine (or already bound, so they can be unbound) are offered.
-  const offered = (await Promise.all(agents.map(async (agent, index) => {
-    if (before.records[index] !== null || await installed(home, agent)) {
-      return [{ name: agent, value: agent, checked: before.records[index] !== null }];
-    }
-    return [];
-  }))).flat();
+  const offered = (await presentAgents(home)).map(({ agent, record }) => ({ name: agent, value: agent, checked: record !== null }));
   if (!offered.length) {
     throw modeError("E_CONFIG", "No installed agents or existing bindings found; install an agent CLI before binding");
   }

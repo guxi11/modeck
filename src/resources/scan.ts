@@ -28,6 +28,14 @@ export type CatalogReferenceScan = {
     readonly ino: number; readonly dev: number; readonly mtime: number; readonly ctime: number }[];
   readonly referenceDigest: string;
 };
+// VCS metadata and dependency trees are never catalog entries; drop them before path validation instead of traversing.
+const catalogEntries = async (directory: string): Promise<readonly string[]> =>
+  (await readdir(directory)).filter(name => ![".git", "node_modules"].includes(name.toLowerCase())).sort(compare);
+// Resolve a catalog link, yielding null for dangling or looping links.
+const target = (path: string): Promise<string | null> => realpath(path).catch(error => {
+  if (error instanceof Error && "code" in error && ["ENOENT", "ENOTDIR", "ELOOP"].includes(String(error.code))) return null;
+  throw error;
+});
 
 // Enumerate references without reading resource contents; canonical directory visits bound aliases and cycles.
 export const scanCatalogReferences = async (home: string): Promise<CatalogReferenceScan> => {
@@ -44,10 +52,7 @@ export const scanCatalogReferences = async (home: string): Promise<CatalogRefere
     if (info.isSymbolicLink()) {
       const link = await readlink(path);
       requireValue(link.length <= LIMITS.pathLength, "E_SCAN_LIMIT", "Catalog reference path is too long", { path });
-      const source = await realpath(path).catch(error => {
-        if (error instanceof Error && "code" in error && ["ENOENT", "ENOTDIR", "ELOOP"].includes(String(error.code))) return null;
-        throw error;
-      });
+      const source = await target(path);
       const after = await lstat(path);
       requireValue(after.ino === info.ino && after.dev === info.dev && after.mtimeMs === info.mtimeMs && after.ctimeMs === info.ctimeMs,
         "E_PLAN_STALE", "Catalog reference changed while scanning", { path });
@@ -63,7 +68,7 @@ export const scanCatalogReferences = async (home: string): Promise<CatalogRefere
     const key = `${path}\0${children?.join(",") ?? "*"}`;
     if (traversed.has(key) || traversed.has(`${path}\0*`)) return;
     traversed.add(key);
-    const names = children ?? (await readdir(path)).sort(compare);
+    const names = children ?? await catalogEntries(path);
     requireValue(visited + names.length <= LIMITS.scanEntries, "E_SCAN_LIMIT", "Catalog reference scan limit exceeded");
     await names.reduce(async (pending, name) => {
       await pending; checkRelativePath(name, false);
@@ -121,7 +126,8 @@ const scanCatalog = async (home: string, project: boolean, agents?: readonly Age
   };
   const walk = async (alias: string, kind: Kind, ancestors: readonly string[] = []): Promise<void> => {
     if (!await exists(alias)) return;
-    const source = await realpath(alias);
+    const source = await target(alias);
+    if (source === null) { excluded.push({ path: alias, reason: "Dangling or looping catalog link; excluded without traversal" }); return; }
     if (kind === "skill" && [alias, source].some(path => path === join(root, ".codex/skills/.system")
       || path.startsWith(`${join(root, ".codex/skills/.system")}/`))) {
       excluded.push({ path: alias, reason: "Codex built-in skills; retained without traversal" }); return;
@@ -143,7 +149,7 @@ const scanCatalog = async (home: string, project: boolean, agents?: readonly Age
     }
     // Claude loads direct skill directories, not nested catalog groups.
     if (project && ancestors.length > 0 && alias.startsWith(`${join(root, ".claude", "skills")}/`)) return;
-    const names = (await readdir(source)).sort(compare);
+    const names = await catalogEntries(source);
     requireValue(visited + names.length <= LIMITS.scanEntries, "E_SCAN_LIMIT", "Catalog scan limit exceeded");
     visited += names.length;
     await names.reduce(async (pending, name) => {
