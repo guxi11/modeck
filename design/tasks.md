@@ -87,7 +87,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/modeck.mjs`�
 **I3：最小安装与卸载。**
 
 - target-home必填且表示HOME根，产品允许用户显式target-home+apply安装真实HOME；本次所有调用仅用隔离目录。Codex写`.codex/hooks.json`，Claude写`.claude/settings.json`，不安装入口skill；旧入口仅按record完整校验后清理。record/runtime/lock按`.modeck/<agent>/`隔离，两agent可共存。默认preview无写；apply的expect可选，提供时匹配当前planDigest，未提供时执行本次重建并复验的计划。预览包含完整JSON合并差异，未知共享字段/其他hooks保留。
-- standalone JS runtime保留最小包布局（dist/bin入口、3schema、package.json），schema/版本从入口URL定位；不能只复制bundle后丢失数据。精确InstallRecord所有权；拒绝evoloop标记/symlink/无record同名文件，不能force覆盖。
+- standalone JS runtime保留最小包布局（dist/bin入口、3schema、package.json），schema/版本从入口URL定位；不能只复制bundle后丢失数据。精确InstallRecord所有权；拒绝symlink/无record同名文件，不能force覆盖。
 - exclusive锁+前置摘要/权限/路径复验+逐文件原子替换+record最后；原字节和权限仅为可捕获异常保存在进程内，失败逆序回滚，第三方新编辑不覆盖。保持共享文件完整权限，0600不能扩大为0644，record/lock/临时文件0600、私有目录0700。不实现持久crash journal、重放或恢复授权；残留lock/孤立文件/manifest漂移报冲突，不能声称多文件原子或crash自动恢复。卸载只动完整未改owned文件与精确自身hook组，保留他人后续编辑，缺失或篡改冲突而非全目录删除。
 - 同包重复install应空变化；无record且无本工具遗留文件的卸载为空变化，发现孤立文件仍报冲突；卸载不删state/config/CAS。包内资源路径必须在npm pack tarball安装后也成立。
 
@@ -111,7 +111,7 @@ package最低契约：Node>=20、ESM/strict TS，bin指向`dist/bin/modeck.mjs`�
 | hook | JSON shape、15秒timeout、Codex信任警告、Claude首轮等待依据、失败不保证阻断；compact不被旧标记吞掉 |
 | hook预载 | 隔离HOME下验证hook直接调用统一CLI，tarball/runtime/原生skills目录无新入口skill；旧owned入口安全清理，用户手写/漂移同名skill保留 |
 | wrapper | baseline不丢、cwd不分叉、unknown/替换prompt参数拒绝、marker不双注入、--no-daemon、stdin/exit/signals真实进程行为 |
-| 安装安全 | preview零写、expect可选且提供时校验、symlink/evoloop拒绝、重复安装零变化、第三方JSON保留、own漂移不删、进程内失败回滚、崩溃残留只报冲突；全部实际调用仅在隔离HOME验证 |
+| 安装安全 | preview零写、expect可选且提供时校验、symlink拒绝、重复安装零变化、第三方JSON保留、own漂移不删、进程内失败回滚、崩溃残留只报冲突；全部实际调用仅在隔离HOME验证 |
 | 分发 | pack含所有exports/standalone bundle/3schema，不含入口skill；临时安装bin可启动，无源码/node_modules路径泄漏 |
 
 白板hard把发现回派所属owner，禁止越区直接改。最终验收记录由上游按需求另行授权保存；本次只写两份设计。协议与argv已验证但没有真实付费请求时，交付必须明确“未验证真实模型加载/缓存命中”，不能把digest或CLI参数当KV缓存证明。
