@@ -31,11 +31,16 @@ const skillRoot = async (stateRoot: string, name: string, snapshot: Snapshot, le
   const temporary = await mkdtemp(join(base, ".stage-"));
   try {
     await writeSnapshot(snapshot, temporary, true);
+    // Reopen the staging root for the move: macOS rename(2) requires write access to a directory being renamed.
+    await chmod(temporary, 0o700);
     await safePath(base);
-    try { await rename(temporary, target); }
+    let renamed = false;
+    try { await rename(temporary, target); renamed = true; }
     catch (error) {
       if (!(error instanceof Error && "code" in error && ["EEXIST", "ENOTEMPTY"].includes(String(error.code)))) throw error;
     }
+    // Apply the published read-only root only to the tree this process moved.
+    if (renamed) await chmod(target, 0o555);
     // Recheck the winner when another process publishes the same short path.
     return await skillRoot(stateRoot, name, snapshot, length);
   } finally { await removeTemporary(temporary); }
@@ -83,10 +88,12 @@ export const publishObject = async (stateRoot: string, manifestResource: Manifes
     await writeSnapshot(snapshot, join(temporary, "tree"), true);
     await writeFile(join(temporary, "manifest.json"), `${canonical(snapshot.entries)}\n`, { flag: "wx", mode: 0o444 });
     await chmod(join(temporary, "manifest.json"), 0o444);
-    await chmod(temporary, 0o555);
     await safePath(base);
-    try { await rename(temporary, target); }
+    let renamed = false;
+    try { await rename(temporary, target); renamed = true; }
     catch (error) { if (!await exists(target)) throw error; }
+    // Apply the read-only object root only after the move: macOS rename(2) requires write access to the directory being renamed.
+    if (renamed) await chmod(target, 0o555);
     return await readObject(stateRoot, manifestResource);
   } finally { await removeTemporary(temporary); }
 };

@@ -288,7 +288,7 @@ export const main = async (argv: string[]): Promise<number> => {
     if (caught instanceof UiCancelled) return 130;
     const error = caught instanceof Error && "code" in caught && String(caught.code).startsWith("E_") ? caught as ModeError
       : modeError("E_IO", "Operation failed");
-    const safeDetails = ["agent", "configRoot", "cwd", "path", "target", "name", "key"].flatMap(key => {
+    const safeDetails = ["agent", "configRoot", "cwd", "path", "target", "name", "key", "cause"].flatMap(key => {
       const value = error.details[key];
       return typeof value === "string" && value.length <= 500 && !/[\r\n]/u.test(value) ? [`${key}: ${value}`] : [];
     });
