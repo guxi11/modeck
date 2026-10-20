@@ -4,7 +4,7 @@ import { join, resolve as absolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agents, isAgent, LIMITS, modeError, parseJson } from "../contracts/index.js";
 import type { Agent, ModeError } from "../contracts/index.js";
-import { evaluateModes } from "./eval.js";
+import { describeModes, evaluateModes } from "./eval.js";
 import { manageResources } from "./resource.js";
 import { mcpStaticCommand } from "./mcp-static.js";
 import { initialize } from "./init.js";
@@ -14,7 +14,7 @@ import { configRootFor, projectRootFor } from "./config.js";
 import { manageConfig } from "./manage-config.js";
 import { configRoots } from "../integration/registry.js";
 import { loadRecord } from "../integration/install.js";
-import { selectAgents } from "./bind.js";
+import { selectRenderAgent } from "./bind.js";
 import { encodeHook, prepare } from "../integration/index.js";
 import { imageJson, object, readImage, safeAbsolute } from "../integration/fs.js";
 import { parseEvent } from "../integration/hooks.js";
@@ -42,7 +42,7 @@ const commandHelp: Readonly<Record<string, string>> = {
     + "Ignore existing .modes and evaluate configured auto selectors, defaults and inheritance.\n"
     + "Uses enabled registered configurations unless --config is supplied; --cwd defaults to the current directory.\n"
     + "Read-only: reports mode IDs, sources and reasons without installing resources or creating state.\n"
-    + "Compares the automatic result with the actual current .modes selection; a non-empty .modes disables auto-detected modes while defaults and inheritance still apply.\n"
+    + "Compares the automatic result with the actual current .modes selection; a non-empty .modes disables auto-detected modes unless it starts with +, which appends its modes to them. Defaults and inheritance always apply.\n"
     + "Auto selectors execute as trusted user code. --state only identifies a directory to exclude from project facts.\n",
   resolve: "Usage: modeck resolve [--config <dir>] [--cwd <dir>] [--state <dir>] [--format <text|json>] [-h|--help]\n\n"
     + "Explain the final modes, plugins, rules and skills selected for the current directory, including each mode's selection reason.\n"
@@ -103,20 +103,20 @@ const agentFor = (opts: Readonly<Record<string, string | boolean>>): Agent => {
 const pathFor = async (value: string): Promise<string> => safeAbsolute(absolute(value));
 const json = (value: unknown): void => { process.stdout.write(`${JSON.stringify(value)}\n`); };
 const items = (value: unknown): readonly unknown[] => Array.isArray(value) ? value : [];
+// Registry plans prefix IDs with their config digest; show bare names and add a digest only when a name is ambiguous.
 const resolvedIdLabels = (ids: readonly string[]): ReadonlyMap<string, string> => {
-  const hashes = [...new Set(ids.flatMap(id => {
-    const match = /^([0-9a-f]{64}):/u.exec(id);
-    return match ? [match[1]!] : [];
-  }))];
+  const parsed = [...new Set(ids)].flatMap(id => {
+    const match = /^([0-9a-f]{64}):(.*)$/u.exec(id);
+    return match ? [{ id, hash: match[1]!, name: match[2]! }] : [];
+  });
+  const ambiguous = (item: typeof parsed[number]): boolean => parsed.some(other => other.name === item.name && other.hash !== item.hash);
+  const hashes = [...new Set(parsed.filter(ambiguous).map(item => item.hash))];
   const lengths = new Map(hashes.map(hash => [hash, 8]));
   while (hashes.some(hash => hashes.some(other => hash !== other
     && hash.slice(0, lengths.get(hash)!) === other.slice(0, lengths.get(hash)!)))) {
     hashes.forEach(hash => lengths.set(hash, Math.min(64, lengths.get(hash)! + 4)));
   }
-  return new Map(ids.flatMap(id => {
-    const match = /^([0-9a-f]{64}):(.*)$/u.exec(id);
-    return match ? [[id, `${match[2]} [${match[1]!.slice(0, lengths.get(match[1]!)!)}]`] as const] : [];
-  }));
+  return new Map(parsed.map(item => [item.id, ambiguous(item) ? `${item.name} [${item.hash.slice(0, lengths.get(item.hash)!)}]` : item.name] as const));
 };
 const reportImport = (command: string, value: unknown, ui: Ui): void => {
   const result = object(value);
@@ -247,8 +247,7 @@ export const main = async (argv: string[]): Promise<number> => {
     }
     if (command === "render" && format === "json" && opts.agent === undefined) throw modeError("E_USAGE", `Choose an agent with --agent ${agentChoices}; JSON output cannot prompt`);
     const selectedAgent = command === "resolve" ? "codex" : opts.agent !== undefined ? agentFor(opts)
-      : command === "render" ? (await selectAgents("render", await pathFor(homedir()), ui))[0] : undefined;
-    if (command === "render" && !selectedAgent) return 0;
+      : command === "render" ? await selectRenderAgent(await pathFor(homedir()), ui) : undefined;
     const { configRoot, stateRoot } = await configured(false, selectedAgent);
     if (command === "hook") {
       const agent = agentFor(opts);
@@ -273,19 +272,16 @@ export const main = async (argv: string[]): Promise<number> => {
           ...plan.pluginIds,
           ...plan.reasons.flatMap(reason => [reason.mode, ...(reason.from === null ? [] : [reason.from])])]);
         const label = (id: string): string => labels.get(id) ?? id;
-        const ordered = (ids: readonly string[]): string => ids.length ? ids.map((id, index) => `${index + 1}. ${label(id)}`).join("\n") : "(none)";
-        const rules = plan.resources.filter(resource => resource.kind === "rule").map(resource => resource.id);
-        const skills = plan.resources.filter(resource => resource.kind === "skill").map(resource => resource.id);
-        ui.section(`Resolved context · ${plan.modeIds.length} mode${plan.modeIds.length === 1 ? "" : "s"}`,
-          [`Directory: ${plan.cwd}`, `Boundary: ${plan.boundary}`, `Selector: ${plan.selectorPath ?? "(none; defaults and auto)"}`].join("\n"));
-        ui.section(`Modes · ${plan.modeIds.length}`, ordered(plan.modeIds));
-        ui.section(`Selected plugins · ${plan.pluginIds.length}`, ordered(plan.pluginIds));
-        ui.section(`Rules · ${rules.length}`, ordered(rules));
-        ui.section(`Skills · ${skills.length}`, ordered(skills));
-        if (plan.reasons.length) ui.section("Selection reasons", plan.reasons.map(reason =>
-          `  ${label(reason.mode)}: ${reason.via}${reason.from === null ? "" : ` (${label(reason.from)})`}`).join("\n"));
-        if (plan.diagnostics.length) ui.section("Diagnostics", plan.diagnostics.map(item =>
-          `  ${item.code}: ${item.message}${item.path ? ` (${item.path})` : ""}`).join("\n"));
+        const names = (ids: readonly string[]): string => ids.map(label).join(", ") || "(none)";
+        const ofKind = (kind: string): readonly string[] => plan.resources.filter(resource => resource.kind === kind).map(resource => resource.id);
+        const [rules, skills] = [ofKind("rule"), ofKind("skill")];
+        ui.section(`Resolved: ${plan.cwd}`, [
+          ...plan.boundary === plan.cwd ? [] : [`Boundary: ${plan.boundary}`],
+          `Selector: ${plan.selectorPath ?? "none (auto)"}`,
+          `Modes: ${describeModes(plan.modeIds, plan.reasons, label)}`,
+          ...plan.pluginIds.length ? [`Plugins (${plan.pluginIds.length}): ${names(plan.pluginIds)}`] : [],
+          `Rules (${rules.length}): ${names(rules)}`, `Skills (${skills.length}): ${names(skills)}`,
+          ...plan.diagnostics.map(item => `${item.code}: ${item.message}${item.path ? ` (${item.path})` : ""}`)].join("\n"));
       }
     }
     else if (format === "json") {

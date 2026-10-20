@@ -3,7 +3,7 @@ import { access, lstat, stat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { agentDefinitions, agents, modeError } from "../contracts/index.js";
 import type { Agent, BindRecord } from "../contracts/index.js";
-import { createUi, UiCancelled } from "./ui.js";
+import { createUi } from "./ui.js";
 import type { Ui } from "./ui.js";
 import { missing } from "../integration/fs.js";
 import { loadRecord } from "../integration/install.js";
@@ -31,24 +31,15 @@ export const presentAgents = async (home: string): Promise<readonly { readonly a
     return record || await installed(home, agent) ? [{ agent, record }] : [];
   }))).flat();
 
-export const selectAgents = async (operation: "bind" | "unbind" | "render", home: string, ui: Ui = createUi()): Promise<readonly Agent[]> => {
-  if (!process.stdin.isTTY || !process.stderr.isTTY) throw modeError("E_USAGE", `${operation} requires a TTY for selection; use --agent <${agents.join("|")}>`);
-  const candidates = (await presentAgents(home))
-    .filter(({ record }) => operation !== "unbind" || record)
-    .map(({ agent, record }) => ({ value: agent, name: `${agent} — ${record ? `bound to ${record.configRoot}` : "not bound"}`, checked: false }));
-  if (!candidates.length) {
-    if (operation === "render") throw modeError("E_USAGE", `No installed or bound agents found; use --agent <${agents.join("|")}>`);
-    ui.printError(`No ${operation === "bind" ? "installed agents" : "modeck bindings"} found in ${home}; no changes made.`);
-    return [];
-  }
-  try {
-    const selected = await ui.checkbox<Agent>(`Select ${operation === "render" ? "one agent" : "agents"} to ${operation} (${home})`, candidates,
-      operation === "render" ? { validate: items => items.length === 1 || "Select exactly one agent to render" } : {});
-    if (!selected.length) ui.printError("No agents selected; no changes made.");
-    return selected;
-  } catch (error) {
-    if (!(error instanceof UiCancelled)) throw error;
-    ui.printError("Selection cancelled; no changes made.");
-    return [];
-  }
+// Render targets exactly one agent: bound agents come first and the first of them is preselected.
+export const selectRenderAgent = async (home: string, ui: Ui = createUi()): Promise<Agent> => {
+  const usage = `use --agent <${agents.join("|")}>`;
+  const present = await presentAgents(home);
+  const ordered = [...present.filter(({ record }) => record), ...present.filter(({ record }) => !record)];
+  const [first] = ordered;
+  if (!first) throw modeError("E_USAGE", `No installed or bound agents found; ${usage}`);
+  if (ordered.length === 1) return first.agent;
+  if (!process.stdin.isTTY || !process.stderr.isTTY) throw modeError("E_USAGE", `render requires a TTY for selection; ${usage}`);
+  return ui.select("Agent to render",
+    ordered.map(({ agent, record }) => ({ value: agent, name: `${agent} — ${record ? `bound to ${record.configRoot}` : "not bound"}` })), first.agent);
 };

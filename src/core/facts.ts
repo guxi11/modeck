@@ -51,7 +51,8 @@ const selectorAt = async (cwd: string, boundary: string): Promise<ProjectFacts["
     let text: string;
     try { text = utf8(bytes).replace(/^\uFEFF/u, "").trim(); }
     catch { throw modeError("E_SELECTOR", "Selector must contain valid UTF-8", { path }); }
-    return { path, value: parseSelector(text) };
+    try { return { path, value: parseSelector(text) }; }
+    catch (error) { throw modeError("E_SELECTOR", error instanceof Error ? error.message : String(error), { path }); }
   } catch (error) {
     if (!isMissing(error)) throw error;
     return cwd === boundary ? null : selectorAt(dirname(cwd), boundary);

@@ -127,11 +127,12 @@ export const parseConfig = (value: unknown): Config => {
 
 export const parseSelector = (text: string): Selector => {
   const content = text.replace(/^\uFEFF/u, "").trim();
-  if (!content) return immutable({ auto: true, add: [] });
-  const ids = content.split(/[,\r\n]+/u).map(id => id.trim()).filter(Boolean);
-  requireValue(ids.length > 0 && ids.length <= LIMITS.modes && ids.every(id => /^[a-z][a-z0-9-]{0,63}$/.test(id)),
-    "E_SELECTOR", "Selector must list mode IDs separated by commas or newlines");
-  return immutable({ auto: false, add: [...new Set(ids)] });
+  // Empty keeps auto selection; a leading "+" keeps it too and appends the listed modes.
+  const auto = !content || content.startsWith("+");
+  const ids = (auto ? content.slice(1) : content).split(/[,\r\n]+/u).map(id => id.trim()).filter(Boolean);
+  requireValue((auto || ids.length > 0) && ids.length <= LIMITS.modes && ids.every(id => /^[a-z][a-z0-9-]{0,63}$/.test(id)),
+    "E_SELECTOR", "Selector must list mode IDs separated by commas or newlines, optionally prefixed by + to keep auto modes");
+  return immutable({ auto, add: [...new Set(ids)] });
 };
 
 export const parseManifest = (value: unknown): ResourceManifest => {

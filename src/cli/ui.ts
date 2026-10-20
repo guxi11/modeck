@@ -52,8 +52,8 @@ export const createUi = ({ format = "text" }: UiOptions = {}) => {
     }
   };
   return {
-    select: <T>(message: string, choices: readonly UiChoice<T>[]): Promise<T> =>
-      prompt(context => selectPrompt({ message, choices: [...choices] }, context)),
+    select: <T>(message: string, choices: readonly UiChoice<T>[], defaultValue?: T): Promise<T> =>
+      prompt(context => selectPrompt({ message, choices: [...choices], ...(defaultValue === undefined ? {} : { default: defaultValue }) }, context)),
     checkbox: <T>(message: string, choices: readonly (UiChoice<T> | Separator)[], options: CheckboxOptions<T> = {}, missingMessage?: string): Promise<readonly T[]> =>
       prompt(context => checkbox<T>({ message, choices: [...choices], ...options }, context), missingMessage),
     input: (message: string, defaultValue?: string, validate?: (value: string) => boolean | string): Promise<string> =>

@@ -64,17 +64,17 @@ flowchart TB
 
 [事实采集](../src/core/facts.ts)以 Git worktree 根目录为边界；非 Git 目录以调用目录为边界。`.git` 文件形式的 worktree 也由 Git 探测。文件与根目录 `package.json` 中的依赖名在边界范围内收集，按稳定顺序输出；扫描跳过符号链接、`.git`、`node_modules`、构建目录及状态目录，并在超限时报错。
 
-`.modes` 从调用目录向边界查找，最近的文件生效。缺失或空白启用自动选择；非空内容是逗号或换行分隔的 mode ID，关闭 `auto` 选择。空白文件也会终止向父目录查找。它不是 JSON，也没有禁用父 mode 的语法。
+`.modes` 从调用目录向边界查找，最近的文件生效。缺失或空白启用自动选择；非空内容是逗号或换行分隔的 mode ID，关闭 `auto` 选择；以 `+` 开头时保留 `auto` 选择，并追加 `+` 之后列出的 mode（仅有 `+` 等同空白）。空白文件也会终止向父目录查找。它不是 JSON，也没有禁用父 mode 的语法。
 
 [resolver](../src/core/resolve.ts)按以下顺序形成结果：
 
 1. 按声明顺序加入 `defaults`。
 2. 若自动选择启用，按 `auto` 返回数组的顺序加入 mode。
-3. 按 `.modes` 中的顺序加入显式 mode。
+3. 按 `.modes` 中的顺序加入显式 mode（`+` 形式追加在 `auto` 结果之后）。
 4. 按 `extends` 声明顺序递归展开，父 mode 在子 mode 前，稳定去重。
 5. 按 mode 和资源绑定的声明顺序收集 rules、skills，按资源 ID 去重。
 
-非空 `.modes` 只替代自动检测，仍保留 `defaults` 及所选 mode 的继承。未知 mode、循环继承、未知资源或类型不匹配会报错。`auto` 是保留 mode 名称。
+不以 `+` 开头的非空 `.modes` 只替代自动检测，仍保留 `defaults` 及所选 mode 的继承。未知 mode、循环继承、未知资源或类型不匹配会报错。`auto` 是保留 mode 名称。
 
 ## 资源与完整性
 

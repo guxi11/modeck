@@ -1,7 +1,7 @@
 import { lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { canonical, LIMITS, modeError } from "../contracts/index.js";
-import type { FileImage } from "../contracts/index.js";
+import type { FileImage, Reason } from "../contracts/index.js";
 import { collectFacts, loadConfig, parseSelector, resolve } from "../core/index.js";
 import { validateConfig } from "../core/config.js";
 import { atomic, data, missing, parentIdentity, readImage, safeAbsolute, same } from "../integration/fs.js";
@@ -27,6 +27,16 @@ const unshadowed = async (cwd: string, boundary: string): Promise<void> => {
   if (entry) throw modeError("E_SELECTOR", "A nearer .modes would override the saved repository selection; run save from the repository root", { path });
   await unshadowed(dirname(cwd), boundary);
 };
+const via = (reason: Reason, label: (id: string) => string): string =>
+  reason.via === "parent" && reason.from !== null ? `via ${label(reason.from)}`
+    : reason.via === "detect" ? "auto" : reason.via === "selector" ? ".modes" : reason.via;
+// One line per selection: each mode followed by the distinct reasons that selected it.
+export const describeModes = (modeIds: readonly string[], reasons: readonly Reason[], label: (id: string) => string = id => id): string =>
+  modeIds.length ? modeIds.map(id => `${label(id)} (${[...new Set(reasons.filter(reason => reason.mode === id)
+    .map(reason => via(reason, label)))].join(", ")})`).join(", ") : "(none)";
+const diagnosticLine = ({ code, message, path }: { readonly code: string; readonly message: string; readonly path?: string | null }): string =>
+  `${code}: ${message}${path ? ` (${path})` : ""}`;
+
 export const evaluateModes = async ({ command, configRoot, stateRoot, cwd, format, yes }: Request): Promise<void> => {
   const root = await safeAbsolute(configRoot);
   const ui = createUi({ format: format === "json" ? "json" : "text" });
@@ -52,6 +62,7 @@ export const evaluateModes = async ({ command, configRoot, stateRoot, cwd, forma
   });
   let selectorPath: string | null = null;
   let selectorAuto: boolean | null = null;
+  let selectorAdds = false;
   let actualProjects: readonly { readonly configRoot: string; readonly modeIds: readonly string[] }[] | null = null;
   let actualDiagnostic: { readonly code: string; readonly message: string; readonly path: string | null } | null = null;
   if (command === "eval") {
@@ -61,6 +72,7 @@ export const evaluateModes = async ({ command, configRoot, stateRoot, cwd, forma
       selectorPath = actualFacts.selector?.path ?? null;
       selectorAuto = actualFacts.selector?.value.auto ?? null;
       const added = actualFacts.selector?.value.add ?? [];
+      selectorAdds = added.length > 0;
       const unknown = added.find(id => !contexts.some(context => Object.hasOwn(context.config.modes, id)));
       if (unknown !== undefined) {
         actualDiagnostic = { code: "E_SELECTOR", message: `Selector references unknown mode: ${unknown}`, path: selectorPath };
@@ -109,56 +121,31 @@ export const evaluateModes = async ({ command, configRoot, stateRoot, cwd, forma
         comparison: { status: comparisonStatus, projects: comparisons } } : {}),
       ...(saved === undefined ? {} : { saved }) })}\n`);
     else if (command === "eval") {
-      const status = comparisonStatus === "same" ? "Same" : comparisonStatus === "different" ? "Different"
-        : comparisonStatus === "order-changed" ? "Order differs" : "Unavailable";
-      const selector = actualProjects === null ? `${selectorPath ?? "(selector path unavailable)"} (invalid or unavailable)`
-        : selectorPath === null ? "(none)" : selectorAuto ? `${selectorPath} (empty)` : selectorPath;
-      const mechanism = actualProjects === null ? "The automatic calculation ignores .modes; the actual selection could not be resolved. Defaults and inheritance remain part of the calculation."
-        : selectorAuto === false ? "A non-empty .modes disables auto-detected modes; defaults and inherited modes still apply."
-          : selectorAuto === true ? "An empty .modes leaves auto-detected modes enabled; defaults and inheritance also apply."
-            : "No .modes selector; defaults, auto-detected modes, and inheritance apply.";
+      const status = comparisonStatus === "same" ? "same" : comparisonStatus === "different" ? "different"
+        : comparisonStatus === "order-changed" ? "order differs" : "unavailable";
       const tone = comparisonStatus === "same" ? "green" : comparisonStatus === "order-changed" ? "cyan" : "red";
-      ui.section("Evaluation result", [`Directory: ${facts.cwd}`, `Selector: ${selector}`,
-        `Comparison: ${ui.emphasize(status, process.stdout, tone)}`, mechanism].join("\n"));
-      const list = (values: readonly string[]): string => values.length
-        ? values.map((value, index) => `${index + 1}. ${value}`).join("\n") : "(none)";
-      if (!projects.length) ui.section("Configurations", "(none)");
-      projects.forEach((project, index) => {
+      const effect = actualProjects === null ? "invalid" : selectorAuto === false ? "replaces auto"
+        : selectorAdds ? "adds to auto" : "auto";
+      const selector = selectorPath === null ? (actualProjects === null ? "unavailable" : "none (auto)") : `${selectorPath} (${effect})`;
+      const lines = projects.flatMap(project => {
         const actual = actualProjects?.find(item => item.configRoot === project.configRoot);
         const comparison = comparisons?.find(item => item.configRoot === project.configRoot);
-        ui.section(`Configuration ${index + 1} · ${project.configRoot}`, "");
-        ui.section("Computed modes", list(project.modeIds));
-        ui.section("Actual modes", actual ? list(actual.modeIds) : "(unavailable)");
-        const difference = !comparison ? "(unavailable)"
-          : comparison.status === "same" ? "Same modes."
-            : comparison.status === "order-changed" ? "Same modes, different order."
-              : [`Actual only:\n${list(comparison.actualOnly)}`, `Computed only:\n${list(comparison.computedOnly)}`].join("\n");
-        ui.section("Difference", difference);
-        const reasons = project.reasons.map(reason =>
-          `${reason.mode}: ${reason.via}${reason.from === null ? "" : ` (from ${reason.from})`}`);
-        ui.section("Selection reasons", list(reasons));
-        const inputs = [`Defaults: ${project.defaults.join(", ") || "(none)"}`,
-          `Auto: ${project.autoModeIds.join(", ") || "(none)"}`,
-          ...project.sources.map(source => `Source: ${source.path}`)];
-        ui.section("Inputs", list(inputs));
+        return [`Config: ${project.configRoot}`, `  Computed: ${describeModes(project.modeIds, project.reasons)}`,
+          `  Actual: ${actual ? actual.modeIds.join(", ") || "(none)" : "(unavailable)"}`,
+          ...comparison?.status === "different" ? [
+            ...comparison.actualOnly.length ? [`  Only in actual: ${comparison.actualOnly.join(", ")}`] : [],
+            ...comparison.computedOnly.length ? [`  Only computed: ${comparison.computedOnly.join(", ")}`] : []] : [],
+          ...project.diagnostics.map(diagnostic => `  ${diagnosticLine(diagnostic)}`)];
       });
-      const diagnosticLines = [
-        ...(actualDiagnostic ? [`Actual selector: ${actualDiagnostic.code}: ${actualDiagnostic.message}${actualDiagnostic.path ? ` (${actualDiagnostic.path})` : ""}`] : []),
-        ...diagnostics.map(diagnostic => `${diagnostic.code}: ${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`),
-        ...projects.flatMap(project => project.diagnostics.map(diagnostic => `${project.configRoot}: ${diagnostic.code}: ${diagnostic.message}`)),
-      ];
-      if (diagnosticLines.length) ui.section("Diagnostics", list(diagnosticLines));
+      ui.section(`Evaluation: ${ui.emphasize(status, process.stdout, tone)}`, [`Selector: ${selector}`,
+        ...lines.length ? lines : ["Config: (none)"],
+        ...actualDiagnostic ? [`Actual selector: ${diagnosticLine(actualDiagnostic)}`] : [],
+        ...diagnostics.map(diagnosticLine)].join("\n"));
     } else {
-      ui.section(`Selected modes · ${modeIds.length}`, modeIds.join(", ") || "(none)");
-      projects.forEach(project => {
-        ui.section(`Configuration · ${project.configRoot}`, [`Defaults: ${project.defaults.join(", ") || "(none)"}`,
-          `Auto: ${project.autoModeIds.join(", ") || "(none)"}`,
-          ...project.sources.map(source => `Source: ${source.path}`),
-          ...project.reasons.map(reason => `  ${reason.mode}: ${reason.via}${reason.from === null ? "" : ` (${reason.from})`}`),
-          ...project.diagnostics.map(diagnostic => `${diagnostic.code}: ${diagnostic.message}`)].join("\n"));
-      });
-      if (diagnostics.length) ui.section("Diagnostics", diagnostics.map(diagnostic => `${diagnostic.code}: ${diagnostic.message}`).join("\n"));
-      if (saved !== undefined) ui.section("Result", saved ? `Saved: ${path}` : "No changes made.");
+      ui.section(saved ? `Saved ${path}` : "No changes made", [...projects.flatMap(project => [`Config: ${project.configRoot}`,
+        `  Modes: ${describeModes(project.modeIds, project.reasons)}`,
+        ...project.diagnostics.map(diagnostic => `  ${diagnosticLine(diagnostic)}`)]),
+      ...diagnostics.map(diagnosticLine)].join("\n"));
     }
   };
   if (command === "eval") { report(); return; }

@@ -185,7 +185,7 @@ export const migrateHome = async (cwd: string, home: string, options: HomeMigrat
         + refused.map(item => `  ${item.dir}\n    ${item.reasons.join("; ")}`).join("\n") + "\n" : "");
   };
   if (!options.answers) process.stderr.write(`\nResources · ${pending.filter(item => item.kind === "rule").length} rules · ${pending.filter(item => item.kind === "skill").length} skills\n`
-    + `Configuration: ${root}\n${scan.excluded.length} excluded · ${scan.resources.length - pending.length} already imported\n\n`);
+    + `${scan.excluded.length} excluded · ${scan.resources.length - pending.length} already imported\n\n`);
   // Captured by the end confirm: whole-directory removal is offered whenever a scanned
   // catalog can be safely deleted, so consent is recorded before anything is written.
   let confirmedSources: readonly SourceDirectory[] = [];
