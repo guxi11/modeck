@@ -1,6 +1,6 @@
 # modeck 架构设计
 
-本文面向维护者和适配器作者，解释配置如何变成会话上下文，以及资源、hook 和绑定的安全边界。**实现现状**以本文链接的源码为准；末节的演进建议不代表已支持的能力。上手步骤见 [README](../README.md)，开发环境与提交检查见 [参与开发](../CONTRIBUTING.md)。
+本文面向维护者和适配器作者，解释配置如何变成会话上下文，以及资源、hook 和绑定的安全边界。本文描述当前实现；配置与操作细节集中在 [详细设计](../design/detailed-design.md)，设计取舍集中在 [架构决策](../design/architecture.md)。上手步骤见 [README](../README.md)，开发环境与提交检查见 [参与开发](../CONTRIBUTING.md)。
 
 ## 设计目标与边界
 
@@ -21,33 +21,33 @@ modeck 把个人配置目录中的 rules 和 skills 按 mode 组合，接入 Cla
 | [resources](../src/resources/index.ts) | 本地与已安装资源、内容存储、完整性校验 | `readResources` 返回已验证资源；外部资源安装由 CLI 的 `res init/update` 管理 |
 | [integration](../src/integration/index.ts) | 准备上下文、hook 协议与绑定 | `prepare`、`encodeHook`、`planBind` / `applyBindPlan` |
 | [cli](../src/cli/main.ts) | 参数、交互、配置发现、初始化与迁移 | 文件系统和终端副作用留在命令边界 |
+| [plugins](../src/plugins/manage.ts) | 固定插件包、动态资源与原生投影生命周期 | 包锁、marketplace、journal 与 inventory 指纹 |
+| [mcp](../src/mcp/manage.ts) | 独立静态 MCP 配置、原生合并与恢复 | v2 JSON、ownership、pending/committed journal |
 | [schemas](../schemas/modes.schema.json) | 配置与资源 manifest 的数据契约 | schema 校验后继续核对引用、继承图和树摘要 |
 
 这是运行职责分层，不是严格单向的包依赖图：例如 resources 会调用 core 的配置身份复核。改公共契约时，需要同步检查 TypeScript 类型、JSON Schema 和校验逻辑。
-
-## 静态 MCP 配置
-
-静态 MCP 由独立的 `modeck-mcp.json` 管理，不进入 mode 解析、多源组合或 SessionStart 注入。`src/contracts/mcp-static.ts` 定义 v2 契约：portable `servers` 可由适配器编码到不同 agent；`agents.claude.mcpServers` 与 `agents.codex.mcp_servers` 保存各自原生 JSON 定义，同名跨 agent 隔离，同一 agent 内与 portable 同名则拒绝。原生 JSON 值按原样验证和保留，Codex TOML 写入前须通过 parse/stringify 往返检查。portable 的环境引用及传输限制不套用到 native 定义。
-
-`src/mcp/config.ts` 负责 schemaVersion 2 JSON 校验，`src/mcp/manage.ts` 读取唯一中央 JSON 并生成原生导入、状态与应用计划；`src/mcp/native.ts` 处理 agent 原生布局及精确合并，`src/mcp/transaction.ts` 承担文件提交和恢复。`mcp migrate` 从原生配置导入到私有 JSON，不改原生配置字节；即使没有新增 native 定义也会创建 JSON，即使只登记匹配项也会事务收紧权限至 `0600`。`status` 只读。ownership source、pending/committed journal 与 stale lock 必须精确匹配当前 JSON 中央路径；端点身份绑定、漂移拒绝、原子批拒绝及未管理项保留构成写入边界。当前仅管理 Claude user/project 与 Codex 默认 user 配置；CodeBuddy 尚未适配。
 
 ## 从工作目录到上下文
 
 `resolve`、`render` 和 `hook` 共用 [prepare](../src/integration/prepare.ts)。它先解析选择，再读取被选资源，最后编译；因此未选中的缺失资源不会阻塞本次会话。`resolve` 命令也执行资源准备与编译，不是只读取配置的静态预览。
 
-主流程如下；图中的第二次解析把已验证资源摘要写入最终计划：
+主流程如下；第二次解析填入已验证资源摘要，之后附加所选插件内容；仅在组合配置时限定身份并合并资源：
 
 ```mermaid
 flowchart TB
   accTitle: Modeck context preparation flow
-  accDescr: Collect workspace facts, load trusted configuration, select modes, verify selected resources, then compile and encode session context.
+  accDescr: Collect workspace facts, select modes, verify resources, attach selected plugin content, combine configuration sources, then filter and compile session context.
   workspace["业务工作目录"] --> facts["collectFacts：边界、文件、依赖、选择器"]
   facts --> config["loadConfig：读取配置并校验"]
   config --> select["resolve：选择 mode 与资源"]
   select --> resources["readResources：读取并验证所选资源"]
   resources --> plan["resolve：填入资源摘要"]
-  plan --> compile["compile：规则正文与技能索引"]
+  plan --> plugins["attachDynamicPlugins：所选插件资源"]
+  plugins --> aggregate["多配置时：身份限定与技能内容去重"]
+  aggregate --> compile["compile：原生过滤、输出预算与正文"]
   compile --> output["render / hook"]
+  classDef pipeline fill:#e8f0fe,stroke:#345,color:#123
+  class workspace,facts,config,select,resources,plan,plugins,aggregate,compile,output pipeline
 ```
 
 计划保留 `cwd`、边界、选择器路径和选择原因，供诊断使用；稳定正文不插入这些运行诊断。输出协议是 `modeck-context/1`。
@@ -62,7 +62,7 @@ flowchart TB
 
 ### 工作区与选择顺序
 
-[事实采集](../src/core/facts.ts)以 Git worktree 根目录为边界；非 Git 目录以调用目录为边界。`.git` 文件形式的 worktree 也由 Git 探测。文件与根目录 `package.json` 中的依赖名在边界范围内收集，按稳定顺序输出；扫描跳过符号链接、`.git`、`node_modules`、构建目录及状态目录，并在超限时报错。
+[事实采集](../src/core/facts.ts)以 Git worktree 根目录为边界；非 Git 目录以调用目录为边界。`.git` 文件形式的 worktree 也由 Git 探测。文件与根目录 `package.json` 中的依赖名在边界范围内收集，按稳定顺序输出；扫描跳过符号链接、`.git`、`node_modules`、构建目录及状态目录，并在超限时报错；权限受限目录或依赖文件可跳过，原因进入 `SCAN_SKIPPED` 诊断。
 
 `.modes` 从调用目录向边界查找，最近的文件生效。缺失或空白启用自动选择；非空内容是逗号或换行分隔的 mode ID，关闭 `auto` 选择；以 `+` 开头时保留 `auto` 选择，并追加 `+` 之后列出的 mode（仅有 `+` 等同空白）。空白文件也会终止向父目录查找。它不是 JSON，也没有禁用父 mode 的语法。
 
@@ -101,29 +101,31 @@ flowchart TB
 
 [Git 获取](../src/resources/git.ts)读取 commit 的 blob，不运行仓库安装命令，不初始化 submodule，并禁用 Git hooks 和多项隐式配置。Git 树中的 symlink、gitlink 和特殊条目被拒绝。资源内容及 skill 脚本不会在获取过程中执行。
 
-`res init` 从简洁映射生成安装请求，技能放入顶层 `vendor/skills/<id>/`，规则放入 `vendor/rules/<id>.md`。首次安装使用仓库默认分支，根目录 `modeck-lock.json` 保存解析后的 commit、摘要及生成路径；后续 init 跳过完整安装并按锁恢复缺失内容，新增声明只安装新增项。已有 `.modeck/resources/` 安装经来源和内容校验后迁移，保留锁定 commit 和摘要；本地修改或目标重名会阻止迁移，失败时回滚。`res update` 重新获取默认分支并逐项输出进度，最后输出逐项状态和数量汇总。
+外部安装和根目录锁的生命周期、旧 `.modeck/resources/` 向 `vendor/` 的迁移、Git 忽略和分享规则集中见 [外部资源契约](../design/detailed-design.md#外部资源)。资源安装遇可捕获错误会回滚目标、锁与忽略文件；这不等同于持久崩溃恢复。摘要不能证明资源作者可信。
 
-`vendor/` 存放下载资源，`.modeck/` 保留本机状态、安装互斥、暂存及备份；两者加入配置目录 `.gitignore`，共享 YAML 和根目录 `modeck-lock.json`。运行期验证安装内容与锁记录，不联网；来源声明变化或缓存缺失时需要重新执行 `res init`，本地内容被修改时拒绝覆盖。资源安装在配置身份变化等可捕获错误下回滚目标、锁和忽略文件。没有 `--frozen` 命令；远端是否仍提供锁定 commit 影响缺失资源的恢复，内容摘要也不能证明资源作者可信。
+## 动态插件与静态原生配置
 
-## 插件包：动态上下文与原生投影
+插件包固定完整 Git commit，被模式选中的 skills/rules 参与上下文流水线；commands、agents、hooks、LSP、MCP 等受支持静态组件从动态资源中分离，经配置私有 marketplace 调用原生 CLI 安装。插件支持 Claude Code / Codex user scope，原生信任仍由 agent 管理。
 
-现行声明由 `plugins.<id>` 定义：`source.url`、完整 40 位 `source.commit` 必填，`source.path` 可省略并默认为仓库根，`agents` 可选且仅为 `claude` / `codex`；mode 的 `plugins` 数组引用配置 ID。插件 manifest 的名称决定原生插件名。`plugin init` 获取固定 commit、检查包与动态声明，并以根目录 `modeck-plugins-lock.json` 锁定来源、commit、文件树和动态路径；内容存于 `vendor/plugins/`，本机 staging/intent 位于 `.modeck/`。两目录忽略，锁文件共享跟踪。运行时读取锁与 vendor 校验，不自动联网更新。
+静态 MCP 使用独立 schemaVersion 2 `modeck-mcp.json`，不参与模式、注册配置多源组合或 SessionStart。portable 与 agent 原生定义分开保存，当前支持 Claude user/project 与 Codex 默认 user。它和插件投影内的 MCP 属于不同管理路径，不会随模式切换自动同步。
 
-`plugin init|status|apply|remove|recover` 均要求显式 `--config`、`--agent`、`--target-home`、`--cwd`，可选 `--format text|json`。init 初始化固定包与锁；status 只读报告包及托管安装状态；apply 创建 marketplace、安装原生插件；remove 只移除 journal 证明归本配置所有的安装；recover 按 journal 阶段恢复或完成清理。状态按配置根和 agent 分开，marketplace 名称包含配置身份；原生插件名及 MCP server 名仍须跨注册配置避免冲突。
-
-`src/plugins/dynamic.ts` 将被选 mode 引用的插件技能和规则并入普通资源编译；skill 名称按插件名称命名空间化。注册配置组合时，mode/plugin/resource ID 再以配置根身份限定，避免不同来源的相同 ID 串用；相同 skill 名仅在内容等价时合并。它们随同步 SessionStart 生效，不会改变原生静态安装。原生静态组件由 `src/plugins/projection.ts` 按 agent manifest 投影进配置私有 marketplace，再由原生 CLI 注册和安装；仅支持 Claude Code 与 Codex 的 user scope。Codex portable manifest 拒绝 hooks、apps、auth、不支持组件及额外依赖；Codex legacy hooks 即使投影也保持 untrusted，信任仍由原生 agent 管理。不会自动安装到 project scope。
-
-原生安装 journal 记录来源、安装路径、内容摘要和 inventory 指纹。漂移或同名未拥有内容会导致拒绝；recover 也不会移除无法由指纹证明归属的插件。原生 CLI 操作只做前后核验，没有 compare-and-swap，无法消除与 agent 或其他写入者并发操作的竞态。`apply` 后需重启会话加载原生插件；动态资源仅在下一次 SessionStart 编译，不热切换，也不提供权限隔离。
+插件 journal、静态 MCP 可恢复事务与 hook 绑定的进程内回滚是三种机制，不能互相替代。具体字段、命令、作用域与恢复约束见 [详细设计](../design/detailed-design.md#插件声明与生命周期)。
 
 ## 编译与按需技能
 
 [编译器](../src/core/compile.ts)检查计划与资源身份一致后，依次输出 `<INSTRUCTIONS>` 规则正文和 `<SKILLS>` 技能索引；没有规则时省略前者。规则正文统一 UTF-8、LF 和末尾换行，不添加资源 ID 注释；技能只提供名称、描述、绝对 `root` 和 `entry`，正文由 agent 在匹配任务后读取，配套 references/assets/scripts 从 root 定位。`render --format json` 也不展示 mode ID；内部计划、资源匹配及摘要继续保留 ID 关联，`resolve` 仍提供诊断计划。
 
-索引不是原生 skill 注册，不保证 agent 必然调用技能。modeck 不自动执行 skill 脚本；脚本执行仍服从 agent 的工具权限。Claude Code、Codex 和 CodeBuddy 按各自原生扫描结果省略同名技能索引，去重依据是名称，不是内容比较。Qwen、Qoder、Factory Droid 和 Copilot CLI 保留完整索引，不做原生同名过滤，避免扫描差异造成漏注入。
+索引不是原生 skill 注册，不保证 agent 必然调用技能。modeck 不自动执行 skill 脚本；脚本执行仍服从 agent 的工具权限。原生技能探测在 Claude Code、Codex、CodeBuddy 上按名称省略同名技能；Qwen、Qoder、Droid、Copilot 不做原生同名过滤。各 agent 的目录、递归与元数据要求见 [native-skills.ts](../src/integration/native-skills.ts) 和 [agentDefinitions](../src/contracts/agents.ts)。
 
-`render` 的所有 agent 共用同一正文模板，规则不会按 agent 转换。原生技能过滤因 agent 而异：Claude 扫描当前目录到工作区边界的 `.claude/skills` 及用户配置的 skills，单层读取，缺少名称时使用目录名；Codex 扫描相同目录范围的 `.agents/skills`、用户 `.agents/skills`、Codex 用户配置及 `/etc/codex/skills`，递归寻找含有效名称和描述的技能；CodeBuddy 扫描当前目录 `.codebuddy/skills` 和用户配置的 skills，递归读取并支持以冒号分隔的目录名作为回退。这三者按原生扫描结果省略同名索引。Qwen、Qoder、Factory Droid 与 Copilot CLI 不做同名过滤，始终保留完整技能索引；Qwen 原生扫描规则更复杂，Qoder 的祖先目录与递归扫描边界尚未证实，因此不推断其过滤结果。用户配置位置受对应 agent 的原生配置设置影响。未指定 `--state` 或 `MODECK_STATE` 时，`render` 还会优先使用所选 agent 绑定的状态目录，不同目录会改变索引中的技能绝对路径。配置、工作目录、状态目录及原生技能过滤结果相同时正文相同，但 JSON 中的 `agent` 和包含 agent 的 `selectionDigest` 仍不同。未指定 `--agent` 时交互选择一个 agent，非交互调用必须显式指定。
+规则也会去重：规范化正文 trim 后至少 32 字符，且作为完整子串出现在已探测的原生指令中时省略；相同主题而正文不同仍保留。Claude、Codex、CodeBuddy、Qwen、Qoder 按各自配置探测已知原生指令文件；Droid 与 Copilot 不做此探测。无法读取的指令文件不触发过滤。这是本机探测与文本比较，不保证重现 agent 的完整加载语义。
 
-正文同时受 9,000 字符和 32,768 字节上限约束，超过任一上限会报 `E_CONTEXT_SIZE`，不会静默截断。完整阈值见 [LIMITS](../src/contracts/constants.ts)。
+### 输出预算与可观察降级
+
+[编译器](../src/core/compile.ts)按 [agentDefinitions](../src/contracts/agents.ts) 的平台限额编译：Claude 为 10,000 字符，其他 agent 未设置已核实的平台硬限额，采用 1,000,000 字符的防御上限。Codex hook 显式写入 `additionalContextLimit: 0`，关闭原生 hook 输出溢出转存。不存在统一的 9,000 字符或 32,768 字节上限。
+
+超限时先将技能描述缩短到约 200 字符，再按索引项长度从大到小移除技能；保留项维持原声明顺序。规则正文不会缩减；仅规则就超限时报 `E_CONTEXT_SIZE`。`rendered.filtered` 区分 `native-skill`、`native-instruction`、`context-size:description` 和 `context-size:skill`，文本 `render` 与 `hook` 在 stderr 报告过滤或缩减，JSON render 保留 `filtered` 字段。字节数仍记录在 `byteLength`；其他资源上限见 [LIMITS](../src/contracts/constants.ts)。
+
+`render` 共用正文模板，但 agent 的原生过滤与预算可能改变结果；JSON 的 `agent`、`selectionDigest` 也包含 agent 身份。未显式指定状态目录时优先使用所选 agent 绑定的状态目录，技能索引中的绝对路径会随之变化。交互调用可选择 agent，非交互必须给出 `--agent`。
 
 摘要各自表示不同身份：
 
@@ -134,15 +136,7 @@ flowchart TB
 | `selectionDigest` | 协议、agent、有序 modes 与去重后的资源身份 |
 | `contentDigest` | 实际输出文本的 UTF-8 字节 |
 
-同一安装、相同输入及原生技能名称集合可得到稳定文本。技能索引包含绝对存储路径，因此不能保证跨机器字节相同；agent 自身指令、工具定义和模型服务也不在这些摘要的控制范围内。
-
-### 决定：不实现 Claude 专属路径延迟注入
-
-modeck 不实现 Claude 专属 `PreToolUse` path-scoped 延迟注入，继续使用跨 agent 的 `SessionStart` 编译正文。[Claude hooks 协议](https://code.claude.com/docs/en/hooks#pretooluse)允许从 `Read|Write|Edit` 的 `tool_input.file_path` 匹配规则并返回 `hookSpecificOutput.additionalContext`，所以最小实现可行；但上下文随工具结果进入下一次模型请求，不能让模型在当前写入或同批并行调用执行前依据新规则重新决策，不能作为写入前的规则执行保证。
-
-其收益主要是减少启动正文；当前编译器直接拼接规则原文，frontmatter 仅作为文本保留，没有规则路径元数据或会话注入状态。完整支持还需定义业务路径相对基准、YAML/glob（含 brace expansion）及符号链接语义，从启动正文移除延迟规则，并扩展绑定所有权与恢复。只监听 Read 会漏掉直接 Write/Edit；Bash 只有命令文本，任意脚本的文件访问无法据此可靠枚举；`@file` 的上下文展开也不能假设会触发 Read hook。按次注入会重复消耗上下文，去重则需隔离主会话和 subagent，处理并发、规则摘要更新、compact/clear/resume/fork 后的失效与重注入；每次工具调用启动进程、重新校验资源或维护可信快照又增加延迟和失败分支。hook 禁用、失败或超时仍可能漏注入。这些成本集中于单一 agent，现阶段不足以支持复刻其原生加载器。
-
-需要路径语义的规则保留在原生项目 `.claude/rules/`，避免同时选入 modeck 导致全量加载或重复；扫描迁移时应保留相应原生入口。[原生 rules 协议](https://code.claude.com/docs/en/memory#path-specific-rules)已覆盖 Read/Write/Edit、部分可识别为读取的 Bash 命令及路径匹配；[subagent](https://code.claude.com/docs/en/sub-agents#what-loads-at-startup)也有自身的按路径加载。规则 frontmatter 中仅 `paths` 被 Claude 解释，`name` 等其他字段被忽略；modeck 不承诺重现原生规则的匹配、加载时序或去重语义。
+同一安装、相同输入、原生技能名称与指令探测结果以及预算条件可得到稳定文本。技能索引包含绝对存储路径，因此不能保证跨机器字节相同；agent 自身指令、工具定义和模型服务也不在这些摘要的控制范围内。
 
 ## Hook 与启动适配
 
@@ -157,24 +151,23 @@ modeck 不实现 Claude 专属 `PreToolUse` path-scoped 延迟注入，继续使
 | CodeBuddy Code CLI | `.codebuddy/settings.json` | 使用 CLI hook 协议；加载行为还受其运行时控制 |
 | Qwen Code CLI | `.qwen/settings.json` | 使用原生 `SessionStart` command hook |
 | Qoder CLI | `.qoder/settings.json` | 使用原生 `SessionStart` command hook |
-| Factory Droid | `~/.factory/hooks.json` | 需 CLI 0.196.0+（修复 `SessionStart` 上下文丢弃）；使用原生顶层事件映射；可能遮蔽原有声明的混合配置会被拒绝，须先整合到原生 `hooks.json` |
-| GitHub Copilot CLI | `~/.copilot/hooks/modeck.json` | 需 CLI 1.0.89+（1.0.88 已合并 `additionalContext` 修复，本项目保守提高下限）；使用独立配置文件，输出顶层 `additionalContext` |
+| Factory Droid | `.factory/hooks.json` | 需 CLI 0.196.0+（修复 `SessionStart` 上下文丢弃）；使用原生顶层事件映射；可能遮蔽原有声明的混合配置会被拒绝，须先整合到原生 `hooks.json` |
+| GitHub Copilot CLI | `.copilot/hooks/modeck.json` | 需 CLI 1.0.89+（1.0.88 已合并 `additionalContext` 修复，本项目保守提高下限）；使用独立配置文件，输出顶层 `additionalContext` |
 
 这些是 modeck 实现的写入位置，不代表所有 agent 自定义配置目录布局都可由绑定命令自动发现。hook 被禁用、策略阻止、未触发、命令失败或超时时，原生会话仍可能继续且缺少 mode 内容，因此不保证 fail-closed。成功输出 hook JSON 也不等同于真实模型已采纳上下文；尚无登录状态下的真实模型请求验证。
 
 ## 绑定计划、应用与恢复
 
-[绑定实现](../src/integration/install.ts)把计算计划和写入分开：`planBind` / `planUnbind` 返回 `BindPlan`，`applyBindPlan` 执行变更。CLI 的 `bind` / `unbind` 默认立即应用；`--dry-run` 只展示绑定文件计划，但 `bind` 准备上下文时仍可能物化本地资源缓存。
+[绑定实现](../src/integration/install.ts)把计算计划和写入分开：`planBind` / `planUnbind` 返回 `BindPlan`，`applyBindPlan` 执行变更。公开 CLI 通过 `config` 选择和调整绑定；`config --dry-run` 展示计划，`--expect` 校验预览摘要。准备绑定上下文仍可能物化本地资源缓存，因此 dry-run 不等于整个进程无文件系统副作用。
 
 每个 agent 在目标 home 的 `.modeck/<agent>/` 内记录 `install.json`、安装锁和按摘要定位的 runtime 副本。运行时副本使 hook 不依赖源码目录持续存在；配置目录和 Node 可执行文件仍必须可用。重新构建或升级 modeck 后，需要重新绑定才能更新已安装副本。
 
 应用过程保留以下约束：
 
 1. 计划记录原文件摘要、权限及计划摘要；`--expect` 可要求本次计划与预览摘要相符。
-2. 写入前检查目标所有者、权限、父目录与符号链接，只合并归 modeck 所有的内容，保留其他设置。
-3. 只合并归 modeck 所有的 hook 组，保留其他设置；所有权记录缺失或已管理内容被修改时拒绝覆盖。
-4. 通过安装锁串行化同一 agent 的安装，写入时再次核对文件身份，并逐文件原子替换。
-5. 发生可捕获异常时逆序尝试恢复已写文件；无法安全恢复时保留锁，要求人工检查。
+2. 写入前检查目标所有者、权限、父目录与符号链接；只合并归 modeck 所有的 hook 组，保留其他设置；所有权记录缺失或已管理内容被修改时拒绝覆盖。
+3. 通过安装锁串行化同一 agent 的安装，写入时再次核对文件身份，并逐文件原子替换。
+4. 发生可捕获异常时逆序尝试恢复已写文件；无法安全恢复时保留锁，要求人工检查。
 
 这是有校验和回滚的多文件操作，不是跨文件原子事务。进程崩溃后的自动恢复不受支持；多 agent 绑定也不是一个整体事务。解绑只移除已记录的自有内容，资源状态缓存和配置目录保留。
 
@@ -188,17 +181,10 @@ modeck 不实现 Claude 专属 `PreToolUse` path-scoped 延迟注入，继续使
 
 初始化、扫描和项目迁移均提供 `--list` 预览。[备份模块](../src/cli/backup.ts)在复制、配置写入及完整性校验成功后，把符合条件的原生入口移动到配置目录 `.modeck/backups/<批次>/`，并先写 `restore.json` 记录恢复路径。全局导入可备份 rules 和 skills，项目迁移只处理 skills；受管内容、外部所有者及被保留入口引用的共享来源会保留。备份不是删除；没有独立 restore CLI，恢复需按记录核对并移回，不能覆盖已有入口。
 
-## 演进建议与验收边界
+## 验证边界
 
-以下为建议，尚未作为本文档任务的功能实现：
+维护时运行 `npm run typecheck` 和 `npm run build`；命令和路径应与源码、CLI help 一起核对。仓库没有 `npm test` 脚本，未经要求不新增测试代码。原生行为验证使用隔离配置、状态与 home，不影响日常 agent 配置。
 
-| 建议 | 解决的问题 | 实施时保留的边界 |
-| --- | --- | --- |
-| 独立的严格复用模式 | 缺少锁定内容时禁止获取的额外约束 | 沿用根目录资源锁，不把绝对 home 路径写进共享身份 |
-| 安装中断恢复协议 | 崩溃后只能检查残留锁 | 不自动覆盖已被外部修改的文件 |
-| Agent 兼容性验收矩阵 | hook 协议输出与模型实际采纳之间的差距 | 记录 CLI 版本、信任状态和实测范围 |
-| 为自动选择脚本设计受限执行接口 | 自动选择 JS 的本机权限范围较大 | YAML 与脚本已分离；Worker 隔离仍不能包装成权限沙箱 |
+构建、资源完整性与 hook JSON 检查不构成真实模型采纳、跨机器字节复现或服务端缓存命中的证明。恢复能力应按各子系统分别验证，不能将 MCP/plugin journal 的恢复承诺套到 hook 绑定。
 
-维护时先运行 `npm run typecheck` 和 `npm run build`，再用隔离配置、状态与 home 核查 mode 选择、资源变化、hook JSON、绑定预览和对称解绑。仓库没有 `npm test` 脚本；构建通过不构成真实模型调用、跨机器复现或缓存命中的证明。
-
-`design/` 保存早期设计和验收记录，其中 `.mode`、JSON / JS 配置、mode priority、共享锁文件及首版适配范围属于历史方案。修改实现时，以源码和本说明为核对入口，不把历史提案当成命令参考。
+尚未实现的方向包括严格离线资源恢复开关、hook 绑定的持久崩溃恢复、自动选择脚本的受限执行接口，以及覆盖模型实际采纳的 agent 验收矩阵。它们不是当前接口。旧提案与现行方案的差异见 [架构决策](../design/architecture.md#已替代的早期方案)。

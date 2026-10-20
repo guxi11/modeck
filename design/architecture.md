@@ -1,116 +1,100 @@
-# modeck：需求与架构方案
+# modeck 架构决策
 
-阶段：ultra 架构方案，2026-10-16。实现完成前必须经过 hard 详细设计与任务拆分、standard 实现、白板 hard 独立验证。包名为 `modeck`，命令 `modeck`；用户已注册该名称，不发布。
+状态：随当前实现维护。本文说明设计取舍；运行架构见 [架构设计](../docs/architecture.md)，字段、命令与恢复契约见 [详细设计](detailed-design.md)。本轮整理不改变实现。
 
-## 需求判断
+## 目标与系统边界
 
-这是用户自己的 agent 配置运行时：npm 包提供资源获取、mode 计算和 agent 适配；另一个由用户拥有的 Git 仓库保存配置及资源绑定。项目内只有可选 `.mode` 选择器，不形成另一套“全局规则 / 项目规则”体系。任何目录可有 mode，Git 只用于发现边界及分发配置。
+面向需要在多个 agent、项目和个人 / 团队配置之间复用规则与技能的用户。配置仓库维护资源与模式，业务项目提供目录事实及可选 `.modes`，modeck 负责选择、校验、编译和原生接入。技术基线是 Node.js 22.20.0+、TypeScript strict、ESM，支持 macOS / Linux。
 
-已阅读 `/Users/zyy/guxi11-emacs`（实际路径，大小写同源）。`site-start.el` 是统一入口；`site-lisp/config/init.el` 按 core/editor/completion/lang 等职责组装并区分立即与延迟加载；`editor/init-mode.el` 的 `auto-mode-alist` 用后缀决定 mode，autoload 按需载入；`lang/init-vue.el` 用 mode hook 组合多种语言资源；`.gitmodules` 与 Git gitlink 固定扩展来源和 commit。要迁移的是“配置由用户维护，选择与资源加载解耦”，而不是复制 Emacs Lisp 或允许项目任意执行启动脚本。
+核心闭环是初始化配置、声明模式、安装外部资源、预览上下文、注册并绑定 agent，再通过普通 Git 共享配置与锁。它不改写业务项目 `AGENTS.md` / `CLAUDE.md`，也不替代 agent 的工具权限、信任、认证或模型服务。
 
-最小完整版本应闭环：创建 / 克隆配置仓库 → 声明模式及资源 → 获取并锁定资源 → 对目录解析 → 展示稳定上下文 → 安装或启动 agent → 分享同一仓库让另一用户复现。
+## 决策 1：声明配置与自动选择代码分开
 
-## 明确范围
+**问题**：用户需要声明资源和组合方式，也需要根据不同项目决定工作模式。
 
-- 独立 Node.js 20+、TypeScript npm 包，不使用或依赖 ai-rulez，不复用现有 aiconfig 实现。
-- 两个实用适配器：Claude Code、Codex CLI。其他 agent 后续按同一 seam 扩展，首版不放空壳。
-- 资源支持配置仓库内的本地文件 / 完整 skill 目录，以及指定 Git 仓库、ref、子目录的远程资源。不运行包生命周期脚本，不自动执行 skill scripts。
-- 配置分享通过普通 Git clone 与资源锁复现。支持初始化指定目录及从指定 Git URL 导入到新目录；不需要在线服务、账号、云 registry。
-- 不生成或改写项目 AGENTS.md / CLAUDE.md，不擅改用户真实全局配置，不迁移或修改 Emacs 配置。安装需有预览及指定隔离目标目录。
-- 不新增测试代码；允许类型检查、构建、打包和临时真实场景验证。只写本任务必要方案、详细设计、tasks、验收记录及产品本身需要的 SKILL.md。
+**决定**：YAML 保存资源与模式，`modeck-auto.mjs` 单独接收目录事实并返回模式名称；业务项目的 `.modes` 仅为文本选择器。配置发现优先显式参数、注册集合和已有绑定，最后才尝试调用目录，避免业务仓库静默替换已信任入口。
 
-## 核心模型与职责
+**代价与边界**：自动选择在 Worker 中执行，隔离模块缓存并校验来源，但仍有本机用户权限；不是安全沙箱。只应注册可信配置。选择器不提供旧方案的禁用模式语法，默认模式和继承始终保留。
 
-一个用户配置仓库包含 `modes.json`、`modes.lock.json`，以及本地 `rules/`、`skills/` 等资源目录。工具的下载缓存、安装记录、构建产物与临时目录不能进入共享内容身份。全局配置位置只是一条本机指针：显式 `--config` 优先，其次环境变量，最后固定默认路径；具体格式由 hard 固定。配置仓库可以位于任意 Git 目录，不绑定工具源码所在目录。
+依据：[config-file.ts](../src/core/config-file.ts)、[auto.ts](../src/core/auto.ts)、[config.ts](../src/cli/config.ts)。
 
-模式是有 id 的组合：父 mode、检测条件、规则资源绑定、skill 绑定。不强制独占 major mode；如 `base → programming → typescript` 可与 `review` 组合。父子声明是 DAG，循环、未知 id、重复资源命名等必须给出明确错误。
+## 决策 2：模式组合保持有序、可解释
 
-独立模块：
+**问题**：自动检测、显式选择和继承同时存在时，输出需要可预测，排查时需要看到原因。
 
-1. **配置与 resolver**：将显式配置、已采集的目录特征映射到有序模式及选择原因。纯计算与文件采集分开。
-2. **资源仓库**：源描述 → 锁定 commit / 内容摘要 → 完整资源树。隐藏 Git 拉取、路径约束、缓存及完整性校验。
-3. **上下文编译**：模式计划 + 已锁定资源 → 规范化稳定文本与摘要；诊断信息另行输出。
-4. **agent 适配**：相同编译结果编码为各 agent 的 hook 输出或启动参数，安装计划显式返回待写文件；实际写入是末端操作。
-5. **CLI**：薄命令层，既能供人调用，也作为统一的 hook 预载脚本；不再分发或安装入口 skill。
+**决定**：默认模式、自动结果、显式追加依次构成种子，父模式按声明顺序先于子模式展开，再稳定去重；不依赖数字 priority。`resolve` 展示最终模式、资源和选择原因，`render` 只提供实际上下文。
 
-## 模式解析语义
+**代价与边界**：非空 `.modes` 默认替代自动结果，`+` 才表示追加；最近的选择器生效。多配置中同名模式应用于各自声明它的配置，不跨配置继承；资源身份按配置根限定，同名技能内容不同则拒绝组合。
 
-项目边界优先采用 Git worktree 根目录（`.git` 文件也有效），非 Git 目录以调用目录为边界。向上查找 `.mode` 只到边界，最近文件生效，避免隐式叠加全部父目录。非 Git 下本次只解释当前目录的 `.mode`；更广目录继承留后续，避免扫描到用户 home 的偶然配置。
+依据：[resolve.ts](../src/core/resolve.ts)、[prepare.ts](../src/integration/prepare.ts)。
 
-`.mode` 是 JSON 数据，列出增加 / 禁用的 mode，并可显式关闭自动推断；不执行 JS、shell 或仓库配置中的程序。默认种子来自配置仓库。推断只依赖声明的文件存在条件、受限文件匹配及 package.json 依赖，不使用 LLM、网络、mtime、Git dirty 状态、绝对项目路径或随机数。
+## 决策 3：资源安装与会话读取分离
 
-顺序：默认种子 → 按数值 priority、id 排序的匹配模式 → `.mode` 顺序。父 mode 在子 mode 之前按声明顺序展开；稳定去重。禁用必须在展开后也成立：若保留模式依赖已禁用父模式，应明确报冲突，不能悄悄重新加入。绑定资源按 mode 顺序和绑定声明顺序去重，不能依赖 readdir 或对象枚举偶然次序。
+**问题**：会话启动需要避免隐式更新，同时让配置仓库能共享外部规则和完整技能目录。
 
-推断文件范围应有明确上限并排除 `.git`、`node_modules`、构建及下载缓存目录；超过上限要报错，不能输出依赖遍历先后顺序的部分结果。配置与 `.mode` 无效时不得默默降级到没有规则的会话。
+**决定**：`res init` 按根目录资源锁安装或恢复，`res update` 显式更新默认分支；规则与技能分别安装到顶层 `vendor/rules/`、`vendor/skills/`。运行期读取并验证已安装内容，不拉取 Git。插件另用完整 commit pin 与独立包锁。
 
-`resolve` 输出机器可读计划：schema 版本、有序 mode、有序资源、选择原因和诊断。`render` / `hook` 从同一计划编译，禁止在 adapter 里各算一遍 mode。
+**代价与边界**：缺失内容先安装，漂移拒绝覆盖；缺失资源能否恢复取决于远端是否仍提供锁定 commit。内容摘要验证内容身份，不能证明作者可信。获取阶段不运行来源仓库安装命令或 skill 脚本，自动选择代码自身仍有联网能力。
 
-## 资源与可复现分享
+依据：[repository.ts](../src/resources/repository.ts)、[git.ts](../src/resources/git.ts)、[bundle.ts](../src/plugins/bundle.ts)。
 
-锁文件记录源标识、Git 完整 commit、资源相对路径、完整资源树内容摘要。首次显式同步可以生成锁；有锁默认复用锁，更新须明确请求，`--frozen` 不允许创建或变更锁。共享仓库中的路径均相对，不把个人绝对 home 写入锁文件。接收者 clone 配置仓库后 frozen 同步应拿到相同资源内容。
+## 决策 4：规则正文与技能索引分开编译
 
-远程 Git 获取只在同步阶段发生；resolve/render/hook/启动阶段应离线工作，缺锁、缺资源或摘要不符立即报错。不运行来源仓库的安装命令、不初始化 submodule、不触发 Git hooks。缓存采用内容身份而不是当前分支名；失败不得写出看似完整的资源或锁。
+**问题**：规则需要直接进入上下文，完整技能正文会占用预算且未必与当前任务有关。
 
-只接受目录内普通文件 / 目录，拒绝越界路径、symlink 逃逸与 `.git` 内容进入资源树；保留完整 skill 的 scripts/references/assets 及可执行位。路径验证必须覆盖本地源、Git 子目录、配置文件引用及安装目标父目录，不能仅检查字符串 `../`。
+**决定**：规则输出为正文，技能输出名称、描述和可读取的绝对 root / entry。支持已确认的原生名称过滤和规则文本去重；预算不足先缩短技能描述，再移除索引项，规则本身不截断。过滤与缩减均报告原因。
 
-规则立即载入；skills 默认生成有序索引，绑定可选择 preload 将 SKILL.md 正文立即载入。完整资源始终物化，按需加载可定位到资源目录及执行脚本。渲染的 skill 信息和资源定位必须可实际使用，不能只输出名字。hook 直接调用统一 CLI 预载，不依赖入口 skill。
+**代价与边界**：技能索引不是原生注册，不保证 agent 调用。正文稳定性只覆盖相同输入、安装路径、探测结果与预算条件；绝对技能路径会使不同机器输出不同。摘要不是模型服务端 cache key，不能证明缓存命中。
 
-## 稳定上下文与缓存边界
+依据：[compile.ts](../src/core/compile.ts)、[native-skills.ts](../src/integration/native-skills.ts)。
 
-编译文本按照工具协议版本 → 稳定模式列表 → 有序规则正文 → 有序 skill 元数据 / 预载正文排列。统一 UTF-8、LF、尾部换行和稳定标题。同一配置资源内容、模式顺序、agent 与编译器协议版本，输出字节应相同。
+## 决策 5：统一使用原生会话 hook
 
-不得在稳定正文放 cwd、项目绝对路径、时间戳、会话 id、推断原因、Git 分支、随机临时路径或下载日志。必要的 skill 路径来自同一安装内固定的内容目录；若正文含安装绝对路径，应明确稳定性只覆盖同一安装，摘要计算必须覆盖实际输出字节，不能声称跨机器字节相同。动态诊断与路径说明通过 resolve JSON / stderr 输出。
+**问题**：不同 agent 的接入协议和信任机制不同，需要共享编译流程并保留原生行为。
 
-同 mode 但资源正文、skills 元数据、锁、工具协议不同，不能视为同内容。输出应有内容摘要用于比较，不能把摘要当模型服务商的 cache key 或 cache hit 证明。首版不改动 provider API 缓存参数。
+**决定**：七种 agent 复用 prepare / compile，通过同步 SessionStart command hook 编码；不再提供 `run` 包装启动器、RunMarker 或入口 skill。Codex 信任由用户经原生界面授予。配置升级后重新绑定安装的 runtime 副本。
 
-同 agent + 同 mode 只是在资源版本和编译器一致时尽量稳定；agent 自己的系统提示、cwd、原生项目 instructions、工具 / MCP schema、模型 / 服务商 / 运行时版本、hook 插入位置、技能索引绝对路径与缓存时效仍可能破坏共享前缀。不能承诺跨 agent、跨用户、跨机器或必然 KV 命中。
+**代价与边界**：hook 禁用、阻止、失败或超时后，原生会话仍可能继续。modeck 不保证所有启动网络请求都等待 hook，也不保证模型实际采纳返回内容。新增 agent 必须核实发现路径、事件、输入输出和版本，不能只生成 JSON 即宣称接入成功。
 
-OpenAI 当前缓存文档进一步说明：要求完整渲染前缀相同，工具定义也在前缀内；共享稳定片段仍不等于有可复用的缓存断点。CLI 未暴露或未验证相应控制时，本工具只稳定自己贡献的内容，不设置或伪造服务商缓存断点。
+依据：[agents.ts](../src/contracts/agents.ts)、[hooks.ts](../src/integration/hooks.ts)、[install.ts](../src/integration/install.ts)。
 
-## 静态 MCP 管理边界
+## 决策 6：动态插件内容与静态原生状态分开
 
-静态 MCP CLI 与 mode 上下文流水线解耦。配置契约在 `src/contracts/mcp-static.ts`，schemaVersion 2 JSON 校验及 portable/native 字段校验在 `src/mcp/config.ts`；`src/mcp/manage.ts` 读取中央源并计算操作，`src/mcp/native.ts` 负责 Claude JSON、Codex TOML 的原生映射与无损合并，`src/mcp/transaction.ts` 管理可恢复提交。v2 JSON 中 `servers` 表示跨 agent portable 定义，`agents.claude.mcpServers` / `agents.codex.mcp_servers` 表示 agent 原生定义。native JSON 字段按值原样保存；Codex 必须通过 TOML 往返校验。不同 agent 可同名，同 agent 的 native 与 portable 重名拒绝。
+**问题**：技能和规则适合随工作模式组合，原生 commands、agents、hooks、LSP、MCP 等组件有独立安装和加载生命周期。
 
-中央真源仅为 schemaVersion 2 的 `modeck-mcp.json`。迁移从 agent 原生配置导入到 JSON，不重写原生 MCP 字节；没有新增定义时也创建 JSON，匹配项即使没有新增也会纳入事务性权限收紧。`status` 只读。ownership source、transaction journal 与 stale lock 的 central 身份必须精确匹配当前 JSON 路径；恢复校验原操作身份。端点身份、内容摘要和 scope 拓扑在提交前复核，apply 遇冲突会拒绝整批；migrate 可逐项部分成功，拒绝项保持原生不变。未管理及中央已移除的原生项保留。适配范围是 Claude user/project 与 Codex 默认 user；不包括 CodeBuddy。
+**决定**：锁定完整插件包，从选中模式提取动态 skills/rules；受支持静态组件物理投影到配置私有 marketplace，再调用原生 CLI 安装。独立静态 MCP 则仅以 schemaVersion 2 JSON 为中央配置，portable 与各 agent 原生定义分开保存。
 
-## Agent 接入决策（核查于 2026-10-16）
+**代价与边界**：插件和静态 MCP 当前只支持 Claude / Codex 的指定 scope；原生变更需重启会话，不热切换。配置命名空间不能隔离原生全局同名插件或 MCP，冲突必须拒绝。保留原生字段不代表 agent 支持它们，Codex MCP 写入还需 TOML 往返校验。
 
-本机只读核查：Codex CLI `0.162.1`、Claude Code `2.1.296`。以当时官方接口为依据，不能沿用“Codex 完全没有 hook”的旧结论。
+依据：[projection.ts](../src/plugins/projection.ts)、[manage.ts](../src/plugins/manage.ts)、[config.ts](../src/mcp/config.ts)。
 
-额外本地协议核查：在独立临时 CODEX_HOME 中写入固定 developer_instructions，启动 `codex app-server --stdio`，仅执行 initialize / initialized / config/read（includeLayers=true），实际响应包含 config、origins、layers，并原样返回该固定指令。未创建 thread、未调用模型、未改真实配置；它证明有效配置读取途径可用，不代表包装器已实现或模型加载已验证。
+## 决策 7：按子系统给出恢复承诺
 
-Claude Code：SessionStart command hook 的 JSON stdin 包含 cwd/source，`hookSpecificOutput.additionalContext` 可注入上下文；当前文档说明首次响应等待 SessionStart 完成。通过 settings.json 合并一个归本工具所有的 hook，保留已有 hooks/settings。适配器也提供 `--append-system-prompt` 启动包装器以满足受控的首次加载；不要替换默认 system prompt。
+**问题**：hook 文件合并、原生 CLI 插件操作和多文件 MCP 提交拥有不同的写入机制，不能用一个“原子事务”概括。
 
-Codex：官方现有 `hooks.json` 或 config.toml 内联 hook，SessionStart 的 additionalContext 是附加 developer context。非 managed hook 必须由用户在 `/hooks` 审阅信任当前定义，未信任会跳过；安装器不能伪造信任状态或宣称已运行。优先生成 `hooks.json` 安装计划，诚实提示首次启用步骤；提供 `-c developer_instructions=...` 包装器作为不依赖 hook 信任的启动方式，需保留已有 developer_instructions（无法可靠读取合并时拒绝覆盖并说明），不得使用 model_instructions_file 替换 agent 原始基础提示。
+| 子系统 | 当前保障 | 仍存在的限制 |
+| --- | --- | --- |
+| Hook 绑定 | 计划摘要、所有权、锁、逐文件原子替换、可捕获异常逆序回滚 | 多文件与多 agent 非整体原子；无崩溃自动恢复 |
+| 插件生命周期 | journal 阶段、包摘要、原生 inventory 指纹及恢复命令 | 原生 CLI 无 CAS，检查与外部写入之间仍有竞态 |
+| 静态 MCP | 内核锁、pending/committed journal、身份与漂移复核、恢复命令 | 不与编辑器或原生写入者形成 CAS；跨文件系统原子写入拒绝 |
 
-包装器需透传 argv、cwd、stdio、退出码和终止信号；不要拼接 shell 字符串启动 agent。必须处理用户传入改变 cwd / developer instructions / system prompt 等参数，不能计算目录 A 却启动目录 B。无法安全支持的冲突参数明确拒绝，避免静默产生错误模式。包装器与已安装 hook 同时存在时要有明确去重机制，不能重复注入。
+所有权证据不足或内容漂移时拒绝覆盖和删除；恢复不能接管其他中央路径或未知安装。具体 journal、权限和 scope 约束集中维护于 [详细设计](detailed-design.md)。
 
-hook 统一调用同一 npm 可执行文件，读 stdin cwd 后调用 resolver；不在 hooks 里联网同步。hook 出错要有 stderr 和失败状态；各 agent 对失败状态是否阻止首次请求的差异要如实记录，不能保证所有运行时 fail-closed。
+## 决策 8：暂不实现 Claude 路径延迟注入
 
-安装默认预览，实际写入须明确 apply，支持指定 target root。仅管理自己创建的 skill 与 hook；已有文件应保留并合并，无可安全合并方式就报冲突。需要可回滚的安装记录或对称 uninstall，避免卸载他人内容。不属于本工具所有的目标不应直接被覆写，真实配置整合留用户选择；本次资源安装仅在隔离目录验证。
+早期评估过用 `PreToolUse` 根据路径延迟加载规则。它会新增路径匹配、会话去重、并发、compact / resume 后失效等状态，也无法让模型依据当前工具返回的新上下文重新决定已发出的写入或并行调用。Bash 任意脚本的文件访问也不能可靠枚举。
 
-参考依据：
+当前保留跨 agent SessionStart 编译；需要 Claude 原生路径语义的规则保留在项目 `.claude/rules/`，扫描迁移时保留其原生入口，并避免同时选入 modeck 导致重复或全量加载。编译器不会解释 rule frontmatter 的路径语义。
 
-- [Codex Hooks](https://learn.chatgpt.com/docs/hooks)：发现位置、信任、SessionStart 与输出协议。
-- [Codex Configuration Reference](https://learn.chatgpt.com/docs/config-file/config-reference)：developer_instructions 等配置接口。
-- [Claude Code Hooks](https://code.claude.com/docs/en/hooks)：SessionStart 执行时序、输入 / 输出及 settings 合并。
-- [Claude Code Skills](https://code.claude.com/docs/en/skills)：skill 为按需机制，不能独自保证首轮推理前执行。
-- [OpenAI Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching)：完整渲染前缀、工具顺序、缓存断点与实际命中的限制。
+## 已替代的早期方案
 
-## 当前插件实现边界（提交 `576496b`）
+| 早期提案 | 当前契约 |
+| --- | --- |
+| `modes.json`、`modes.lock.json`、JSON `.mode` | YAML、根目录 `modeck-lock.json`、文本 `.modes` |
+| priority / detect、禁用父模式、skill preload | 有序继承、自动选择脚本、规则正文与按需技能索引 |
+| 仅 Claude / Codex，Node.js 20+ | 七种上下文适配器，Node.js 22.20.0+ |
+| install / uninstall 与 run 包装器双路径 | `config` 管理原生 hook 绑定 |
+| frozen 同步与跨机器字节一致 | init 按锁恢复、update 显式更新；稳定性受绝对路径与原生探测影响 |
+| MCP YAML / v1 自动兼容 | 唯一 schemaVersion 2 JSON；不接管旧来源或不完整旧锁 |
 
-本节记录该提交的实现事实；上文关于“双 Adapter”、旧式 install/wrapper 闭环和阶段验收属于早期设计背景，不是插件功能的现行契约。插件配置使用 `plugins.<id>.source`（必填 `url` 与完整 40 位 `commit`，可选 `path` 默认 `.`）及可选 `agents: [claude, codex]`，mode 通过 `plugins: [id]` 引用。包 manifest 提供同一原生插件名；固定 commit、完整树摘要和动态资源索引写入根 `modeck-plugins-lock.json`，内容安装到 `vendor/plugins/`，本机状态放在 `.modeck/`。
-
-`plugin init|status|apply|remove|recover` 均要求 `--config <dir> --agent <claude|codex> --target-home <dir> --cwd <dir>`，可选 `--format <text|json>`。init 建立锁和 vendor 包；status 只读；apply 创建该配置独立 marketplace 并调用原生命令安装；remove 按 journal 与指纹卸载归属项；recover 依 journal 阶段恢复或完成清理。仅管理 Claude Code、Codex 的 user scope。每份注册配置的 marketplace 命名空间独立，但原生插件名与 MCP 名称冲突仍拒绝。
-
-动态 skills/rules 从被 mode 选中的锁定插件包提取并进入 SessionStart 上下文，skills 按插件命名空间处理；多注册源组合时资源 ID 按配置根身份限定，同名 skill 仅在内容相同时合并。commands、agents、hooks、LSP、MCP 等静态组件投影至原生 marketplace，由 agent 加载。Codex portable 投影拒绝 hooks、apps、auth 和不支持组件；legacy hooks 保留原生 untrusted 状态。原生状态变更需要重启会话，动态内容在 SessionStart 生效，不热切换，也不构成权限隔离。journal/fingerprint 用于所有权与漂移检测，但无法使操作与外部写入原子化；原生 CLI 没有 CAS。
-
-## 阶段验收
-
-hard 详细设计必须固定 JSON schema、CLI 命令与默认值、模块共享类型、文件所有权和任务依赖；先给契约，再派 standard。可简化实现技巧，不可删掉上述闭环或虚构 agent 能力。
-
-standard 分离实现：配置 / 纯 resolver / 编译器；资源锁 / 下载 / 安全物化；CLI / 两个 adapter。互不重叠文件并行，公共契约只能一人维护。交付必须构建、运行实际最小场景、仅提交各自文件。
-
-白板 hard 最终验证应从用户需求、方案和实际输出独立找问题：在临时 HOME/config/target 和两个不同目录里验证显式 / 推断 / DAG / 稳定输出；本地与 Git 资源 frozen 复现；修改资源失配；缺锁离线失败；hook JSON；安装预览、合并、重复安装和卸载；包装器真实 argv/退出码行为；npm pack 从 tarball 使用且无入口 skill。允许临时 fixture 和临时脚本，不向仓库新增测试代码。若不做真实付费模型调用，明确写出验证止于 CLI / hook 协议及启动参数，不声称实际模型 KV 命中。
-
-验收后提交本项目，留必要验收记录。不发布 npm、不添加远端、不推送、不安装进真实用户环境。
+早期 schema 全文、包装器参数白名单和阶段派工记录保留在 Git 历史，不再作为本地文档中的第二套契约。未来可能补充的严格离线开关、hook 崩溃恢复与受限脚本接口均尚未实现。
